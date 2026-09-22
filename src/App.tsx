@@ -3525,7 +3525,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                       <div className="flex gap-1.5 items-center">
                         <input type="color" value={(bp.bgColor as string) || '#FFFFFF'} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
                         <input value={(bp.bgColor as string) || ''} onChange={e => patch({ bgColor: e.target.value })} placeholder="Transparent" className="flex-1 h-7 px-2 text-[10px] border border-[#E2DED7] rounded-lg font-mono" />
-                        {bp.bgColor && <button onClick={() => patch({ bgColor: '' })} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>}
+                        {!!(bp.bgColor) && <button onClick={() => patch({ bgColor: '' })} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>}
                       </div>
                     </div>
                     {/* Text Color */}
@@ -3536,7 +3536,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                       <div className="flex gap-1.5 items-center">
                         <input type="color" value={(bp.textColor as string) || '#111218'} onChange={e => patch({ textColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
                         <input value={(bp.textColor as string) || ''} onChange={e => patch({ textColor: e.target.value })} placeholder="Default" className="flex-1 h-7 px-2 text-[10px] border border-[#E2DED7] rounded-lg font-mono" />
-                        {bp.textColor && <button onClick={() => patch({ textColor: '' })} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>}
+                        {!!(bp.textColor) && <button onClick={() => patch({ textColor: '' })} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>}
                       </div>
                     </div>
                     {/* Padding */}
