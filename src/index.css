@@ -1,0 +1,94 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+:root {
+  --brand: #5B5BD6;
+  --brand-dim: #4A4AC4;
+  --brand-soft: #EEEEFF;
+  --ai: #7C3AED;
+  --ai-soft: #F3F0FF;
+  --chrome: #0D0E14;
+  --chrome-2: #171820;
+  --chrome-3: #222330;
+  --canvas-bg: #F4F2EE;
+  --border: #E2DED7;
+  --border-soft: #EDEDF0;
+  --text: #111218;
+  --text-muted: #6B6B7E;
+  --text-caption: #9898AB;
+  --success: #16A34A;
+  --success-soft: #DCFCE7;
+  --warning: #D97706;
+  --warning-soft: #FEF3C7;
+  --danger: #DC2626;
+  --danger-soft: #FEE2E2;
+  --info: #0284C7;
+  --info-soft: #E0F2FE;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d4d0cb transparent;
+  box-sizing: border-box;
+}
+
+*::-webkit-scrollbar { width: 5px; height: 5px; }
+*::-webkit-scrollbar-thumb { background: #d4d0cb; border-radius: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--canvas-bg);
+  color: var(--text);
+}
+
+.font-doc {
+  font-family: 'Lora', Georgia, serif;
+}
+
+.font-mono-code {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Hide scrollbar (used in workflow steps bar) */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Fade transition */
+.fade-in {
+  animation: fadeIn 0.18s ease-out;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* AI shimmer */
+.shimmer {
+  background: linear-gradient(90deg, #f0eef8 25%, #e8e4f4 50%, #f0eef8 75%);
+  background-size: 400% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+/* Popover styles */
+.popover-shadow {
+  box-shadow: 0 4px 24px rgba(0,0,0,0.14), 0 1px 4px rgba(0,0,0,0.08);
+}
+
+/* Canvas prose */
+[contenteditable] { outline: none; }
+[contenteditable]:focus { outline: none; }
+
+/* Node hover */
+.km-node { cursor: pointer; transition: transform 0.15s; }
+.km-node:hover { transform-origin: center; }

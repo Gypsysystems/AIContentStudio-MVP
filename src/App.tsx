@@ -1,0 +1,12136 @@
+import React, { useState, useRef, useEffect, useCallback } from 'react'
+import {
+  SCHEMA_VERSION,
+  createProject, saveProject, loadProject, listProjects, deleteProject, duplicateProject,
+  saveFile, loadProjectFiles, removeFile,
+  getActiveProjectId, setActiveProjectId,
+  type ProjectRecord, type ProjectSummary, type StoredFile,
+} from './projectRepository'
+import { extractBrandFromFile, type BrandExtractionResult } from './brandExtractor'
+import {
+  extractFromFile, searchExtractions,
+  type SourceExtraction,
+} from './sourceExtractor'
+
+// ── Types ────────────────────────────────────────────────────────────────────
+type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
+type StudioMode = 'author' | 'knowledge'
+type FindingStatus = 'open' | 'in-review' | 'resolved' | 'dismissed'
+type ReviewContext = { findingId: number; section: string; category: string } | null
+type CalloutVariant = 'note' | 'tip' | 'important' | 'warning' | 'example'
+type DocBlockType = 'h1' | 'h2' | 'h3' | 'h4' | 'para' | 'caption' | 'callout' | 'table' | 'procedure' | 'code' | 'divider' | 'quote' | 'media' | 'variable' | 'bookmark' | 'list'
+const TYPO_PRESETS = [
+  { id: 'modern-sans', label: 'Modern Sans', desc: 'Inter · Clean, contemporary' },
+  { id: 'editorial', label: 'Editorial', desc: 'Serif headings · Open body' },
+  { id: 'corporate', label: 'Corporate', desc: 'Neutral, high-readability' },
+  { id: 'technical', label: 'Technical', desc: 'Monospace accents · Dense' },
+]
+
+// ── Variable type ─────────────────────────────────────────────────────────────
+type Variable = { id: string; name: string; value: string; description?: string }
+
+// ── Branding/Style architecture types ────────────────────────────────────────
+type TypoStyle = { fontFamily: string; fontSize: number; fontWeight: string; color: string; lineHeight: number; spaceBefore: number; spaceAfter: number; alignment: 'left' | 'center' | 'right' }
+type StyleProfile = {
+  id: string; name: string; clientId: string; scope: 'client' | 'product' | 'project'
+  // Brand fields (Brand & Style Profile)
+  source?: string
+  primaryColor?: string; secondaryColor?: string; accentColor?: string; bgColor?: string; surfaceColor?: string
+  // Semantic color tokens
+  headingTextColor?: string; bodyTextColor?: string; borderColorToken?: string; linkColor?: string
+  successColor?: string; warningColor?: string; criticalColor?: string; infoColor?: string; tableHeaderBgToken?: string
+  logoLabel?: string
+  logoFileName?: string; logoMimeType?: string; logoDataUrl?: string
+  // Font system: primaryFont is the brand default; heading/body/fallback/code can override
+  primaryFont?: string; headingFont?: string; bodyFont?: string; fallbackFont?: string; codeFont?: string
+  // Tracks which semantic styles are still inheriting from heading/body font (vs explicit override)
+  fontInherit?: { h1?: boolean; h2?: boolean; h3?: boolean; h4?: boolean; body?: boolean; caption?: boolean; code?: boolean }
+  // Typography / Style fields
+  body: TypoStyle; h1: TypoStyle; h2: TypoStyle; h3: TypoStyle; h4: TypoStyle
+  caption: TypoStyle; code: TypoStyle
+  links: { color: string; underline: boolean }
+  lists: { orderedL1: string; orderedL2: string; orderedL3: string; bulletL1: string; bulletL2: string; bulletL3: string; itemSpacing: number; indentation: number }
+  tables: { headerFontWeight: string; headerTextColor: string; headerBgColor: string; bodyTextColor: string; borderColor: string; borderWidth: number; cellPadding: number; alternateRows: boolean; alternateRowColor: string; firstColEmphasis: boolean }
+  callouts: {
+    note:      { label: string; accentColor: string; bgColor: string; textColor: string }
+    tip:       { label: string; accentColor: string; bgColor: string; textColor: string }
+    important: { label: string; accentColor: string; bgColor: string; textColor: string }
+    warning:   { label: string; accentColor: string; bgColor: string; textColor: string }
+    example:   { label: string; accentColor: string; bgColor: string; textColor: string }
+  }
+}
+type BrandProfile = { id: string; name: string; clientId: string; primaryColor: string; secondaryColor: string; accentColor: string; headingFont: string; bodyFont: string; logoLabel?: string }
+type OutputTemplatePack = {
+  id: string; name: string; clientId: string
+  pdfPageSize: 'A4' | 'Letter'; pdfOrientation: 'portrait' | 'landscape'
+  pdfMarginTop: number; pdfMarginBottom: number; pdfMarginLeft: number; pdfMarginRight: number
+  coverShowLogo: boolean; coverShowTitle: boolean; coverShowSubtitle: boolean; coverShowProduct: boolean; coverShowVersion: boolean; coverShowDate: boolean; coverBgColor: string
+  headerShowLogo: boolean; headerShowTitle: boolean; headerShowVersion: boolean
+  footerShowPageNum: boolean; footerShowCopyright: boolean; footerShowConfidentiality: boolean
+  htmlNavPosition: 'left' | 'right' | 'top'; htmlColorScheme: 'light' | 'dark' | 'system'; htmlShowSearch: boolean; htmlShowBreadcrumbs: boolean; htmlShowPrevNext: boolean
+}
+type Theme = {
+  id: string; name: string; description: string
+  clientName?: string; organizationName?: string; productName?: string
+  brandProfiles: BrandProfile[]; styleProfiles: StyleProfile[]; outputTemplatePacks: OutputTemplatePack[]
+}
+type OutputVariant = { id: string; name: string; themeId: string; styleProfileId: string; templatePackId: string; formats: ('pdf' | 'word' | 'html')[]; conditions: string[] }
+type ProjectMeta = { themeId: string; styleProfileId: string; templatePackId: string; language: string; version: string; contentType: string; themeCustomized?: boolean }
+type PageLayoutZoneElement = { id: string; label: string; alignment: 'left' | 'center' | 'right'; visible: boolean }
+type PageLayout = {
+  id: string; name: string; clientId: string; layoutType: 'cover' | 'content' | 'chapter' | 'custom'
+  pageSize: 'A4' | 'Letter'; orientation: 'portrait' | 'landscape'
+  marginTop: number; marginBottom: number; marginLeft: number; marginRight: number; bgColor: string
+  topZone: PageLayoutZoneElement[]; centerZone: PageLayoutZoneElement[]; bottomZone: PageLayoutZoneElement[]
+  headerZone: PageLayoutZoneElement[]; footerZone: PageLayoutZoneElement[]
+}
+type MasterBlock = { id: string; type: string; label: string; props?: Record<string, unknown> }
+type HtmlMasterPage = {
+  id: string; name: string; clientId: string; masterType: 'home' | 'topic' | 'landing' | 'custom'
+  showHeader: boolean; showLogo: boolean; showSearch: boolean; showBreadcrumb: boolean
+  showLeftNav: boolean; navWidth: number; showOnThisPage: boolean; otpWidth: number; showPrevNext: boolean
+  showFeedback: boolean; showFooter: boolean; stickyNav: boolean; contentWidth: number
+  showHero: boolean; showNavCards: boolean; showFeaturedLinks: boolean; showRecentContent: boolean
+  blocks?: MasterBlock[]
+}
+type Snippet = { id: string; name: string; content: string }
+type ConditionGroup = { id: string; group: string; tags: string[] }
+type DocComment = { id: string; blockId: string; anchor: string; text: string; resolved: boolean }
+type PublishConfig = { selectedFormats: string[]; activeVariant: string }
+type ProjectSource = { fileId: string; file: File }
+
+type BrandSuggestion = {
+  id: string
+  category: 'color' | 'typography' | 'asset'
+  label: string
+  value: string
+  status: 'pending' | 'accepted' | 'ignored'
+  suggestedRole?: string
+  role?: string
+  sourceSnippet?: string
+  confidence?: 'high' | 'medium' | 'low'
+}
+
+const FONT_OPTIONS = ['Arial','Arial Narrow','Calibri','Aptos','Aptos Display','Cambria','Georgia','Segoe UI','Tahoma','Times New Roman','Trebuchet MS','Verdana','Courier New','Inter','Open Sans','Roboto','Lato']
+const FONT_CATEGORIES = {
+  'Theme Fonts': ['Arial','Calibri','Georgia','Inter'],
+  'Common Fonts': ['Arial','Arial Narrow','Calibri','Aptos','Aptos Display','Cambria','Georgia','Segoe UI','Tahoma','Times New Roman','Trebuchet MS','Verdana'],
+  'Monospace': ['Courier New','Consolas','Lucida Console'],
+  'Modern': ['Inter','Open Sans','Roboto','Lato'],
+}
+const mkTypo = (fontFamily: string, fontSize: number, fontWeight: string, color: string, lineHeight = 1.5): TypoStyle => ({ fontFamily, fontSize, fontWeight, color, lineHeight, spaceBefore: 0, spaceAfter: 8, alignment: 'left' })
+const mkCallouts = (primaryColor: string) => ({
+  note:      { label: 'Note',      accentColor: '#0EA5E9', bgColor: '#E0F2FE', textColor: '#0C4A6E' },
+  tip:       { label: 'Tip',       accentColor: '#16A34A', bgColor: '#DCFCE7', textColor: '#14532D' },
+  important: { label: 'Important', accentColor: '#7C3AED', bgColor: '#F3F0FF', textColor: '#4C1D95' },
+  warning:   { label: 'Warning',   accentColor: '#D97706', bgColor: '#FEF3C7', textColor: '#78350F' },
+  example:   { label: 'Example',   accentColor: '#9898AB', bgColor: '#F9F8F6', textColor: '#3D3D4E' },
+})
+
+const INITIAL_THEMES: Theme[] = [
+  {
+    id: 'th1', name: 'Presight', description: 'Clean, modern documentation with Presight brand identity',
+    brandProfiles: [{ id: 'bp1', name: 'Presight Brand', clientId: 'th1', primaryColor: '#0F172A', secondaryColor: '#1E293B', accentColor: '#6366F1', headingFont: 'Inter', bodyFont: 'Inter', logoLabel: 'PS' }],
+    styleProfiles: [{
+      id: 'sp1', name: 'Presight Documentation', clientId: 'th1', scope: 'client',
+      body: mkTypo('Inter', 11, '400', '#1E293B'), h1: { ...mkTypo('Inter', 22, '700', '#0F172A'), spaceBefore: 16, spaceAfter: 12, alignment: 'left' },
+      h2: { ...mkTypo('Inter', 16, '600', '#0F172A'), spaceBefore: 12, spaceAfter: 8, alignment: 'left' },
+      h3: { ...mkTypo('Inter', 13, '600', '#1E293B'), spaceBefore: 10, spaceAfter: 6, alignment: 'left' },
+      h4: { ...mkTypo('Inter', 12, '500', '#1E293B'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' },
+      caption: { ...mkTypo('Inter', 10, '400', '#64748B'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' },
+      code: { ...mkTypo('Courier New', 11, '400', '#0F172A'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' },
+      links: { color: '#6366F1', underline: false },
+      lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
+      tables: { headerFontWeight: '600', headerTextColor: '#FFFFFF', headerBgColor: '#0F172A', bodyTextColor: '#1E293B', borderColor: '#E2E8F0', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#F8FAFC', firstColEmphasis: false },
+      callouts: mkCallouts('#6366F1'),
+    }],
+    outputTemplatePacks: [{
+      id: 'tp1', name: 'Presight Standard Pack', clientId: 'th1',
+      pdfPageSize: 'A4', pdfOrientation: 'portrait', pdfMarginTop: 25, pdfMarginBottom: 25, pdfMarginLeft: 25, pdfMarginRight: 25,
+      coverShowLogo: true, coverShowTitle: true, coverShowSubtitle: true, coverShowProduct: true, coverShowVersion: true, coverShowDate: true, coverBgColor: '#0F172A',
+      headerShowLogo: true, headerShowTitle: true, headerShowVersion: true,
+      footerShowPageNum: true, footerShowCopyright: true, footerShowConfidentiality: false,
+      htmlNavPosition: 'left', htmlColorScheme: 'light', htmlShowSearch: true, htmlShowBreadcrumbs: true, htmlShowPrevNext: true,
+    }],
+  },
+  {
+    id: 'th2', name: 'TechCorp Product Theme', description: 'Clean technical documentation with modern green accent',
+    clientName: 'TechCorp',
+    brandProfiles: [{ id: 'bp2', name: 'TechCorp Brand', clientId: 'th2', primaryColor: '#059669', secondaryColor: '#047857', accentColor: '#10B981', headingFont: 'Georgia', bodyFont: 'Georgia', logoLabel: 'TECHCORP' }],
+    styleProfiles: [{
+      id: 'sp2', name: 'TechCorp Documentation', clientId: 'th2', scope: 'client',
+      body: mkTypo('Georgia', 11, '400', '#111827'), h1: { ...mkTypo('Georgia', 22, '700', '#059669'), spaceBefore: 16, spaceAfter: 12, alignment: 'left' },
+      h2: { ...mkTypo('Georgia', 16, '700', '#065F46'), spaceBefore: 12, spaceAfter: 8, alignment: 'left' },
+      h3: { ...mkTypo('Georgia', 13, '600', '#065F46'), spaceBefore: 10, spaceAfter: 6, alignment: 'left' },
+      h4: { ...mkTypo('Georgia', 12, '600', '#374151'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' },
+      caption: { ...mkTypo('Georgia', 10, '400', '#6B7280'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' },
+      code: { ...mkTypo('Courier New', 11, '400', '#111827'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' },
+      links: { color: '#059669', underline: true },
+      lists: { orderedL1: '1.', orderedL2: '1.1', orderedL3: '1.1.1', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
+      tables: { headerFontWeight: '700', headerTextColor: '#FFFFFF', headerBgColor: '#059669', bodyTextColor: '#111827', borderColor: '#D1FAE5', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#ECFDF5', firstColEmphasis: false },
+      callouts: mkCallouts('#059669'),
+    }],
+    outputTemplatePacks: [{
+      id: 'tp2', name: 'TechCorp Standard Pack', clientId: 'th2',
+      pdfPageSize: 'A4', pdfOrientation: 'portrait', pdfMarginTop: 20, pdfMarginBottom: 20, pdfMarginLeft: 25, pdfMarginRight: 25,
+      coverShowLogo: true, coverShowTitle: true, coverShowSubtitle: false, coverShowProduct: true, coverShowVersion: true, coverShowDate: true, coverBgColor: '#059669',
+      headerShowLogo: true, headerShowTitle: true, headerShowVersion: false,
+      footerShowPageNum: true, footerShowCopyright: true, footerShowConfidentiality: true,
+      htmlNavPosition: 'left', htmlColorScheme: 'light', htmlShowSearch: true, htmlShowBreadcrumbs: false, htmlShowPrevNext: true,
+    }],
+  },
+  {
+    id: 'th3', name: 'Government Standard Theme', description: 'Formal government documentation — neutral, high-readability',
+    brandProfiles: [{ id: 'bp3', name: 'Gov Standard Brand', clientId: 'th3', primaryColor: '#374151', secondaryColor: '#1F2937', accentColor: '#6B7280', headingFont: 'Calibri', bodyFont: 'Calibri', logoLabel: 'GOV' }],
+    styleProfiles: [{
+      id: 'sp3', name: 'Government Standard Style', clientId: 'th3', scope: 'client',
+      body: mkTypo('Calibri', 11, '400', '#1F2937'), h1: { ...mkTypo('Calibri', 20, '700', '#111827'), spaceBefore: 16, spaceAfter: 12, alignment: 'left' },
+      h2: { ...mkTypo('Calibri', 15, '700', '#374151'), spaceBefore: 12, spaceAfter: 8, alignment: 'left' },
+      h3: { ...mkTypo('Calibri', 13, '600', '#374151'), spaceBefore: 10, spaceAfter: 6, alignment: 'left' },
+      h4: { ...mkTypo('Calibri', 12, '600', '#4B5563'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' },
+      caption: { ...mkTypo('Calibri', 10, '400', '#6B7280'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' },
+      code: { ...mkTypo('Courier New', 10, '400', '#111827'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' },
+      links: { color: '#374151', underline: true },
+      lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
+      tables: { headerFontWeight: '700', headerTextColor: '#FFFFFF', headerBgColor: '#374151', bodyTextColor: '#1F2937', borderColor: '#D1D5DB', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#F9FAFB', firstColEmphasis: false },
+      callouts: mkCallouts('#374151'),
+    }],
+    outputTemplatePacks: [{
+      id: 'tp3', name: 'Government Standard Pack', clientId: 'th3',
+      pdfPageSize: 'A4', pdfOrientation: 'portrait', pdfMarginTop: 30, pdfMarginBottom: 30, pdfMarginLeft: 30, pdfMarginRight: 25,
+      coverShowLogo: true, coverShowTitle: true, coverShowSubtitle: true, coverShowProduct: false, coverShowVersion: true, coverShowDate: true, coverBgColor: '#374151',
+      headerShowLogo: false, headerShowTitle: true, headerShowVersion: true,
+      footerShowPageNum: true, footerShowCopyright: true, footerShowConfidentiality: true,
+      htmlNavPosition: 'left', htmlColorScheme: 'light', htmlShowSearch: true, htmlShowBreadcrumbs: true, htmlShowPrevNext: true,
+    }],
+  },
+  {
+    id: 'th4', name: 'Minimal Product Theme', description: 'Clean, spacious documentation for modern products',
+    brandProfiles: [{ id: 'bp4', name: 'Minimal Brand', clientId: 'th4', primaryColor: '#5B5BD6', secondaryColor: '#4A4AC4', accentColor: '#8B5CF6', headingFont: 'Inter', bodyFont: 'Inter', logoLabel: 'MIN' }],
+    styleProfiles: [{
+      id: 'sp4', name: 'Minimal Product Style', clientId: 'th4', scope: 'client',
+      body: mkTypo('Inter', 11, '400', '#374151'), h1: { ...mkTypo('Inter', 24, '700', '#111827'), spaceBefore: 20, spaceAfter: 14, alignment: 'left' },
+      h2: { ...mkTypo('Inter', 17, '600', '#1F2937'), spaceBefore: 14, spaceAfter: 10, alignment: 'left' },
+      h3: { ...mkTypo('Inter', 14, '600', '#374151'), spaceBefore: 12, spaceAfter: 6, alignment: 'left' },
+      h4: { ...mkTypo('Inter', 12, '500', '#374151'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' },
+      caption: { ...mkTypo('Inter', 10, '400', '#9CA3AF'), spaceBefore: 4, spaceAfter: 10, alignment: 'center' },
+      code: { ...mkTypo('Courier New', 11, '400', '#1F2937'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' },
+      links: { color: '#5B5BD6', underline: false },
+      lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 6, indentation: 24 },
+      tables: { headerFontWeight: '600', headerTextColor: '#1F2937', headerBgColor: '#F3F4F6', bodyTextColor: '#374151', borderColor: '#E5E7EB', borderWidth: 1, cellPadding: 10, alternateRows: false, alternateRowColor: '#F9FAFB', firstColEmphasis: false },
+      callouts: mkCallouts('#5B5BD6'),
+    }],
+    outputTemplatePacks: [{
+      id: 'tp4', name: 'Minimal Pack', clientId: 'th4',
+      pdfPageSize: 'A4', pdfOrientation: 'portrait', pdfMarginTop: 20, pdfMarginBottom: 20, pdfMarginLeft: 20, pdfMarginRight: 20,
+      coverShowLogo: true, coverShowTitle: true, coverShowSubtitle: true, coverShowProduct: true, coverShowVersion: false, coverShowDate: false, coverBgColor: '#111827',
+      headerShowLogo: true, headerShowTitle: false, headerShowVersion: false,
+      footerShowPageNum: true, footerShowCopyright: false, footerShowConfidentiality: false,
+      htmlNavPosition: 'left', htmlColorScheme: 'system', htmlShowSearch: true, htmlShowBreadcrumbs: false, htmlShowPrevNext: true,
+    }],
+  },
+]
+
+const mkZoneEl = (id: string, label: string, alignment: 'left' | 'center' | 'right' = 'left'): PageLayoutZoneElement => ({ id, label, alignment, visible: true })
+
+const INITIAL_PAGE_LAYOUTS: PageLayout[] = [
+  {
+    id: 'pl1', name: 'Presight Standard Cover', clientId: 'th1', layoutType: 'cover',
+    pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#1D4ED8',
+    topZone: [mkZoneEl('logo', 'Logo', 'left')],
+    centerZone: [mkZoneEl('title', 'Document Title', 'center'), mkZoneEl('subtitle', 'Subtitle', 'center'), mkZoneEl('product', 'Product Name', 'center')],
+    bottomZone: [mkZoneEl('version', 'Version', 'left'), mkZoneEl('date', 'Date', 'left'), mkZoneEl('conf', 'Confidentiality', 'right')],
+    headerZone: [], footerZone: [],
+  },
+  {
+    id: 'pl2', name: 'Presight Standard Content', clientId: 'th1', layoutType: 'content',
+    pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#FFFFFF',
+    topZone: [], centerZone: [], bottomZone: [],
+    headerZone: [mkZoneEl('logo', 'Logo', 'left'), mkZoneEl('chaptertitle', 'Chapter Title', 'center'), mkZoneEl('version', 'Version', 'right')],
+    footerZone: [mkZoneEl('copyright', 'Copyright', 'left'), mkZoneEl('conf', 'Confidentiality', 'center'), mkZoneEl('pagenum', 'Page Number', 'right')],
+  },
+]
+
+const INITIAL_HTML_MASTER_PAGES: HtmlMasterPage[] = [
+  {
+    id: 'hmp1', name: 'Home Page Master', clientId: 'th1', masterType: 'home',
+    showHeader: true, showLogo: true, showSearch: true, showBreadcrumb: false,
+    showLeftNav: false, navWidth: 280, showOnThisPage: false, otpWidth: 220, showPrevNext: false,
+    showFeedback: false, showFooter: true, stickyNav: false, contentWidth: 1200,
+    showHero: true, showNavCards: true, showFeaturedLinks: true, showRecentContent: true,
+  },
+  {
+    id: 'hmp2', name: 'Other Topics Master', clientId: 'th1', masterType: 'topic',
+    showHeader: true, showLogo: true, showSearch: true, showBreadcrumb: true,
+    showLeftNav: true, navWidth: 280, showOnThisPage: true, otpWidth: 220, showPrevNext: true,
+    showFeedback: true, showFooter: true, stickyNav: true, contentWidth: 1200,
+    showHero: false, showNavCards: false, showFeaturedLinks: false, showRecentContent: false,
+  },
+]
+
+type ListItem = { id: string; text: string; level: number; type: 'bullet' | 'ordered'; startFresh?: boolean }
+type DocBlock = {
+  id: string
+  type: DocBlockType
+  content: string
+  calloutVariant?: CalloutVariant
+  tableData?: { rows: string[][]; hasHeader: boolean }
+  procedureSteps?: string[]
+  mediaType?: string
+  caption?: string
+  conditions?: string[]
+  listItems?: ListItem[]
+}
+
+// ── List helpers ──────────────────────────────────────────────────────────────
+function getItemLabel(items: ListItem[], index: number): string {
+  const item = items[index]
+  if (item.type === 'bullet') return ['•', '○', '–'][Math.min(item.level - 1, 2)]
+  // Count ordered predecessors at this level, resetting on any startFresh marker
+  let count = 0
+  for (let i = 0; i <= index; i++) {
+    const it = items[i]
+    if (it.level !== item.level || it.type !== 'ordered') continue
+    if (it.startFresh) count = 1
+    else count++
+  }
+  if (item.level === 1) return `${count}.`
+  if (item.level === 2) return `${String.fromCharCode(96 + count)}.`
+  const romans = ['i','ii','iii','iv','v','vi','vii','viii','ix','x']
+  return `${romans[Math.min(count - 1, romans.length - 1)] ?? count}.`
+}
+
+function splitAtCaret(el: HTMLElement): { before: string; after: string } {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return { before: el.innerText.replace(/\n$/, ''), after: '' }
+  const range = sel.getRangeAt(0)
+  if (!range.collapsed) range.collapse(true)
+  const pre = document.createRange()
+  pre.selectNodeContents(el)
+  pre.setEnd(range.startContainer, range.startOffset)
+  const before = pre.toString()
+  const full = el.innerText.replace(/\n$/, '')
+  return { before, after: full.slice(before.length) }
+}
+
+// ── Synthetic Data ────────────────────────────────────────────────────────────
+const PROJECTS = [
+  { id: 1, name: 'Nexus Platform v3.2 — User Guide', type: 'User Guide', modified: '2 hours ago', status: 'In Progress', quality: 82, sections: 14, accent: '#5B5BD6' },
+  { id: 2, name: 'DataBridge Admin Guide', type: 'Admin Guide', modified: '1 day ago', status: 'Review', quality: 94, sections: 22, accent: '#0EA5E9' },
+  { id: 3, name: 'Onboarding Quick Start', type: 'Quick Start', modified: '3 days ago', status: 'Complete', quality: 97, sections: 8, accent: '#16A34A' },
+  { id: 4, name: 'Vault API Knowledge Base', type: 'Knowledge Base', modified: '5 days ago', status: 'Draft', quality: 61, sections: 31, accent: '#8B5CF6' },
+]
+
+const CONTENT_TYPES = [
+  { id: 'user-guide', label: 'User Guide', symbol: '◉', desc: 'End-to-end product guidance for users', active: true },
+  { id: 'admin-guide', label: 'Admin Guide', symbol: '⊞', desc: 'Configuration and administration reference', active: true },
+  { id: 'quick-start', label: 'Quick Start', symbol: '◆', desc: 'Fast path to first value for new users', active: true },
+  { id: 'sop', label: 'SOP', symbol: '⊟', desc: 'Standard operating procedures', active: true },
+  { id: 'knowledge-base', label: 'Knowledge Base', symbol: '◎', desc: 'Searchable reference articles and FAQs', active: true },
+  { id: 'elearning', label: 'eLearning', symbol: '⊕', desc: 'Interactive learning modules', active: false },
+  { id: 'training', label: 'Training Guide', symbol: '⊗', desc: 'Structured training programs', active: false },
+  { id: 'tutorial', label: 'Interactive Tutorial', symbol: '◈', desc: 'Guided hands-on experiences', active: false },
+]
+
+const SOURCE_FILES = [
+  { id: 1, name: 'Nexus_Technical_Specification_v3.2.pdf', size: '4.2 MB', type: 'pdf', coverage: 88 },
+  { id: 2, name: 'UX_Research_Findings_Q3.docx', size: '1.8 MB', type: 'docx', coverage: 64 },
+  { id: 3, name: 'Product_Roadmap_Deck.pptx', size: '12.4 MB', type: 'pptx', coverage: 42 },
+  { id: 4, name: 'Support_Ticket_Analysis_Oct.pdf', size: '890 KB', type: 'pdf', coverage: 71 },
+]
+
+const AI_CONCEPTS = [
+  { label: 'User Authentication', strength: 95, sources: 3 },
+  { label: 'Project Dashboard', strength: 88, sources: 4 },
+  { label: 'Team Collaboration', strength: 82, sources: 3 },
+  { label: 'Data Import/Export', strength: 76, sources: 2 },
+  { label: 'Notification System', strength: 69, sources: 2 },
+  { label: 'API Integration', strength: 58, sources: 2 },
+  { label: 'Reporting & Analytics', strength: 44, sources: 1 },
+]
+
+const AI_GAPS = [
+  { text: 'Mobile application features not covered in source material', severity: 'warning' },
+  { text: 'Offline mode functionality — mentioned once but underdocumented', severity: 'warning' },
+  { text: 'SSO/SAML configuration steps not found in sources', severity: 'error' },
+]
+
+const TOC_ITEMS = [
+  { id: 1,  title: 'Introduction',              level: 1, words: 320 },
+  { id: 2,  title: 'Getting Started',           level: 1, words: 580 },
+  { id: 3,  title: 'System Requirements',       level: 2, words: 210, parentId: 2 },
+  { id: 4,  title: 'Installation',              level: 2, words: 440, parentId: 2 },
+  { id: 5,  title: 'Initial Configuration',     level: 2, words: 390, parentId: 2 },
+  { id: 15, title: 'Environment Variables',     level: 3, words: 160, parentId: 5 },
+  { id: 16, title: 'Firewall Rules',            level: 3, words: 120, parentId: 5 },
+  { id: 6,  title: 'Dashboard Overview',        level: 1, words: 620 },
+  { id: 7,  title: 'Navigation and Layout',     level: 2, words: 280, parentId: 6 },
+  { id: 8,  title: 'Widgets and Panels',        level: 2, words: 350, parentId: 6 },
+  { id: 17, title: 'Widget Configuration',      level: 3, words: 140, parentId: 8 },
+  { id: 18, title: 'Custom Layouts',            level: 3, words: 110, parentId: 8 },
+  { id: 9,  title: 'Managing Projects',         level: 1, words: 710 },
+  { id: 10, title: 'Creating a Project',        level: 2, words: 420, parentId: 9 },
+  { id: 11, title: 'Inviting Team Members',     level: 2, words: 290, parentId: 9 },
+  { id: 12, title: 'Project Settings',          level: 2, words: 360, parentId: 9 },
+  { id: 13, title: 'Troubleshooting',           level: 1, words: 480 },
+  { id: 14, title: 'Common Issues and Solutions', level: 2, words: 410, parentId: 13 },
+]
+
+const KM_NODES = [
+  { id: 'n1', label: 'Nexus Dashboard', type: 'feature', x: 380, y: 190 },
+  { id: 'n2', label: 'User Roles', type: 'concept', x: 175, y: 115 },
+  { id: 'n3', label: 'Project Creation', type: 'procedure', x: 575, y: 115 },
+  { id: 'n4', label: 'Notifications', type: 'feature', x: 610, y: 295 },
+  { id: 'n5', label: 'API Integration', type: 'concept', x: 195, y: 310 },
+  { id: 'n6', label: 'Data Import', type: 'procedure', x: 65, y: 220 },
+  { id: 'n7', label: 'Admin Config', type: 'role', x: 730, y: 195 },
+  { id: 'n8', label: 'Authentication', type: 'concept', x: 370, y: 355 },
+  { id: 'n9', label: 'Technical Spec', type: 'source', x: 520, y: 405 },
+  { id: 'n10', label: 'Onboarding Flow', type: 'procedure', x: 255, y: 420 },
+]
+const KM_EDGES = [
+  ['n1','n2'],['n1','n3'],['n1','n4'],['n1','n5'],['n2','n6'],
+  ['n3','n7'],['n5','n8'],['n8','n9'],['n4','n9'],['n2','n10'],
+  ['n8','n10'],['n1','n8'],['n3','n4'],
+]
+const NODE_COLORS: Record<string, string> = {
+  feature: '#5B5BD6', concept: '#0EA5E9', procedure: '#16A34A',
+  role: '#D97706', source: '#8B5CF6',
+}
+
+const QUALITY_FINDINGS = [
+  { id: 1, category: 'Unsupported Statement', severity: 'error', required: true, text: '"Installation completes in under 5 minutes" — not verified in any source document.', action: 'Verify or Remove', section: 'Installation', aiSuggestion: '"Installation typically completes within 12–18 minutes depending on system configuration."' },
+  { id: 2, category: 'Source Coverage Gap', severity: 'warning', required: true, text: 'Section "System Requirements" has no direct source citation.', action: 'Add Source Reference', section: 'System Requirements', aiSuggestion: null },
+  { id: 3, category: 'Terminology Inconsistency', severity: 'warning', required: true, text: '"workspace" and "project" used interchangeably across sections 2, 9, and 12.', action: 'Standardize', section: 'Multiple Sections', aiSuggestion: 'Standardize on "workspace" (14 occurrences) and replace 9 instances of "project" used as a synonym.' },
+  { id: 4, category: 'Structure Completeness', severity: 'warning', required: false, text: 'Troubleshooting section has 2 entries — industry baseline is 5–10 for a platform this size.', action: 'Expand Section', section: 'Troubleshooting', aiSuggestion: 'Add: Error Code Reference, Log File Locations, Contacting Support, Known Limitations.' },
+  { id: 5, category: 'Missing Visual', severity: 'info', required: false, text: 'No screenshot or diagram provided for Dashboard Overview.', action: 'Generate Visual', section: 'Dashboard Overview', aiSuggestion: null },
+  { id: 6, category: 'Writing Style', severity: 'info', required: false, text: 'Passive voice detected in 4 procedures. Active voice improves clarity.', action: 'Improve Writing', section: 'Managing Projects', aiSuggestion: 'Replace "can be configured by the user" with "you can configure" throughout this section.' },
+]
+
+const AI_ACTIONS = ['Improve', 'Rewrite', 'Shorten', 'Expand', 'Simplify', 'Convert to Steps', 'Convert to Bullets', 'Summarize', 'Check Grammar', 'Check Terminology', 'Verify vs Source', 'Generate Example', 'Ask AI']
+
+// ── Utility Components ────────────────────────────────────────────────────────
+function Badge({ text, color = 'default' }: { text: string; color?: string }) {
+  const cls: Record<string, string> = {
+    default: 'bg-[#F4F2EE] text-[#6B6B7E]',
+    'In Progress': 'bg-[#EEEEFF] text-[#5B5BD6]',
+    Review: 'bg-[#FEF3C7] text-[#D97706]',
+    Complete: 'bg-[#DCFCE7] text-[#16A34A]',
+    Draft: 'bg-[#F4F2EE] text-[#6B6B7E]',
+  }
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium tracking-wide ${cls[color] || cls.default}`}>
+      {text}
+    </span>
+  )
+}
+
+function QualityRing({ score }: { score: number }) {
+  const color = score >= 90 ? '#16A34A' : score >= 70 ? '#D97706' : '#DC2626'
+  return (
+    <div className="relative w-9 h-9 flex items-center justify-center">
+      <svg className="absolute inset-0" viewBox="0 0 36 36">
+        <circle cx="18" cy="18" r="15" fill="none" stroke="#E2DED7" strokeWidth="2.5" />
+        <circle cx="18" cy="18" r="15" fill="none" stroke={color} strokeWidth="2.5"
+          strokeDasharray={`${(score / 100) * 94} 94`}
+          strokeLinecap="round" transform="rotate(-90 18 18)" />
+      </svg>
+      <span className="text-[10px] font-semibold" style={{ color }}>{score}</span>
+    </div>
+  )
+}
+
+type StageStatus = 'not-started' | 'in-progress' | 'complete' | 'stale'
+
+function WorkflowSteps({
+  current, onNav, stageStatuses,
+}: {
+  current: Screen
+  onNav: (s: Screen) => void
+  stageStatuses: Record<string, StageStatus>
+}) {
+  const steps: [Screen, string][] = [
+    ['create',    'Details'],
+    ['branding',  'Theme'],
+    ['sources',   'Sources'],
+    ['analysis',  'Analysis'],
+    ['structure', 'TOC'],
+    ['studio',    'Author'],
+    ['quality',   'Review'],
+    ['publish',   'Publish'],
+  ]
+
+  const statusIcon = (status: StageStatus, active: boolean) => {
+    if (active) return null
+    if (status === 'complete') return <span className="text-[#5B5BD6] leading-none">✓</span>
+    if (status === 'stale')    return <span className="text-[#D97706] leading-none text-[9px]">!</span>
+    if (status === 'in-progress') return <span className="w-1.5 h-1.5 rounded-full bg-[#5B5BD6] inline-block" />
+    return null
+  }
+
+  const statusTooltip = (screen: Screen): string => {
+    const s = stageStatuses[screen] ?? 'not-started'
+    if (s === 'complete')    return 'Complete'
+    if (s === 'stale')       return 'Needs attention'
+    if (s === 'in-progress') return 'In progress'
+    return 'Not started'
+  }
+
+  return (
+    <div className="flex items-center gap-0.5 overflow-x-auto no-scrollbar">
+      {steps.map(([s, label], i) => {
+        const status = stageStatuses[s] ?? 'not-started'
+        const active = s === current || (current === 'preview' && s === 'quality')
+        return (
+          <div key={s} className="flex items-center gap-0.5 flex-shrink-0">
+            {i > 0 && <div className={`w-4 h-px flex-shrink-0 ${status === 'complete' ? 'bg-[#5B5BD6]' : 'bg-[#E2DED7]'}`} />}
+            <button
+              onClick={() => onNav(s)}
+              title={statusTooltip(s)}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] ${
+                active
+                  ? 'bg-[#EEEEFF] text-[#5B5BD6]'
+                  : status === 'complete'
+                  ? 'text-[#5B5BD6] hover:bg-[#EEEEFF]'
+                  : status === 'stale'
+                  ? 'text-[#D97706] hover:bg-[#FEF3C7]'
+                  : 'text-[#9898AB] hover:bg-[#F4F2EE] hover:text-[#6B6B7E]'
+              }`}
+            >
+              {statusIcon(status, active)}
+              {label}
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Top Bar ───────────────────────────────────────────────────────────────────
+function TopBar({ screen, onNav, projectName, onDiagnostics, saveStatus, onRetrySave, stageStatuses }: {
+  screen: Screen
+  onNav: (s: Screen) => void
+  projectName: string
+  onDiagnostics?: () => void
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
+  onRetrySave?: () => void
+  stageStatuses?: Record<string, StageStatus>
+}) {
+  const inProject = !['dashboard','create'].includes(screen)
+  return (
+    <header className="h-12 bg-white border-b border-[#E2DED7] flex items-center px-5 gap-4 flex-shrink-0 z-30 relative">
+      {/* Logo / Home */}
+      <button onClick={() => onNav('dashboard')} className="flex items-center gap-2 mr-2 group flex-shrink-0">
+        <div className="w-6 h-6 rounded bg-[#5B5BD6] flex items-center justify-center">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <rect x="1" y="1" width="4" height="4" rx="0.75" fill="white" opacity="0.9" />
+            <rect x="7" y="1" width="4" height="4" rx="0.75" fill="white" opacity="0.6" />
+            <rect x="1" y="7" width="4" height="4" rx="0.75" fill="white" opacity="0.6" />
+            <rect x="7" y="7" width="4" height="4" rx="0.75" fill="white" opacity="0.4" />
+          </svg>
+        </div>
+        <span className="text-[13px] font-semibold text-[#111218] tracking-tight">Content Studio</span>
+      </button>
+
+      {/* Breadcrumb / project name */}
+      {inProject && (
+        <div className="flex items-center gap-2 min-w-0 flex-shrink-0">
+          <span className="text-[#C8C6C0]">/</span>
+          <span className="text-[13px] text-[#111218] font-medium truncate max-w-40">{projectName}</span>
+        </div>
+      )}
+
+      {/* Workflow steps — navigable */}
+      {inProject && (
+        <div className="flex-1 flex justify-center overflow-hidden">
+          <WorkflowSteps current={screen} onNav={onNav} stageStatuses={stageStatuses ?? {}} />
+        </div>
+      )}
+
+      <div className="ml-auto flex items-center gap-3">
+        {/* AI provider */}
+        {inProject && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[#E2DED7] text-[11px] text-[#6B6B7E] font-medium">
+            <div className="w-1.5 h-1.5 rounded-full bg-[#8B5CF6]" />
+            Auto – Recommended
+          </div>
+        )}
+        {/* Save status */}
+        {inProject && saveStatus && saveStatus !== 'idle' && (
+          saveStatus === 'error'
+            ? <button onClick={onRetrySave} className="flex items-center gap-1.5 text-[11px] font-medium text-[#DC2626] bg-[#FEF2F2] border border-[#FCA5A5] px-2.5 py-1 rounded-lg hover:bg-[#FEE2E2] transition-colors">⚠ Save failed — Retry</button>
+            : <span className={`text-[11px] font-medium transition-colors ${saveStatus === 'saving' ? 'text-[#D97706]' : 'text-[#16A34A]'}`}>{saveStatus === 'saving' ? 'Saving…' : '✓ Saved'}</span>
+        )}
+        {/* Diagnostics (developer) */}
+        {inProject && onDiagnostics && (
+          <button onClick={onDiagnostics} title="Project Diagnostics" className="w-7 h-7 rounded border border-[#E2DED7] flex items-center justify-center text-[#9898AB] hover:text-[#5B5BD6] hover:border-[#C7C5F4] transition-colors text-[10px]">
+            ⚙
+          </button>
+        )}
+        {/* Avatar */}
+        <div className="w-7 h-7 rounded-full bg-[#EEEEFF] flex items-center justify-center text-[11px] font-semibold text-[#5B5BD6]">
+          AK
+        </div>
+      </div>
+    </header>
+  )
+}
+
+// ── Screen: Dashboard ─────────────────────────────────────────────────────────
+function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProject, onDuplicateProject, onNewProject }: {
+  onNav: (s: Screen) => void
+  activeProjectId?: string | null
+  onOpenProject: (record: ProjectRecord) => void
+  onDeleteProject: (projectId: string) => Promise<void>
+  onDuplicateProject: (projectId: string) => Promise<void>
+  onNewProject: () => void
+}) {
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+
+  useEffect(() => {
+    listProjects().then(p => { setProjects(p); setLoading(false) }).catch(() => setLoading(false))
+  }, [])
+
+  const handleOpen = async (pid: string) => {
+    setActionLoading(pid)
+    try {
+      const record = await loadProject(pid)
+      if (record) onOpenProject(record)
+    } finally { setActionLoading(null) }
+  }
+
+  const handleDelete = async (pid: string) => {
+    setActionLoading(pid)
+    try {
+      await onDeleteProject(pid)
+      setProjects(p => p.filter(x => x.projectId !== pid))
+    } finally { setActionLoading(null); setDeleteConfirm(null) }
+  }
+
+  const handleDuplicate = async (pid: string) => {
+    setActionLoading(pid)
+    try {
+      await onDuplicateProject(pid)
+      const updated = await listProjects()
+      setProjects(updated)
+    } finally { setActionLoading(null) }
+  }
+
+  const fmt = (ts: number) => {
+    const d = new Date(ts), now = new Date()
+    const diff = (now.getTime() - d.getTime()) / 1000
+    if (diff < 60) return 'Just now'
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+    return d.toLocaleDateString()
+  }
+
+  return (
+    <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in">
+      {/* Header */}
+      <div className="flex items-end justify-between mb-8">
+        <div>
+          <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Workspace</p>
+          <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Projects</h1>
+        </div>
+        <button
+          onClick={onNewProject}
+          className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-4 py-2 rounded-lg transition-colors"
+        >
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <path d="M6.5 1.5v10M1.5 6.5h10" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+          New Project
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20 text-[13px] text-[#9898AB]">Loading projects…</div>
+      ) : projects.length === 0 ? (
+        <div className="border border-dashed border-[#D8D4CE] rounded-2xl p-16 text-center">
+          <div className="w-12 h-12 rounded-full bg-[#F4F2EE] flex items-center justify-center mx-auto mb-4">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="12" y="3" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="3" y="12" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="12" y="12" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/></svg>
+          </div>
+          <p className="text-[15px] font-semibold text-[#111218] mb-1.5">No projects yet</p>
+          <p className="text-[13px] text-[#9898AB] mb-6">Create your first project to get started.</p>
+          <button onClick={onNewProject} className="inline-flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-semibold px-5 py-2.5 rounded-lg transition-colors">
+            + New Project
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {projects.map(p => (
+            <div
+              key={p.projectId}
+              className={`w-full text-left bg-white border rounded-xl p-5 flex items-center gap-6 group transition-all hover:shadow-sm ${p.projectId === activeProjectId ? 'border-[#5B5BD6]/40 bg-[#FAFAFE]' : 'border-[#E2DED7] hover:border-[#C8C6C0]'}`}
+            >
+              <div className={`w-1 h-10 rounded-full flex-shrink-0 ${p.projectId === activeProjectId ? 'bg-[#5B5BD6]' : 'bg-[#D8D4CE]'}`} />
+              <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpen(p.projectId)}>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-[14px] font-semibold text-[#111218] truncate">{p.projectName}</span>
+                  {p.projectId === activeProjectId && <span className="text-[10px] font-medium text-[#5B5BD6] bg-[#EEEEFF] px-2 py-0.5 rounded-full flex-shrink-0">Active</span>}
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[12px] text-[#9898AB] capitalize">{p.documentType?.replace('-', ' ')}</span>
+                  {p.version && <><span className="text-[#E2DED7]">·</span><span className="text-[12px] text-[#9898AB]">v{p.version}</span></>}
+                  <span className="text-[#E2DED7]">·</span>
+                  <span className="text-[12px] text-[#9898AB]">Modified {fmt(p.modifiedAt)}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => handleOpen(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] bg-[#EEEEFF] hover:bg-[#E0DEFF] rounded-lg transition-colors disabled:opacity-50">
+                  {actionLoading === p.projectId ? '…' : 'Open'}
+                </button>
+                <button onClick={() => handleDuplicate(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Duplicate</button>
+                <button onClick={() => setDeleteConfirm(p.projectId)} className="px-3 py-1.5 text-[11px] font-medium text-[#DC2626] bg-[#FEF2F2] hover:bg-[#FEE2E2] rounded-lg transition-colors">Delete</button>
+              </div>
+              <svg className="text-[#C8C6C0] group-hover:text-[#9898AB] transition-colors cursor-pointer flex-shrink-0" width="16" height="16" viewBox="0 0 16 16" fill="none" onClick={() => handleOpen(p.projectId)}>
+                <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center" onClick={() => setDeleteConfirm(null)}>
+          <div className="bg-white rounded-2xl border border-[#E2DED7] shadow-xl p-6 w-[380px]" onClick={e => e.stopPropagation()}>
+            <p className="text-[14px] font-semibold text-[#111218] mb-2">Delete project?</p>
+            <p className="text-[12px] text-[#6B6B7E] mb-5">This will permanently delete the project and all files. This cannot be undone.</p>
+            <div className="flex gap-2">
+              <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-2 border border-[#E2DED7] text-[12px] text-[#6B6B7E] rounded-lg hover:bg-[#F9F8F6] transition-colors">Cancel</button>
+              <button onClick={() => handleDelete(deleteConfirm)} disabled={!!actionLoading} className="flex-1 py-2 bg-[#DC2626] hover:bg-[#B91C1C] text-white text-[12px] font-semibold rounded-lg transition-colors disabled:opacity-50">
+                {actionLoading === deleteConfirm ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Screen: Create ────────────────────────────────────────────────────────────
+function CreateScreen({ onNav, projectName, onProjectNameChange, themes, projectMeta, onProjectMetaChange, onAddTheme, onContinue }: {
+  onNav: (s: Screen) => void
+  projectName: string
+  onProjectNameChange: (n: string) => void
+  themes: Theme[]
+  projectMeta: ProjectMeta
+  onProjectMetaChange: (m: Partial<ProjectMeta>) => void
+  onAddTheme: (t: Theme) => void
+  onContinue?: () => void
+}) {
+  const [selected, setSelected] = useState(projectMeta?.contentType || 'user-guide')
+
+  return (
+    <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
+      <div className="mb-8">
+        <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Step 1 — Project Details</p>
+        <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Project Details</h1>
+        <p className="text-[14px] text-[#6B6B7E]">Set the document type and name. Theme and styling are configured in the next step.</p>
+      </div>
+
+      {/* Content type grid */}
+      <div className="grid grid-cols-4 gap-3 mb-6">
+        {CONTENT_TYPES.map(ct => (
+          <button key={ct.id}
+            onClick={() => { if (ct.active) { setSelected(ct.id); onProjectMetaChange({ contentType: ct.id }) } }}
+            className={`relative text-left p-4 rounded-xl border transition-all ${
+              selected === ct.id ? 'border-[#5B5BD6] bg-[#EEEEFF] shadow-sm'
+                : ct.active ? 'border-[#E2DED7] bg-white hover:border-[#C8C6C0] hover:shadow-sm'
+                : 'border-[#E2DED7] bg-[#FAFAF8] opacity-50 cursor-not-allowed'
+            }`}>
+            {!ct.active && <div className="absolute top-2 right-2 text-[9px] font-semibold text-[#9898AB] uppercase tracking-wider bg-[#F4F2EE] px-1.5 py-0.5 rounded">Soon</div>}
+            <div className={`text-xl mb-2 ${selected === ct.id ? 'text-[#5B5BD6]' : 'text-[#9898AB]'}`}>{ct.symbol}</div>
+            <div className={`text-[13px] font-semibold mb-1 ${selected === ct.id ? 'text-[#5B5BD6]' : 'text-[#111218]'}`}>{ct.label}</div>
+            <div className="text-[11px] text-[#9898AB] leading-snug">{ct.desc}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Project Name */}
+      <div className="bg-white border border-[#E2DED7] rounded-xl p-5 mb-4">
+        <label className="block text-[12px] font-semibold text-[#111218] mb-2 uppercase tracking-wide">Project Name</label>
+        <input value={projectName} placeholder="e.g. Nexus Platform v3.2 — User Guide"
+          onChange={e => onProjectNameChange(e.target.value)}
+          className="w-full text-[15px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#5B5BD6] transition-colors" />
+      </div>
+
+
+      <div className="bg-white border border-[#E2DED7] rounded-xl p-5 mb-6">
+        <label className="block text-[12px] font-semibold text-[#111218] mb-2 uppercase tracking-wide">Document Version <span className="text-[#9898AB] font-normal normal-case">(optional)</span></label>
+        <input value={projectMeta?.version ?? ''} onChange={e => onProjectMetaChange({ version: e.target.value })} placeholder="e.g. 3.2"
+          className="w-full h-9 px-3 text-[13px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+      </div>
+
+      <div className="flex justify-end">
+        <button onClick={() => { onContinue?.(); onNav('branding') }} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
+          Continue — Theme & Styles
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Reusable: Color Picker ────────────────────────────────────────────────────
+function ColorPicker({ value, onChange, brandColors = [] }: { value: string; onChange: (v: string) => void; brandColors?: string[] }) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const [hexInput, setHexInput] = useState(value)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { setDraft(value); setHexInput(value) }, [value])
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    if (open) document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const PRESETS = [
+    '#111827','#374151','#6B7280','#9CA3AF','#D1D5DB','#F9FAFB',
+    '#1D4ED8','#2563EB','#3B82F6','#60A5FA','#93C5FD','#DBEAFE',
+    '#047857','#059669','#10B981','#34D399','#6EE7B7','#D1FAE5',
+    '#B91C1C','#DC2626','#EF4444','#FCA5A5','#FEE2E2','#FEF9F9',
+    '#D97706','#F59E0B','#FCD34D','#FDE68A','#FEF3C7','#FFFBEB',
+    '#7C3AED','#8B5CF6','#A78BFA','#C4B5FD','#EDE9FE','#F5F3FF',
+  ]
+
+  const applyHex = (hex: string) => {
+    const clean = hex.startsWith('#') ? hex : '#' + hex
+    if (/^#[0-9A-Fa-f]{6}$/.test(clean)) { setDraft(clean); setHexInput(clean) }
+  }
+
+  const hexToRgb = (hex: string) => {
+    const r = parseInt(hex.slice(1,3), 16); const g = parseInt(hex.slice(3,5), 16); const b = parseInt(hex.slice(5,7), 16)
+    return isNaN(r) ? null : { r, g, b }
+  }
+  const rgb = hexToRgb(draft)
+
+  return (
+    <div ref={ref} className="relative inline-flex items-center gap-2">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-8 h-8 rounded-lg border-2 border-white shadow-md cursor-pointer flex-shrink-0 transition-transform hover:scale-105"
+        style={{ backgroundColor: value }} title={value} />
+      <span className="text-[12px] text-[#3D3D4E] font-mono">{value}</span>
+      {open && (
+        <div className="absolute z-[200] top-10 left-0 bg-white rounded-2xl shadow-2xl border border-[#E2DED7] p-4 w-64">
+          <div className="grid grid-cols-6 gap-1 mb-3">
+            {PRESETS.map(c => (
+              <button key={c} onClick={() => { setDraft(c); setHexInput(c) }}
+                className={`w-8 h-8 rounded-md border transition-transform hover:scale-110 ${draft === c ? 'ring-2 ring-[#5B5BD6] ring-offset-1 border-transparent' : 'border-[#E2DED7]'}`}
+                style={{ backgroundColor: c }} />
+            ))}
+          </div>
+          {brandColors.length > 0 && (
+            <div className="mb-3 pb-3 border-b border-[#F4F2EE]">
+              <p className="text-[10px] text-[#9898AB] uppercase tracking-wide mb-1.5">Brand Colors</p>
+              <div className="flex gap-1.5 flex-wrap">
+                {brandColors.map(c => (
+                  <button key={c} onClick={() => { setDraft(c); setHexInput(c) }}
+                    className={`w-7 h-7 rounded-md border transition-transform hover:scale-110 ${draft === c ? 'ring-2 ring-[#5B5BD6] ring-offset-1 border-transparent' : 'border-[#E2DED7]'}`}
+                    style={{ backgroundColor: c }} />
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="space-y-2 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-[#9898AB] uppercase tracking-wide w-8">HEX</span>
+              <input value={hexInput} onChange={e => { setHexInput(e.target.value); applyHex(e.target.value) }}
+                className="flex-1 h-7 px-2 text-[12px] font-mono border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+            </div>
+            {rgb && (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-[#9898AB] uppercase tracking-wide w-8">RGB</span>
+                <span className="text-[12px] text-[#6B6B7E]">{rgb.r} / {rgb.g} / {rgb.b}</span>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => { onChange(draft); setOpen(false) }}
+              className="flex-1 h-7 bg-[#5B5BD6] text-white text-[11px] font-medium rounded-lg hover:bg-[#4A4AC4] transition-colors">Apply</button>
+            <button onClick={() => { setDraft(value); setHexInput(value); setOpen(false) }}
+              className="flex-1 h-7 bg-[#F4F2EE] text-[#6B6B7E] text-[11px] font-medium rounded-lg hover:bg-[#E2DED7] transition-colors">Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Reusable: Font Picker ─────────────────────────────────────────────────────
+function FontPicker({ value, onChange, themeFonts = [] }: { value: string; onChange: (v: string) => void; themeFonts?: string[] }) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+  const uniqueThemeFonts = [...new Set(themeFonts.filter(Boolean))]
+  const themeFontSet = new Set(uniqueThemeFonts)
+  const categories: Array<{ title: string; fonts: string[] }> = [
+    ...(uniqueThemeFonts.length ? [{ title: 'Theme Fonts', fonts: uniqueThemeFonts }] : []),
+    { title: 'Common Fonts', fonts: ['Arial','Arial Narrow','Aptos','Aptos Display','Calibri','Cambria','Georgia','Segoe UI','Tahoma','Times New Roman','Trebuchet MS','Verdana'].filter(f => !themeFontSet.has(f)) },
+    { title: 'Monospace', fonts: ['Courier New','Consolas','Lucida Console'].filter(f => !themeFontSet.has(f)) },
+    { title: 'Modern / Web', fonts: ['Inter','Open Sans','Roboto','Lato'].filter(f => !themeFontSet.has(f)) },
+  ]
+  const allFonts = [...new Set(categories.flatMap(c => c.fonts))]
+  const filtered = search ? allFonts.filter(f => f.toLowerCase().includes(search.toLowerCase())) : null
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white text-left flex items-center justify-between hover:border-[#C8C6C0]">
+        <span style={{ fontFamily: value }}>{value}</span>
+        <span className="text-[#9898AB] text-[10px]">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full left-0 mt-1 w-56 bg-white border border-[#E2DED7] rounded-xl shadow-lg overflow-hidden">
+          <div className="p-2 border-b border-[#F4F2EE]">
+            <input autoFocus value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search fonts…"
+              className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            {filtered ? (
+              <div className="p-1">
+                {filtered.map(f => (
+                  <button key={f} onClick={() => { onChange(f); setOpen(false); setSearch('') }}
+                    className={`w-full text-left px-2 py-1.5 rounded-lg text-[12px] hover:bg-[#F4F2EE] ${value === f ? 'bg-[#EEEEFF] text-[#5B5BD6] font-semibold' : 'text-[#3D3D4E]'}`}
+                    style={{ fontFamily: f }}>{f}</button>
+                ))}
+              </div>
+            ) : categories.map(cat => (
+              <div key={cat.title}>
+                <p className="text-[9px] font-semibold text-[#9898AB] uppercase tracking-wider px-2 pt-2 pb-1">{cat.title}</p>
+                {cat.fonts.map(f => (
+                  <button key={`${cat.title}-${f}`} onClick={() => { onChange(f); setOpen(false) }}
+                    className={`w-full text-left px-2 py-1.5 text-[12px] hover:bg-[#F4F2EE] ${value === f ? 'bg-[#EEEEFF] text-[#5B5BD6] font-semibold' : 'text-[#3D3D4E]'}`}
+                    style={{ fontFamily: f }}>{f}</button>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-[#F4F2EE] p-2">
+            <button className="w-full text-[10px] text-[#9898AB] hover:text-[#5B5BD6] py-1 text-center">+ Upload Custom Font</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Reusable: Duplicate Modal ──────────────────────────────────────────────────
+function DuplicateModal({ title, defaultName, onDuplicate, onCancel }: {
+  title: string; defaultName: string; onDuplicate: (name: string, scope: 'client' | 'project') => void; onCancel: () => void
+}) {
+  const [name, setName] = useState(defaultName)
+  const [scope, setScope] = useState<'client' | 'project'>('client')
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) onCancel() }}>
+      <div className="bg-white rounded-2xl shadow-2xl border border-[#E2DED7] p-6 w-96">
+        <h3 className="text-[15px] font-semibold text-[#111218] mb-1">{title}</h3>
+        <p className="text-[12px] text-[#9898AB] mb-4">An independent copy will be created. Changes to the copy will not affect the original.</p>
+        <div className="mb-4">
+          <label className="block text-[11px] font-semibold text-[#111218] uppercase tracking-wide mb-1.5">Name</label>
+          <input value={name} onChange={e => setName(e.target.value)} autoFocus
+            className="w-full h-9 px-3 text-[13px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+        </div>
+        <div className="mb-5">
+          <label className="block text-[11px] font-semibold text-[#111218] uppercase tracking-wide mb-1.5">Save to</label>
+          <div className="flex gap-2">
+            {([['client','Current Client'],['project','Project Only']] as const).map(([v, l]) => (
+              <button key={v} onClick={() => setScope(v)}
+                className={`flex-1 py-1.5 rounded-lg text-[12px] font-medium border transition-all ${scope === v ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E] hover:border-[#C8C6C0]'}`}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => { if (name.trim()) onDuplicate(name.trim(), scope) }}
+            className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium rounded-xl transition-colors">Duplicate</button>
+          <button onClick={onCancel}
+            className="py-2 px-4 border border-[#E2DED7] text-[13px] text-[#6B6B7E] rounded-xl hover:bg-[#F4F2EE] transition-colors">Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Screen: Branding & Styles ─────────────────────────────────────────────────
+function StylePreview({ sp, brandPrimaryColor }: { sp: StyleProfile; brandPrimaryColor?: string }) {
+  return (
+    <div className="bg-white rounded-xl border border-[#E2DED7] p-5 text-left overflow-y-auto" style={{ maxHeight: 480, fontFamily: sp.body.fontFamily }}>
+      <div style={{ fontFamily: sp.h1.fontFamily, fontSize: sp.h1.fontSize, fontWeight: sp.h1.fontWeight, color: sp.h1.color, marginBottom: 10 }}>
+        {brandPrimaryColor && <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded mr-2 text-white" style={{ backgroundColor: brandPrimaryColor }}>LOGO</span>}
+        Heading 1 — Document Title
+      </div>
+      <div style={{ fontFamily: sp.h2.fontFamily, fontSize: sp.h2.fontSize, fontWeight: sp.h2.fontWeight, color: sp.h2.color, marginTop: sp.h2.spaceBefore, marginBottom: sp.h2.spaceAfter }}>Heading 2 — Chapter Title</div>
+      <div style={{ fontFamily: sp.h3.fontFamily, fontSize: sp.h3.fontSize, fontWeight: sp.h3.fontWeight, color: sp.h3.color, marginBottom: 6 }}>Heading 3 — Section</div>
+      <p style={{ fontFamily: sp.body.fontFamily, fontSize: sp.body.fontSize, color: sp.body.color, lineHeight: sp.body.lineHeight, marginBottom: 8 }}>
+        Body text style. Content remains independent from presentation — the same document renders with different styles for each client.{' '}
+        <a href="#" style={{ color: sp.links.color, textDecoration: sp.links.underline ? 'underline' : 'none' }}>Sample link</a>
+      </p>
+      <div style={{ marginBottom: 8 }}>
+        {['Item one', 'Item two', 'Item three'].map((t, i) => (
+          <div key={i} className="flex gap-2" style={{ fontFamily: sp.body.fontFamily, fontSize: sp.body.fontSize, color: sp.body.color, marginBottom: sp.lists.itemSpacing }}>
+            <span style={{ color: sp.h2.color, minWidth: 16, fontWeight: 600 }}>{sp.lists.orderedL1.replace('1', String(i + 1))}</span>
+            <span>{t}</span>
+          </div>
+        ))}
+      </div>
+      <table className="w-full border-collapse mb-3" style={{ fontSize: sp.body.fontSize - 1 }}>
+        <thead>
+          <tr style={{ backgroundColor: sp.tables.headerBgColor }}>
+            {['Column A','Column B','Column C'].map(h => (
+              <th key={h} className="px-2 py-1.5 border text-left" style={{ fontWeight: sp.tables.headerFontWeight, color: sp.tables.headerTextColor, borderColor: sp.tables.borderColor }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {[['Row data','Value','Status'],['Row data','Value','Status']].map((row, ri) => (
+            <tr key={ri} style={{ backgroundColor: sp.tables.alternateRows && ri % 2 === 1 ? sp.tables.alternateRowColor : 'transparent' }}>
+              {row.map((cell, ci) => <td key={ci} className="px-2 py-1.5 border" style={{ color: sp.tables.bodyTextColor, borderColor: sp.tables.borderColor, padding: `${sp.tables.cellPadding/2}px ${sp.tables.cellPadding}px` }}>{cell}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="rounded-lg border-l-4 p-3 text-[12px]" style={{ borderColor: '#0EA5E9', backgroundColor: '#E0F2FE', color: '#075985' }}>
+        <span className="font-semibold">Note:</span> This is how callout blocks appear.
+      </div>
+    </div>
+  )
+}
+
+// Zone element editor used in page layout designer
+function ZoneEditor({ title, elements, availableElements, onUpdate }: {
+  title: string
+  elements: PageLayoutZoneElement[]
+  availableElements: string[]
+  onUpdate: (els: PageLayoutZoneElement[]) => void
+}) {
+  const [addOpen, setAddOpen] = useState(false)
+  const used = new Set(elements.map(e => e.label))
+  const remaining = availableElements.filter(l => !used.has(l))
+
+  return (
+    <div className="border border-[#E2DED7] rounded-xl p-3">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide">{title}</p>
+        <div className="relative">
+          <button onClick={() => setAddOpen(o => !o)} className="text-[10px] text-[#5B5BD6] font-medium hover:text-[#4A4AC4]">+ Add</button>
+          {addOpen && remaining.length > 0 && (
+            <div className="absolute right-0 top-5 z-50 bg-white border border-[#E2DED7] rounded-xl shadow-xl py-1 w-44">
+              {remaining.map(l => (
+                <button key={l} onClick={() => { onUpdate([...elements, { id: l.toLowerCase().replace(/\s+/g,'-'), label: l, alignment: 'left', visible: true }]); setAddOpen(false) }}
+                  className="w-full text-left px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE]">{l}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      {elements.length === 0 && <p className="text-[11px] text-[#C8C6C0] italic py-2 text-center">Empty — add elements above</p>}
+      <div className="space-y-1">
+        {elements.map((el, i) => (
+          <div key={el.id} className="flex items-center gap-2 bg-[#F9F8F6] rounded-lg px-2 py-1.5">
+            <div className="flex flex-col gap-0.5 flex-shrink-0">
+              <button disabled={i === 0} onClick={() => { const arr = [...elements]; [arr[i-1], arr[i]] = [arr[i], arr[i-1]]; onUpdate(arr) }}
+                className="text-[9px] leading-none text-[#C8C6C0] hover:text-[#6B6B7E] disabled:opacity-30">▲</button>
+              <button disabled={i === elements.length-1} onClick={() => { const arr = [...elements]; [arr[i], arr[i+1]] = [arr[i+1], arr[i]]; onUpdate(arr) }}
+                className="text-[9px] leading-none text-[#C8C6C0] hover:text-[#6B6B7E] disabled:opacity-30">▼</button>
+            </div>
+            <span className="flex-1 text-[12px] text-[#3D3D4E]">{el.label}</span>
+            <select value={el.alignment} onChange={e => onUpdate(elements.map((x, j) => j === i ? { ...x, alignment: e.target.value as 'left'|'center'|'right' } : x))}
+              className="h-6 px-1 text-[10px] border border-[#E2DED7] rounded focus:outline-none focus:border-[#5B5BD6] bg-white">
+              <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
+            </select>
+            <button onClick={() => onUpdate(elements.filter((_, j) => j !== i))} className="text-[11px] text-[#C8C6C0] hover:text-[#EF4444] ml-1">×</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const ALL_PAGE_ELEMENTS = ['Logo', 'Secondary Logo', 'Document Title', 'Subtitle', 'Client Name', 'Product Name', 'Version', 'Date', 'Confidentiality', 'Chapter Title', 'Topic Title', 'Page Number', 'Copyright', 'Custom Text', 'Divider']
+
+function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaChange, activeStyleProfileId, onSetActiveStyleProfileId, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, themeVariables, onThemeVarsChange }: {
+  onNav: (s: Screen) => void
+  returnTo?: Screen
+  themes: Theme[]
+  projectMeta: ProjectMeta
+  onProjectMetaChange: (m: Partial<ProjectMeta>) => void
+  activeStyleProfileId: string
+  onSetActiveStyleProfileId: (id: string) => void
+  onAddTheme: (t: Theme) => void
+  onThemesChange: (themes: Theme[]) => void
+  pageLayouts: PageLayout[]
+  onPageLayoutsChange: (pls: PageLayout[]) => void
+  htmlMasterPages: HtmlMasterPage[]
+  onHtmlMasterPagesChange: (hmps: HtmlMasterPage[]) => void
+  themeVariables: Record<string, Variable[]>
+  onThemeVarsChange: (themeId: string, vars: Variable[] | ((p: Variable[]) => Variable[])) => void
+}) {
+  const [tab, setTab] = useState<'brandstyle' | 'output' | 'variables'>('brandstyle')
+  const [outputSubTab, setOutputSubTab] = useState<'layouts' | 'html'>('layouts')
+  // Variables tab state — hoisted here to obey Rules of Hooks
+  const [varEditingId, setVarEditingId] = useState<string | null>(null)
+  const [varNewName, setVarNewName] = useState('')
+  const [varNewValue, setVarNewValue] = useState('')
+  const [varNewDesc, setVarNewDesc] = useState('')
+  const [varShowAddForm, setVarShowAddForm] = useState(false)
+
+  // Theme name overrides for inline rename (persisted locally in this session)
+  const [themeNameOverrides, setThemeNameOverrides] = useState<Record<string, string>>({})
+  const getThemeName = (t: Theme) => themeNameOverrides[t.id] ?? t.name
+  const [renamingThemeId, setRenamingThemeId] = useState<string | null>(null)
+  const [themeRenameVal, setThemeRenameVal] = useState('')
+  const saveThemeRename = () => {
+    if (renamingThemeId && themeRenameVal.trim()) {
+      setThemeNameOverrides(prev => ({ ...prev, [renamingThemeId]: themeRenameVal.trim() }))
+    }
+    setRenamingThemeId(null)
+  }
+
+  // Style profiles — derived from central themes state (no local copy)
+  const localProfiles = themes.flatMap(t => t.styleProfiles)
+  const setLocalProfiles = (updater: StyleProfile[] | ((prev: StyleProfile[]) => StyleProfile[])) => {
+    const next = typeof updater === 'function' ? updater(localProfiles) : updater
+    // Distribute updated profiles back into their respective themes
+    onThemesChange(themes.map(t => ({
+      ...t,
+      styleProfiles: next.filter(p => p.clientId === t.id),
+    })))
+  }
+  const activeThemeObj = themes.find(t => t.id === projectMeta?.themeId) ?? themes[0]
+  const [editId, setEditId] = useState<string>(activeStyleProfileId || themes.flatMap(t => t.styleProfiles)[0]?.id || '')
+  const editProfile = localProfiles.find(p => p.id === editId) ?? localProfiles[0]
+
+  // Profile inline rename
+  const [renamingProfileId, setRenamingProfileId] = useState<string | null>(null)
+  const [profileRenameVal, setProfileRenameVal] = useState('')
+  const saveProfileRename = () => {
+    if (renamingProfileId && profileRenameVal.trim()) {
+      setLocalProfiles(prev => prev.map(p => p.id === renamingProfileId ? { ...p, name: profileRenameVal.trim() } : p))
+    }
+    setRenamingProfileId(null)
+  }
+
+  // Brand & Style sub-section navigation
+  const [bsSection, setBsSection] = useState<'brand' | 'colors' | 'typography' | 'headings' | 'lists' | 'tables' | 'callouts' | 'links'>('brand')
+
+  // Import Brand Guidelines modal state
+  const [importOpen, setImportOpen] = useState(false)
+  const [importStage, setImportStage] = useState<'upload' | 'analyze' | 'map' | 'review'>('upload')
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importDrag, setImportDrag] = useState(false)
+  const importFileRef = useRef<HTMLInputElement>(null)
+  const [importAnalyzing, setImportAnalyzing] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importSuggestions, setImportSuggestions] = useState<BrandSuggestion[]>([])
+  const [importProfileName, setImportProfileName] = useState('')
+  const [importScope, setImportScope] = useState<'client' | 'project'>('client')
+  const [importExtractionResult, setImportExtractionResult] = useState<BrandExtractionResult | null>(null)
+
+  const closeImportModal = () => {
+    setImportOpen(false)
+    setImportStage('upload')
+    setImportFile(null)
+    setImportSuggestions([])
+    setImportProfileName('')
+    setImportAnalyzing(false)
+    setImportError(null)
+    setImportExtractionResult(null)
+  }
+
+  // New profile modal state
+  const [newProfOpen, setNewProfOpen] = useState(false)
+  const [newProfName, setNewProfName] = useState('New Style Profile')
+  const [newProfBase, setNewProfBase] = useState<'blank' | 'current' | string>('blank')
+  const [newProfScope, setNewProfScope] = useState<'client' | 'project'>('client')
+
+  // Duplicate modal
+  const [dupModal, setDupModal] = useState<{ title: string; defaultName: string; onDup: (name: string, scope: 'client'|'project') => void } | null>(null)
+
+  // Logo — stored in profile (logoDataUrl, logoFileName, logoMimeType)
+  const logoFileRef = useRef<HTMLInputElement>(null)
+  const handleLogoFile = (file: File | null | undefined) => {
+    if (!file || !editId) return
+    const reader = new FileReader()
+    reader.onload = e => {
+      const url = e.target?.result as string
+      const patch: Partial<StyleProfile> = { logoDataUrl: url, logoFileName: file.name, logoMimeType: file.type }
+      if (!editProfile?.logoLabel) {
+        patch.logoLabel = file.name.replace(/\.[^.]+$/, '').slice(0, 6).toUpperCase()
+      }
+      patchProfile(patch)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  // Section save toast state
+  const [savedSection, setSavedSection] = useState<string | null>(null)
+  const showSaved = (section: string) => {
+    setSavedSection(section)
+    setTimeout(() => setSavedSection(null), 1800)
+  }
+
+  // Page layout state
+  const [editLayoutId, setEditLayoutId] = useState<string>(pageLayouts[0]?.id ?? '')
+  const editLayout = pageLayouts.find(pl => pl.id === editLayoutId) ?? pageLayouts[0]
+  const patchLayout = (patch: Partial<PageLayout>) => onPageLayoutsChange(pageLayouts.map(pl => pl.id === editLayoutId ? { ...pl, ...patch } : pl))
+  const [layoutSubTab, setLayoutSubTab] = useState<'cover' | 'content'>('cover')
+  // Inline rename for layout
+  const [renamingLayoutId, setRenamingLayoutId] = useState<string | null>(null)
+  const [layoutRenameVal, setLayoutRenameVal] = useState('')
+  const commitLayoutRename = () => {
+    if (renamingLayoutId && layoutRenameVal.trim()) {
+      onPageLayoutsChange(pageLayouts.map(pl => pl.id === renamingLayoutId ? { ...pl, name: layoutRenameVal.trim() } : pl))
+    }
+    setRenamingLayoutId(null)
+  }
+
+  // HTML master pages state
+  const [editHmpId, setEditHmpId] = useState<string>(htmlMasterPages[0]?.id ?? '')
+  const editHmp = htmlMasterPages.find(h => h.id === editHmpId) ?? htmlMasterPages[0]
+  const patchHmp = (patch: Partial<HtmlMasterPage>) => { onHtmlMasterPagesChange(htmlMasterPages.map(h => h.id === editHmpId ? { ...h, ...patch } : h)); triggerHmpSave() }
+  // Inline rename for master page
+  const [renamingHmpId, setRenamingHmpId] = useState<string | null>(null)
+  const [hmpRenameVal, setHmpRenameVal] = useState('')
+  const commitHmpRename = () => {
+    if (renamingHmpId && hmpRenameVal.trim()) {
+      onHtmlMasterPagesChange(htmlMasterPages.map(h => h.id === renamingHmpId ? { ...h, name: hmpRenameVal.trim() } : h))
+    }
+    setRenamingHmpId(null)
+  }
+  // Canvas block state for visual master page builder — stored in HtmlMasterPage.blocks
+  const defaultHomeBlocks: MasterBlock[] = [
+    { id: 'header', type: 'header', label: 'Header' },
+    { id: 'hero', type: 'hero', label: 'Hero' },
+    { id: 'search', type: 'search', label: 'Search' },
+    { id: 'cards', type: 'cards', label: 'Navigation Cards' },
+    { id: 'footer', type: 'footer', label: 'Footer' },
+  ]
+  const defaultTopicBlocks: MasterBlock[] = [
+    { id: 'header', type: 'header', label: 'Header' },
+    { id: 'breadcrumb', type: 'breadcrumb', label: 'Breadcrumb' },
+    { id: 'body', type: 'body', label: 'Body (Left Nav + Content + On This Page)' },
+    { id: 'prevnext', type: 'prevnext', label: 'Previous / Next' },
+    { id: 'footer', type: 'footer', label: 'Footer' },
+  ]
+  const getMasterBlocks = (id: string, type: string): MasterBlock[] =>
+    htmlMasterPages.find(p => p.id === id)?.blocks ?? (type === 'home' ? defaultHomeBlocks : defaultTopicBlocks)
+  const setMasterBlocks = (id: string, blocks: MasterBlock[]) =>
+    onHtmlMasterPagesChange(htmlMasterPages.map(p => p.id === id ? { ...p, blocks } : p))
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+  const [responsiveView, setResponsiveView] = useState<'desktop' | 'tablet' | 'mobile'>('desktop')
+  // New HMP modal
+  const [newHmpOpen, setNewHmpOpen] = useState(false)
+  const [newHmpName, setNewHmpName] = useState('')
+  const [newHmpType, setNewHmpType] = useState<HtmlMasterPage['masterType']>('topic')
+  const [newHmpBaseOn, setNewHmpBaseOn] = useState<string>('blank')
+  const [hmpSaveState, setHmpSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const hmpSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const triggerHmpSave = () => {
+    setHmpSaveState('saving')
+    if (hmpSaveTimer.current) clearTimeout(hmpSaveTimer.current)
+    hmpSaveTimer.current = setTimeout(() => setHmpSaveState('saved'), 600)
+  }
+  // Column drag resize for Topic Master body
+  const [colDragActive, setColDragActive] = useState<'nav' | 'otp' | null>(null)
+  const [colDragStartX, setColDragStartX] = useState(0)
+  const [colDragStartWidth, setColDragStartWidth] = useState(0)
+  const [libSearch, setLibSearch] = useState('')
+  const getBlockProps = (blockId: string) => getMasterBlocks(editHmpId, editHmp?.masterType ?? 'topic').find(b => b.id === blockId)?.props ?? {}
+  const patchBlockProps = (blockId: string, patch: Record<string, unknown>) => {
+    const blocks = getMasterBlocks(editHmpId, editHmp?.masterType ?? 'topic')
+    setMasterBlocks(editHmpId, blocks.map(b => b.id === blockId ? { ...b, props: { ...(b.props ?? {}), ...patch } } : b))
+  }
+
+  // Profile patching helpers
+  const patchProfile = (patch: Partial<StyleProfile>) => setLocalProfiles(prev => prev.map(p => p.id === editId ? { ...p, ...patch } : p))
+  const patchTypo = (key: keyof StyleProfile, patch: Partial<TypoStyle>) => patchProfile({ [key]: { ...(editProfile[key] as TypoStyle), ...patch } })
+  const patchTables = (patch: Partial<StyleProfile['tables']>) => patchProfile({ tables: { ...editProfile.tables, ...patch } })
+  const patchLists = (patch: Partial<StyleProfile['lists']>) => patchProfile({ lists: { ...editProfile.lists, ...patch } })
+  const patchCallout = (key: keyof StyleProfile['callouts'], patch: Partial<StyleProfile['callouts']['note']>) =>
+    patchProfile({ callouts: { ...(editProfile.callouts ?? mkCallouts('')), [key]: { ...(editProfile.callouts?.[key] ?? {}), ...patch } } })
+
+  // Brand colors from active profile, falling back to theme brand
+  const themeBrand = activeThemeObj?.brandProfiles[0]
+  const brandColors = [
+    editProfile?.primaryColor, editProfile?.secondaryColor, editProfile?.accentColor,
+    themeBrand?.primaryColor, themeBrand?.secondaryColor, themeBrand?.accentColor,
+  ].filter((c): c is string => !!c && /^#[0-9A-Fa-f]{6}$/.test(c))
+
+  const fmtBytes = (b: number) => b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / (1024 * 1024)).toFixed(1)} MB`
+
+  const COLOR_ROLES = ['Primary', 'Secondary', 'Accent', 'Background', 'Surface', 'Heading', 'Body Text', 'Border', 'Table Header', 'Note', 'Tip', 'Warning', 'Important', 'Example', 'Custom']
+  const FONT_ROLES = ['Primary Font', 'Heading Font', 'Body Font', 'Fallback Font', 'Code Font', 'Caption Font', 'Custom']
+
+  const runImportAnalysis = async () => {
+    if (!importFile) return
+    setImportAnalyzing(true)
+    setImportError(null)
+    try {
+      const result = await extractBrandFromFile(importFile)
+      setImportExtractionResult(result)
+
+      const suggestions: BrandSuggestion[] = []
+
+      // Colors
+      for (const c of result.colors) {
+        suggestions.push({
+          id: c.id, category: 'color',
+          label: c.name !== c.value ? `${c.name} (${c.value})` : c.value,
+          value: c.value, status: 'pending',
+          suggestedRole: c.suggestedRole, role: c.suggestedRole,
+          sourceSnippet: c.sourceSnippet, confidence: c.confidence,
+        })
+      }
+
+      // Fonts — deduplicated by family, skip metadata-only entries unless no others found
+      const highConfidenceFonts = result.fonts.filter(f => f.detectionMethod !== 'docx-style-metadata' && f.detectionMethod !== 'pdf-font-metadata')
+      const fontsToShow = highConfidenceFonts.length > 0 ? highConfidenceFonts : result.fonts.filter(f => f.suggestedRole !== 'Unknown (DOCX metadata)' && f.suggestedRole !== 'Unknown (PDF metadata)')
+      for (const f of fontsToShow) {
+        const roleLabel = f.suggestedRole.endsWith('Font') ? f.suggestedRole : `${f.suggestedRole} Font`
+        suggestions.push({
+          id: f.id, category: 'typography',
+          label: f.family, value: f.family, status: 'pending',
+          suggestedRole: roleLabel, role: roleLabel,
+          sourceSnippet: f.sourceSnippet, confidence: f.confidence,
+        })
+      }
+
+      // Typography styles — add detailed role entries as additional suggestions
+      const seenFamilies = new Set(fontsToShow.map(f => f.family.toLowerCase()))
+      for (const ts of result.typographyStyles) {
+        if (!ts.fontFamily) continue
+        if (seenFamilies.has(ts.fontFamily.toLowerCase())) continue
+        seenFamilies.add(ts.fontFamily.toLowerCase())
+        suggestions.push({
+          id: ts.id, category: 'typography',
+          label: ts.fontFamily, value: ts.fontFamily, status: 'pending',
+          suggestedRole: `${ts.role} Font`, role: `${ts.role} Font`,
+          sourceSnippet: ts.sourceSnippet, confidence: ts.confidence,
+        })
+      }
+
+      // Logos from DOCX
+      for (const logo of result.logos) {
+        suggestions.push({
+          id: logo.id, category: 'asset',
+          label: `Embedded image from ${result.sourceFilename}`,
+          value: logo.suggestedRole, status: 'pending',
+          suggestedRole: logo.suggestedRole, role: logo.suggestedRole,
+        })
+      }
+
+      // PDF logo notice — add as a non-selectable informational note via empty asset
+      if (result.pdfLogoNote && result.logos.length === 0) {
+        suggestions.push({
+          id: 'pdf-logo-note', category: 'asset',
+          label: result.pdfLogoNote,
+          value: '__pdf_logo_note__', status: 'ignored',
+          suggestedRole: 'Note', role: 'Note',
+        })
+      }
+
+      setImportSuggestions(suggestions)
+      setImportAnalyzing(false)
+      setImportStage(suggestions.length > 0 ? 'map' : 'map') // always go to map; empty state handled there
+    } catch (err) {
+      setImportAnalyzing(false)
+      setImportError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const saveImportedProfile = () => {
+    if (!importProfileName.trim()) return
+    const acc = importSuggestions.filter(s => s.status === 'accepted')
+    const getCol = (role: string) => acc.find(s => s.category === 'color' && s.role === role)?.value
+    const getFont = (role: string) => acc.find(s => s.category === 'typography' && s.role === role)?.value
+    const base = editProfile
+    const blankBase = {
+      body: mkTypo('Arial', 11, '400', '#1F2937'),
+      h1: { ...mkTypo('Arial', 22, '700', '#111827'), spaceBefore: 16, spaceAfter: 12, alignment: 'left' as const },
+      h2: { ...mkTypo('Arial', 16, '700', '#374151'), spaceBefore: 12, spaceAfter: 8, alignment: 'left' as const },
+      h3: { ...mkTypo('Arial', 13, '600', '#374151'), spaceBefore: 10, spaceAfter: 6, alignment: 'left' as const },
+      h4: { ...mkTypo('Arial', 12, '600', '#374151'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' as const },
+      caption: { ...mkTypo('Arial', 10, '400', '#6B7280'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' as const },
+      code: { ...mkTypo('Courier New', 11, '400', '#111827'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' as const },
+      links: { color: '#5B5BD6', underline: true },
+      lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
+      tables: { headerFontWeight: '700', headerTextColor: '#FFFFFF', headerBgColor: '#374151', bodyTextColor: '#1F2937', borderColor: '#D1D5DB', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#F9FAFB', firstColEmphasis: false },
+      callouts: mkCallouts('#5B5BD6'),
+    }
+    const from = base ?? blankBase
+
+    // Accepted colors — map to semantic roles
+    const primCol  = getCol('Primary')
+    const secCol   = getCol('Secondary')
+    const accentCol = getCol('Accent')
+    const bgCol    = getCol('Background')
+    const surfCol  = getCol('Surface')
+    const bodyTextCol = getCol('Body Text')
+
+    // Accepted fonts — prefer explicitly role-labeled suggestions, then typography style extraction
+    const typoStyles = importExtractionResult?.typographyStyles ?? []
+    const getTsFont = (rolePattern: RegExp) => {
+      const ts = typoStyles.find(t => rolePattern.test(t.role))
+      return ts?.fontFamily ?? undefined
+    }
+    const getTsSize = (rolePattern: RegExp) => typoStyles.find(t => rolePattern.test(t.role))?.fontSize
+    const getTsWeight = (rolePattern: RegExp) => typoStyles.find(t => rolePattern.test(t.role))?.fontWeight
+    const getTsColor = (rolePattern: RegExp) => typoStyles.find(t => rolePattern.test(t.role))?.color
+
+    const headFont  = getFont('Heading Font') ?? getFont('Primary Font')
+      ?? getTsFont(/heading\s*1|h1/i) ?? getTsFont(/heading/i)
+      ?? base?.h1?.fontFamily ?? 'Arial'
+    const bodyFont_ = getFont('Body Font')
+      ?? getTsFont(/^body$/i)
+      ?? base?.body?.fontFamily ?? headFont
+    const fallFont  = getFont('Fallback Font') ?? base?.fallbackFont
+    const codeFont_ = getFont('Code Font')
+      ?? getTsFont(/code|mono/i)
+      ?? base?.code?.fontFamily ?? 'Courier New'
+
+    // Primary font = heading font (brand default). All semantic styles inherit unless explicitly different.
+    const primaryFont = headFont
+
+    const existingCallouts = from.callouts ?? mkCallouts('#5B5BD6')
+    const newP: StyleProfile = {
+      ...from,
+      id: `sp${Date.now()}`, name: importProfileName.trim(), clientId: activeThemeObj?.id ?? 'th1', scope: 'client' as const,
+      source: 'Imported from Brand Guidelines',
+      // Brand color tokens
+      primaryColor: primCol, secondaryColor: secCol, accentColor: accentCol,
+      bgColor: bgCol, surfaceColor: surfCol,
+      // Font role tokens — primaryFont is single source of truth
+      primaryFont, headingFont: headFont, bodyFont: bodyFont_, fallbackFont: fallFont, codeFont: codeFont_,
+      // All heading/body styles start as inherited (unless brand provides different families)
+      fontInherit: { h1: true, h2: true, h3: true, h4: true, body: bodyFont_ === headFont, caption: bodyFont_ === headFont },
+      logoLabel: acc.find(s => s.category === 'asset') ? (importFile?.name?.slice(0, 2)?.toUpperCase() ?? 'LG') : from.logoLabel,
+      // Heading styles — populated from typography styles where available
+      h1: { ...(from.h1),
+        fontFamily: headFont,
+        fontSize: getTsSize(/document\s*title/i) ?? getTsSize(/heading\s*1|h1/i) ?? from.h1?.fontSize ?? 22,
+        fontWeight: getTsWeight(/heading\s*1|h1/i) ?? from.h1?.fontWeight ?? '700',
+        color: getTsColor(/heading\s*1|h1/i) ?? primCol ?? from.h1?.color ?? '#111827' },
+      h2: { ...(from.h2),
+        fontFamily: headFont,
+        fontSize: getTsSize(/heading\s*2|h2/i) ?? from.h2?.fontSize ?? 16,
+        fontWeight: getTsWeight(/heading\s*2|h2/i) ?? from.h2?.fontWeight ?? '700',
+        color: getTsColor(/heading\s*2|h2/i) ?? secCol ?? primCol ?? from.h2?.color ?? '#374151' },
+      h3: { ...(from.h3),
+        fontFamily: headFont,
+        fontSize: getTsSize(/heading\s*3|h3/i) ?? from.h3?.fontSize ?? 13,
+        fontWeight: getTsWeight(/heading\s*3|h3/i) ?? from.h3?.fontWeight ?? '600',
+        color: getTsColor(/heading\s*3|h3/i) ?? secCol ?? primCol ?? from.h3?.color ?? '#374151' },
+      h4: { ...(from.h4),
+        fontFamily: headFont,
+        fontSize: getTsSize(/heading\s*4|h4/i) ?? from.h4?.fontSize ?? 12,
+        fontWeight: getTsWeight(/heading\s*4|h4/i) ?? from.h4?.fontWeight ?? '600',
+        color: getTsColor(/heading\s*4|h4/i) ?? secCol ?? primCol ?? from.h4?.color ?? '#374151' },
+      body: { ...(from.body),
+        fontFamily: bodyFont_,
+        fontSize: getTsSize(/^body$/i) ?? from.body?.fontSize ?? 11,
+        fontWeight: getTsWeight(/^body$/i) ?? from.body?.fontWeight ?? '400',
+        color: getTsColor(/^body$/i) ?? bodyTextCol ?? from.body?.color ?? '#1F2937' },
+      caption: { ...(from.caption),
+        fontFamily: bodyFont_,
+        fontSize: getTsSize(/caption/i) ?? from.caption?.fontSize ?? 10,
+        color: getTsColor(/caption/i) ?? from.caption?.color ?? '#6B7280' },
+      code: { ...(from.code), fontFamily: codeFont_, fontSize: getTsSize(/code/i) ?? from.code?.fontSize ?? 11 },
+      // Links — accent > primary
+      links: { ...from.links, color: accentCol ?? primCol ?? from.links?.color ?? '#5B5BD6' },
+      // Tables
+      tables: {
+        ...(from.tables),
+        headerBgColor: primCol ?? from.tables?.headerBgColor ?? '#374151',
+        headerTextColor: '#FFFFFF',
+        borderColor: secCol ?? from.tables?.borderColor ?? '#D1D5DB',
+        bodyTextColor: bodyTextCol ?? from.tables?.bodyTextColor ?? '#1F2937',
+      },
+      // Callouts
+      callouts: {
+        ...existingCallouts,
+        important: accentCol
+          ? { ...existingCallouts.important, accentColor: accentCol, bgColor: accentCol + '18' }
+          : existingCallouts.important,
+      },
+    }
+    setLocalProfiles(prev => [...prev, newP])
+    setEditId(newP.id)
+    closeImportModal()
+  }
+
+  const createNewProfile = () => {
+    if (!newProfName.trim()) return
+    const base = newProfBase === 'current' ? editProfile : newProfBase !== 'blank' ? localProfiles.find(p => p.id === newProfBase) : undefined
+    const newP: StyleProfile = base
+      ? { ...base, id: `sp${Date.now()}`, name: newProfName.trim(), scope: 'client' as const, clientId: activeThemeObj?.id ?? 'th1', source: `Based on ${base.name}` }
+      : {
+          id: `sp${Date.now()}`, name: newProfName.trim(), clientId: activeThemeObj?.id ?? 'th1', scope: 'client' as const, source: 'manual',
+          body: mkTypo('Arial', 11, '400', '#1F2937'),
+          h1: { ...mkTypo('Arial', 22, '700', '#111827'), spaceBefore: 16, spaceAfter: 12, alignment: 'left' as const },
+          h2: { ...mkTypo('Arial', 16, '700', '#374151'), spaceBefore: 12, spaceAfter: 8, alignment: 'left' as const },
+          h3: { ...mkTypo('Arial', 13, '600', '#374151'), spaceBefore: 10, spaceAfter: 6, alignment: 'left' as const },
+          h4: { ...mkTypo('Arial', 12, '600', '#374151'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' as const },
+          caption: { ...mkTypo('Arial', 10, '400', '#6B7280'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' as const },
+          code: { ...mkTypo('Courier New', 11, '400', '#111827'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' as const },
+          links: { color: '#5B5BD6', underline: true },
+          lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
+          tables: { headerFontWeight: '700', headerTextColor: '#FFFFFF', headerBgColor: '#374151', bodyTextColor: '#1F2937', borderColor: '#D1D5DB', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#F9FAFB', firstColEmphasis: false },
+          callouts: mkCallouts('#5B5BD6'),
+        }
+    setLocalProfiles(prev => [...prev, newP])
+    setEditId(newP.id)
+    setNewProfOpen(false)
+    setNewProfName('New Style Profile')
+    setNewProfBase('blank')
+  }
+
+  return (
+    <div className="flex-1 overflow-auto p-8 max-w-6xl mx-auto w-full fade-in">
+
+      {/* ── Modals ── */}
+      {dupModal && <DuplicateModal title={dupModal.title} defaultName={dupModal.defaultName} onDuplicate={dupModal.onDup} onCancel={() => setDupModal(null)} />}
+
+      {/* New Profile Modal */}
+      {newProfOpen && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setNewProfOpen(false) }}>
+          <div className="bg-white rounded-2xl shadow-2xl border border-[#E2DED7] p-6 w-[460px]">
+            <h3 className="text-[15px] font-semibold text-[#111218] mb-4">Create Brand & Style Profile</h3>
+            <div className="mb-4">
+              <label className="block text-[11px] font-semibold text-[#111218] uppercase tracking-wide mb-1.5">Name</label>
+              <input value={newProfName} onChange={e => setNewProfName(e.target.value)} autoFocus
+                onKeyDown={e => { if (e.key === 'Enter') createNewProfile() }}
+                className="w-full h-9 px-3 text-[13px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+            </div>
+            <div className="mb-4">
+              <label className="block text-[11px] font-semibold text-[#111218] uppercase tracking-wide mb-1.5">Base On</label>
+              <div className="space-y-1.5">
+                {([['blank', 'Blank'], ['current', 'Current Profile']] as const).map(([v, l]) => (
+                  <button key={v} onClick={() => setNewProfBase(v)}
+                    className={`w-full text-left px-3 py-2 rounded-lg border text-[12px] transition-all ${newProfBase === v ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#3D3D4E] hover:border-[#C8C6C0]'}`}>{l}</button>
+                ))}
+                {localProfiles.filter(p => p.id !== editId).slice(0, 3).map(p => (
+                  <button key={p.id} onClick={() => setNewProfBase(p.id)}
+                    className={`w-full text-left px-3 py-2 rounded-lg border text-[12px] transition-all ${newProfBase === p.id ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#3D3D4E] hover:border-[#C8C6C0]'}`}>{p.name}</button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={createNewProfile} disabled={!newProfName.trim()}
+                className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-40 text-white text-[13px] font-medium rounded-xl transition-colors">Create</button>
+              <button onClick={() => setNewProfOpen(false)}
+                className="py-2 px-4 border border-[#E2DED7] text-[13px] text-[#6B6B7E] rounded-xl hover:bg-[#F4F2EE]">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Brand Guidelines Modal */}
+      {importOpen && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50" onClick={e => { if (e.target === e.currentTarget) closeImportModal() }}>
+          <div className="bg-white rounded-2xl shadow-2xl border border-[#E2DED7] w-[720px] max-h-[92vh] flex flex-col">
+            {/* Modal header */}
+            <div className="flex items-start justify-between px-6 py-4 border-b border-[#E2DED7] flex-shrink-0">
+              <div>
+                <h3 className="text-[16px] font-semibold text-[#111218]">Import Brand Guidelines</h3>
+                <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                  {(['upload', 'analyze', 'map', 'review'] as const).map((s, i) => (
+                    <span key={s} className="flex items-center gap-1">
+                      {i > 0 && <span className="text-[#C8C6C0] text-[10px]">›</span>}
+                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${importStage === s ? 'bg-[#EEEEFF] text-[#5B5BD6]' : (importStage === 'map' && s === 'upload') || (importStage === 'map' && s === 'analyze') || importStage === 'review' ? 'text-[#9898AB]' : 'text-[#C8C6C0]'}`}>
+                        {['1. Upload', '2. Analyze', '3. Map Brand', '4. Review & Save'][i]}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <button onClick={closeImportModal} className="text-[#9898AB] hover:text-[#3D3D4E] text-[22px] leading-none mt-0.5">×</button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* Stage 1: Upload */}
+              {importStage === 'upload' && (
+                <div className="space-y-4">
+                  <input ref={importFileRef} type="file" accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) { setImportFile(f); setImportSuggestions([]) } }} />
+                  {!importFile ? (
+                    <div
+                      onDragOver={e => { e.preventDefault(); setImportDrag(true) }}
+                      onDragLeave={() => setImportDrag(false)}
+                      onDrop={e => { e.preventDefault(); setImportDrag(false); const f = e.dataTransfer.files?.[0]; if (f) { setImportFile(f); setImportSuggestions([]) } }}
+                      onClick={() => importFileRef.current?.click()}
+                      className={`rounded-xl border-2 border-dashed p-10 text-center cursor-pointer transition-all ${importDrag ? 'border-[#5B5BD6] bg-[#EEEEFF]' : 'border-[#E2DED7] hover:border-[#5B5BD6] hover:bg-[#F9F8FD]'}`}>
+                      <div className="text-[36px] mb-3">📎</div>
+                      <p className="text-[14px] font-semibold text-[#5B5BD6] mb-1">Choose File or Drag & Drop</p>
+                      <p className="text-[12px] text-[#9898AB]">PDF · DOCX · PPTX · PNG · JPG/JPEG</p>
+                    </div>
+                  ) : (
+                    <div className="bg-[#F9F8F6] rounded-xl p-4 flex items-center gap-4">
+                      <span className="text-[28px]">{importFile.name.match(/\.pdf$/i) ? '📄' : importFile.name.match(/\.(png|jpg|jpeg)$/i) ? '🖼️' : '📝'}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-semibold text-[#111218] truncate">{importFile.name}</p>
+                        <p className="text-[11px] text-[#9898AB]">{importFile.type || importFile.name.split('.').pop()?.toUpperCase()} · {fmtBytes(importFile.size)} · <span className="bg-[#DCFCE7] text-[#16A34A] px-1 py-0.5 rounded text-[10px] font-semibold">Ready</span></p>
+                      </div>
+                      <div className="flex gap-2 flex-shrink-0">
+                        <button onClick={() => importFileRef.current?.click()} className="text-[11px] text-[#6B6B7E] border border-[#E2DED7] px-2.5 py-1 rounded-lg hover:bg-[#F4F2EE]">Replace</button>
+                        <button onClick={() => { setImportFile(null); setImportSuggestions([]) }} className="text-[11px] text-[#9898AB] hover:text-[#EF4444]">Remove</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {importFile && !importAnalyzing && (
+                    <button onClick={() => { setImportStage('analyze'); runImportAnalysis() }}
+                      className="w-full py-2.5 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium rounded-xl transition-colors">
+                      Analyze Brand Guidelines
+                    </button>
+                  )}
+
+                  {importAnalyzing && (
+                    <div className="text-center py-8">
+                      <div className="w-8 h-8 border-2 border-[#5B5BD6] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                      <p className="text-[13px] font-medium text-[#3D3D4E]">Analyzing branding standards…</p>
+                      <p className="text-[11px] text-[#F59E0B] mt-1">Prototype AI analysis — detecting colors, fonts, logo usage rules</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Stage 2: Extracting document text and brand data */}
+              {importStage === 'analyze' && importAnalyzing && (
+                <div className="text-center py-12">
+                  <div className="w-8 h-8 border-2 border-[#5B5BD6] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                  <p className="text-[13px] font-medium text-[#3D3D4E]">Extracting brand data from document…</p>
+                  <p className="text-[11px] text-[#9898AB] mt-1">{importFile?.name}</p>
+                </div>
+              )}
+              {importStage === 'analyze' && importError && (
+                <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-xl p-4 text-center">
+                  <p className="text-[13px] font-semibold text-[#B42318] mb-1">Extraction failed</p>
+                  <p className="text-[11px] text-[#B42318] mb-3">{importError}</p>
+                  <button onClick={() => { setImportStage('upload'); setImportError(null) }} className="text-[11px] font-semibold text-[#B42318] border border-[#FECACA] px-3 py-1.5 rounded-lg hover:bg-[#FEE2E2]">Back to Upload</button>
+                </div>
+              )}
+
+              {/* Stage 3: Map Brand */}
+              {importStage === 'map' && (
+                <div className="space-y-5">
+                  {importSuggestions.filter(s => s.value !== '__pdf_logo_note__').length === 0 && (
+                    <div className="bg-[#FEF3C7] border border-[#FCD34D] rounded-xl p-4 text-center">
+                      <p className="text-[12px] font-semibold text-[#92400E] mb-1">No brand data detected</p>
+                      <p className="text-[11px] text-[#92400E]">The document did not contain recognisable hex color values or font declarations with semantic labels. Check that the file includes explicit color codes (e.g. #18314F) and font role labels (e.g. "Heading font: Aptos").</p>
+                    </div>
+                  )}
+                  {importExtractionResult && importSuggestions.filter(s => s.value !== '__pdf_logo_note__').length > 0 && (
+                    <div className="bg-[#F0FDF4] border border-[#BBF7D0] rounded-xl px-3 py-2 flex items-center gap-2">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7l3.5 3.5L12 3.5" stroke="#16A34A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      <p className="text-[11px] font-medium text-[#16A34A]">Extracted from <span className="font-semibold">{importExtractionResult.sourceFilename}</span> — {importSuggestions.filter(s => s.category === 'color' && s.value !== '__pdf_logo_note__').length} color{importSuggestions.filter(s => s.category === 'color').length !== 1 ? 's' : ''}, {importSuggestions.filter(s => s.category === 'typography').length} font{importSuggestions.filter(s => s.category === 'typography').length !== 1 ? 's' : ''} detected</p>
+                    </div>
+                  )}
+
+                  {/* Detected Colors */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-[12px] font-semibold text-[#111218]">Detected Colors</p>
+                      <button onClick={() => setImportSuggestions(prev => prev.map(s => s.category === 'color' && s.status === 'pending' ? { ...s, status: 'accepted' } : s))}
+                        className="text-[10px] font-semibold text-[#5B5BD6] border border-[#5B5BD6] px-2.5 py-1 rounded-lg hover:bg-[#EEEEFF]">Accept All Detected Colors</button>
+                    </div>
+                    <div className="space-y-2">
+                      {importSuggestions.filter(s => s.category === 'color').map(s => (
+                        <div key={s.id} className={`rounded-xl border p-3 transition-all ${s.status === 'accepted' ? 'border-[#BBF7D0] bg-[#F0FDF4]' : s.status === 'ignored' ? 'border-[#F4F2EE] bg-[#FAFAFA] opacity-50' : 'border-[#E2DED7] bg-white'}`}>
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg border border-[#E2DED7] flex-shrink-0" style={{ backgroundColor: s.value }} />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[12px] font-semibold text-[#111218] font-mono">{s.value}</p>
+                              <p className="text-[10px] text-[#9898AB]">Suggested role: {s.suggestedRole}</p>
+                              {s.sourceSnippet && <p className="text-[9px] text-[#B8B5C0] mt-0.5 truncate italic">"{s.sourceSnippet}"</p>}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {s.status === 'pending' && (
+                                <select value={s.role ?? s.suggestedRole ?? ''} onChange={e => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, role: e.target.value } : x))}
+                                  className="h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                                  {COLOR_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                                </select>
+                              )}
+                              {s.status === 'pending' && (
+                                <>
+                                  <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'accepted' } : x))}
+                                    className="text-[10px] font-semibold bg-[#5B5BD6] text-white px-2.5 py-1 rounded-lg hover:bg-[#4A4AC4]">Accept</button>
+                                  <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'ignored' } : x))}
+                                    className="text-[10px] text-[#9898AB] border border-[#E2DED7] px-2.5 py-1 rounded-lg hover:bg-[#F4F2EE]">Ignore</button>
+                                </>
+                              )}
+                              {s.status === 'accepted' && <span className="text-[10px] font-semibold text-[#16A34A]">✓ {s.role}</span>}
+                              {s.status === 'ignored' && <span className="text-[10px] text-[#9898AB]">Ignored</span>}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Detected Fonts */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-[12px] font-semibold text-[#111218]">Detected Fonts</p>
+                      <button onClick={() => setImportSuggestions(prev => prev.map(s => s.category === 'typography' && s.status === 'pending' ? { ...s, status: 'accepted' } : s))}
+                        className="text-[10px] font-semibold text-[#5B5BD6] border border-[#5B5BD6] px-2.5 py-1 rounded-lg hover:bg-[#EEEEFF]">Accept All Detected Fonts</button>
+                    </div>
+                    <div className="space-y-2">
+                      {importSuggestions.filter(s => s.category === 'typography').map(s => (
+                        <div key={s.id} className={`rounded-xl border p-3 transition-all ${s.status === 'accepted' ? 'border-[#BBF7D0] bg-[#F0FDF4]' : s.status === 'ignored' ? 'border-[#F4F2EE] bg-[#FAFAFA] opacity-50' : 'border-[#E2DED7] bg-white'}`}>
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-[#F4F2EE] flex items-center justify-center text-[10px] font-bold text-[#3D3D4E] flex-shrink-0" style={{ fontFamily: s.value }}>Aa</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[12px] font-semibold text-[#111218]" style={{ fontFamily: s.value }}>{s.value}</p>
+                              <p className="text-[10px] text-[#9898AB]">Suggested role: {s.suggestedRole}</p>
+                              {s.sourceSnippet && <p className="text-[9px] text-[#B8B5C0] mt-0.5 truncate italic">"{s.sourceSnippet}"</p>}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {s.status === 'pending' && (
+                                <select value={s.role ?? s.suggestedRole ?? ''} onChange={e => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, role: e.target.value } : x))}
+                                  className="h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                                  {FONT_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                                </select>
+                              )}
+                              {s.status === 'pending' && (
+                                <>
+                                  <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'accepted' } : x))}
+                                    className="text-[10px] font-semibold bg-[#5B5BD6] text-white px-2.5 py-1 rounded-lg hover:bg-[#4A4AC4]">Accept</button>
+                                  <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'ignored' } : x))}
+                                    className="text-[10px] text-[#9898AB] border border-[#E2DED7] px-2.5 py-1 rounded-lg hover:bg-[#F4F2EE]">Ignore</button>
+                                </>
+                              )}
+                              {s.status === 'accepted' && <span className="text-[10px] font-semibold text-[#16A34A]">✓ {s.role}</span>}
+                              {s.status === 'ignored' && <span className="text-[10px] text-[#9898AB]">Ignored</span>}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Detected Typography Styles */}
+                  {importExtractionResult && importExtractionResult.typographyStyles.length > 0 && (
+                    <div>
+                      <p className="text-[12px] font-semibold text-[#111218] mb-2">Detected Typography Styles</p>
+                      <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+                        <table className="w-full text-[11px]">
+                          <thead>
+                            <tr className="bg-[#F4F2EE] border-b border-[#E2DED7]">
+                              <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#6B6B7E] uppercase tracking-wide">Role</th>
+                              <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#6B6B7E] uppercase tracking-wide">Font Family</th>
+                              <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#6B6B7E] uppercase tracking-wide">Weight</th>
+                              <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#6B6B7E] uppercase tracking-wide">Size</th>
+                              <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#6B6B7E] uppercase tracking-wide">Color</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {importExtractionResult.typographyStyles.map((ts, i) => (
+                              <React.Fragment key={ts.id}>
+                                <tr className={`border-b border-[#F4F2EE] ${i % 2 === 1 ? 'bg-[#FAFAF8]' : ''} ${ts.rawCells ? 'cursor-pointer hover:bg-[#F0EEF9]' : ''}`}
+                                  onClick={() => {
+                                    if (!ts.rawCells) return
+                                    const el = document.getElementById(`typo-raw-${ts.id}`)
+                                    if (el) el.style.display = el.style.display === 'none' ? 'table-row' : 'none'
+                                  }}
+                                  title={ts.rawCells ? 'Click to toggle raw source cells' : undefined}
+                                >
+                                  <td className="px-3 py-2 font-medium text-[#111218]">
+                                    <span className="flex items-center gap-1">
+                                      {ts.rawCells && <span className="text-[#9898AB] text-[8px] select-none">▶</span>}
+                                      {ts.role}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 text-[#3D3D4E]" style={{ fontFamily: ts.fontFamily }}>
+                                    {ts.fontFamily
+                                      ? ts.fontFamily
+                                      : <span className="text-[#C8C6C0] italic text-[10px]">Not detected</span>
+                                    }
+                                  </td>
+                                  <td className="px-3 py-2 text-[#6B6B7E]">{ts.fontWeight ?? <span className="text-[#C8C6C0] italic text-[10px]">—</span>}</td>
+                                  <td className="px-3 py-2 text-[#6B6B7E]">{ts.fontSize ? `${ts.fontSize}pt` : <span className="text-[#C8C6C0] italic text-[10px]">—</span>}</td>
+                                  <td className="px-3 py-2">
+                                    {ts.color
+                                      ? <div className="flex items-center gap-1.5"><div className="w-3.5 h-3.5 rounded border border-[#E2DED7] flex-shrink-0" style={{ backgroundColor: ts.color }} /><span className="text-[10px] text-[#6B6B7E] font-mono">{ts.color}</span></div>
+                                      : <span className="text-[#C8C6C0] italic text-[10px]">—</span>
+                                    }
+                                  </td>
+                                </tr>
+                                {ts.rawCells && (
+                                  <tr id={`typo-raw-${ts.id}`} style={{ display: 'none' }} className="bg-[#F9F8FF] border-b border-[#E2DED7]">
+                                    <td colSpan={5} className="px-4 py-2">
+                                      <div className="text-[9px] font-mono text-[#6B6B7E] space-y-0.5">
+                                        <div>Table {ts.sourceTableIndex ?? '?'}, Row {ts.sourceRowIndex ?? '?'} · method: {ts.detectionMethod}</div>
+                                        {ts.columnMap && <div>cols → role:{ts.columnMap.role} font:{ts.columnMap.fontFamily} wt:{ts.columnMap.weight} sz:{ts.columnMap.size} clr:{ts.columnMap.color}</div>}
+                                        <div>roleRaw: <span className="text-[#3D3D4E]">{ts.rawCells.roleRaw || '∅'}</span></div>
+                                        <div>fontFamilyRaw: <span className={ts.rawCells.fontFamilyRaw ? 'text-[#16A34A] font-semibold' : 'text-[#DC2626]'}>{ts.rawCells.fontFamilyRaw || '∅ (blank in source)'}</span></div>
+                                        <div>weightRaw: <span className="text-[#3D3D4E]">{ts.rawCells.weightRaw || '∅'}</span></div>
+                                        <div>sizeRaw: <span className="text-[#3D3D4E]">{ts.rawCells.sizeRaw || '∅'}</span></div>
+                                        <div>colorRaw: <span className="text-[#3D3D4E]">{ts.rawCells.colorRaw || '∅'}</span></div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Detected Logo */}
+                  <div>
+                    <p className="text-[12px] font-semibold text-[#111218] mb-3">Detected Logo</p>
+                    <div className="space-y-2">
+                      {/* PDF logo note */}
+                      {importExtractionResult?.pdfLogoNote && (
+                        <div className="rounded-xl border border-[#E2DED7] bg-[#F9F8F6] p-3">
+                          <p className="text-[11px] text-[#6B6B7E]">{importExtractionResult.pdfLogoNote}</p>
+                          <button className="mt-2 text-[10px] font-semibold text-[#5B5BD6] border border-[#5B5BD6] px-2.5 py-1 rounded-lg hover:bg-[#EEEEFF]"
+                            onClick={() => logoFileRef.current?.click()}>Upload Logo Separately</button>
+                        </div>
+                      )}
+                      {/* DOCX extracted images */}
+                      {importSuggestions.filter(s => s.category === 'asset' && s.value !== '__pdf_logo_note__').map(s => {
+                        const logo = importExtractionResult?.logos.find(l => l.id === s.id)
+                        const previewUrl = logo ? URL.createObjectURL(logo.blob) : null
+                        return (
+                          <div key={s.id} className={`rounded-xl border p-3 transition-all ${s.status === 'accepted' ? 'border-[#BBF7D0] bg-[#F0FDF4]' : s.status === 'ignored' ? 'border-[#F4F2EE] bg-[#FAFAFA] opacity-50' : 'border-[#E2DED7] bg-white'}`}>
+                            <div className="flex items-center gap-3">
+                              {previewUrl
+                                ? <img src={previewUrl} alt="logo" className="w-10 h-10 rounded-lg object-contain border border-[#E2DED7] flex-shrink-0" />
+                                : <div className="w-10 h-10 rounded-lg bg-[#F4F2EE] flex items-center justify-center text-[#9898AB] text-[11px] font-bold flex-shrink-0">{importFile?.name?.slice(0, 2)?.toUpperCase() ?? 'LG'}</div>
+                              }
+                              <div className="flex-1">
+                                <p className="text-[12px] font-semibold text-[#111218]">{s.label}</p>
+                                <p className="text-[10px] text-[#9898AB]">Embedded image from {importExtractionResult?.sourceFilename}</p>
+                              </div>
+                              {s.status === 'pending' && (
+                                <div className="flex gap-2">
+                                  <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'accepted', role: 'Primary Logo' } : x))}
+                                    className="text-[10px] text-[#5B5BD6] border border-[#5B5BD6] px-2 py-0.5 rounded-lg hover:bg-[#EEEEFF]">Use as Primary</button>
+                                  <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'accepted', role: 'Secondary Logo' } : x))}
+                                    className="text-[10px] text-[#9898AB] border border-[#E2DED7] px-2 py-0.5 rounded-lg hover:bg-[#F4F2EE]">Use as Secondary</button>
+                                  <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'ignored' } : x))}
+                                    className="text-[10px] text-[#9898AB] border border-[#E2DED7] px-2 py-0.5 rounded-lg hover:bg-[#F4F2EE]">Ignore</button>
+                                </div>
+                              )}
+                              {s.status === 'accepted' && <span className="text-[10px] font-semibold text-[#16A34A]">✓ {s.role}</span>}
+                              {s.status === 'ignored' && <span className="text-[10px] text-[#9898AB]">Ignored</span>}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Extraction Diagnostics (collapsible) */}
+                  {importExtractionResult?.diagnostics && (
+                    <details className="border border-[#E2DED7] rounded-xl overflow-hidden">
+                      <summary className="px-3 py-2 text-[11px] font-semibold text-[#6B6B7E] cursor-pointer hover:bg-[#F4F2EE] list-none flex items-center justify-between">
+                        <span>Extraction Diagnostics</span>
+                        <span className="text-[10px] font-normal text-[#9898AB]">▸</span>
+                      </summary>
+                      <div className="px-3 pb-3 pt-1 space-y-1 bg-[#FAFAF8]">
+                        {(() => {
+                          const d = importExtractionResult.diagnostics
+                          return (<>
+                            <p className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wide mb-0.5 mt-1">Document</p>
+                            <p className="text-[10px] text-[#6B6B7E]">File parsed: <span className={d.fileParsed ? 'text-[#16A34A] font-semibold' : 'text-[#DC2626] font-semibold'}>{d.fileParsed ? 'Yes' : 'No'}</span></p>
+                            <p className="text-[10px] text-[#6B6B7E]">Text blocks: <span className="font-semibold text-[#3D3D4E]">{d.textBlocksExtracted}</span></p>
+                            <p className="text-[10px] text-[#6B6B7E]">Tables found: <span className="font-semibold text-[#3D3D4E]">{d.tablesFound}</span></p>
+                            <p className="text-[10px] text-[#6B6B7E]">Embedded images: <span className="font-semibold text-[#3D3D4E]">{d.embeddedImages}</span></p>
+                            <p className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wide mb-0.5 mt-2">Colors</p>
+                            <p className="text-[10px] text-[#6B6B7E]">Raw hex candidates: <span className="font-semibold text-[#3D3D4E]">{d.rawColorCandidates}</span></p>
+                            <p className="text-[10px] text-[#6B6B7E]">Accepted brand colors: <span className="font-semibold text-[#3D3D4E]">{d.acceptedColorCandidates}</span></p>
+                            <p className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wide mb-0.5 mt-2">Typography</p>
+                            <p className="text-[10px] text-[#6B6B7E]">Typography tables found: <span className="font-semibold text-[#3D3D4E]">{d.typographyTablesFound}</span></p>
+                            <p className="text-[10px] text-[#6B6B7E]">Font family cells detected: <span className="font-semibold text-[#3D3D4E]">{d.fontFamilyCellsDetected}</span></p>
+                            <p className="text-[10px] text-[#6B6B7E]">Explicit font declarations: <span className="font-semibold text-[#3D3D4E]">{d.explicitFontDeclarationsDetected}</span></p>
+                            {d.docxMetadataFontCandidates > 0 && <p className="text-[10px] text-[#6B6B7E]">DOCX metadata font candidates: <span className="font-semibold text-[#3D3D4E]">{d.docxMetadataFontCandidates}</span></p>}
+                            {d.pdfMetadataFontCandidates > 0 && <p className="text-[10px] text-[#6B6B7E]">PDF metadata font candidates: <span className="font-semibold text-[#3D3D4E]">{d.pdfMetadataFontCandidates}</span></p>}
+                            <p className="text-[10px] text-[#6B6B7E]">Accepted font families: <span className="font-semibold text-[#3D3D4E]">{d.fontCandidates}</span></p>
+                            <p className="text-[10px] text-[#6B6B7E]">Typography styles detected: <span className="font-semibold text-[#3D3D4E]">{d.typographyStylesDetected}</span></p>
+                            {d.warnings.length > 0 && <p className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wide mb-0.5 mt-2">Warnings</p>}
+                            {d.warnings.map((w, i) => <p key={i} className="text-[10px] text-[#D97706]">⚠ {w}</p>)}
+                          </>)
+                        })()}
+                      </div>
+                    </details>
+                  )}
+
+                  <div className="flex gap-3 pt-2 border-t border-[#F4F2EE]">
+                    <button onClick={() => {
+                      setImportSuggestions(prev => prev.map(s => s.status === 'pending' ? { ...s, status: 'accepted' } : s))
+                      setImportStage('review')
+                    }} className="flex-1 py-2.5 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium rounded-xl transition-colors">Accept All Reviewed</button>
+                    <button onClick={() => setImportStage('review')}
+                      className="py-2.5 px-5 border border-[#E2DED7] text-[13px] text-[#6B6B7E] rounded-xl hover:bg-[#F4F2EE]">Review & Save →</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Stage 4: Review & Save */}
+              {importStage === 'review' && (
+                <div className="space-y-5">
+                  <div>
+                    <p className="text-[12px] font-semibold text-[#111218] uppercase tracking-wide mb-3">Review Brand & Style Profile</p>
+
+                    {/* Colors summary */}
+                    {importSuggestions.filter(s => s.category === 'color' && s.status === 'accepted').length > 0 && (
+                      <div className="bg-white border border-[#E2DED7] rounded-xl p-4 mb-3">
+                        <p className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide mb-2">Colors</p>
+                        <div className="flex gap-2 flex-wrap">
+                          {importSuggestions.filter(s => s.category === 'color' && s.status === 'accepted').map(s => (
+                            <div key={s.id} className="flex items-center gap-1.5">
+                              <div className="w-5 h-5 rounded border border-[#E2DED7]" style={{ backgroundColor: s.value }} />
+                              <span className="text-[10px] text-[#3D3D4E]">{s.role}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Typography summary */}
+                    {importSuggestions.filter(s => s.category === 'typography' && s.status === 'accepted').length > 0 && (
+                      <div className="bg-white border border-[#E2DED7] rounded-xl p-4 mb-3">
+                        <p className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide mb-2">Typography</p>
+                        <div className="space-y-1">
+                          {importSuggestions.filter(s => s.category === 'typography' && s.status === 'accepted').map(s => (
+                            <div key={s.id} className="flex items-center gap-2">
+                              <span className="text-[10px] text-[#9898AB] w-24">{s.role}:</span>
+                              <span className="text-[11px] font-medium text-[#111218]" style={{ fontFamily: s.value }}>{s.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Logo summary */}
+                    {importSuggestions.find(s => s.category === 'asset' && s.status === 'accepted') && (
+                      <div className="bg-white border border-[#E2DED7] rounded-xl p-4 mb-3">
+                        <p className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide mb-2">Logo</p>
+                        <div className="w-8 h-8 rounded-lg bg-[#1D4ED8] flex items-center justify-center text-white text-[10px] font-bold">{importFile?.name?.slice(0, 2)?.toUpperCase() ?? 'LG'}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-white border border-[#E2DED7] rounded-xl p-4 space-y-4">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#111218] uppercase tracking-wide mb-1.5">Profile Name</label>
+                      <input value={importProfileName} onChange={e => setImportProfileName(e.target.value)} autoFocus
+                        placeholder="e.g. Imported Corporate Brand"
+                        className="w-full h-9 px-3 text-[13px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button onClick={saveImportedProfile} disabled={!importProfileName.trim()}
+                      className="flex-1 py-2.5 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-40 text-white text-[13px] font-medium rounded-xl transition-colors">
+                      Save as New Brand & Style Profile
+                    </button>
+                    <button onClick={() => setImportStage('map')}
+                      className="py-2.5 px-5 border border-[#E2DED7] text-[13px] text-[#6B6B7E] rounded-xl hover:bg-[#F4F2EE]">← Back</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Header ── */}
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Step 2 — Theme & Styles</p>
+          <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Theme & Style Profiles</h1>
+          <p className="text-[14px] text-[#6B6B7E]">Content remains independent from presentation, allowing the same document to use different Themes and output styles.</p>
+        </div>
+        {returnTo && (
+          <button onClick={() => onNav(returnTo)} className="flex items-center gap-1.5 text-[13px] font-medium text-[#5B5BD6] border border-[#C7C5F4] bg-[#EEEEFF] px-4 py-2 rounded-lg hover:bg-[#E0DEFF] transition-colors flex-shrink-0 ml-6">
+            ← Back to {returnTo.charAt(0).toUpperCase() + returnTo.slice(1)}
+          </button>
+        )}
+      </div>
+
+      {/* ── Tabs ── */}
+      <div className="flex gap-1 bg-[#F4F2EE] rounded-lg p-1 mb-6 w-fit">
+        {([['brandstyle', 'Brand & Style'], ['output', 'Output Templates'], ['variables', 'Variables']] as const).map(([t, l]) => (
+          <button key={t} onClick={() => setTab(t)} className={`px-4 py-1.5 rounded-md text-[12px] font-medium transition-all ${tab === t ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}>{l}</button>
+        ))}
+      </div>
+
+
+
+      {/* ── BRAND & STYLE TAB ── */}
+      {tab === 'brandstyle' && (
+        <div className="flex gap-5" style={{ minHeight: 600 }}>
+
+          {/* ── LEFT: Brand Profile Library ── */}
+          <div className="flex-shrink-0 space-y-3" style={{ width: 220 }}>
+
+            {/* Library header + actions */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[11px] font-semibold text-[#3D3D4E] uppercase tracking-wide">Brand Profiles</p>
+                <div className="flex gap-1">
+                  <button onClick={() => setImportOpen(true)} title="Import from DOCX/PDF"
+                    className="w-6 h-6 flex items-center justify-center text-[#5B5BD6] rounded-md hover:bg-[#EEEEFF] transition-colors">
+                    <svg width="13" height="13" viewBox="0 0 15 15" fill="none"><path d="M7.5 1v8M4.5 6l3 3 3-3M2 10v2.5A.5.5 0 002.5 13h10a.5.5 0 00.5-.5V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Profile cards */}
+              <div className="space-y-2">
+                {localProfiles.map(p => {
+                  const isSelected = p.id === editId
+                  const isApplied = p.id === activeStyleProfileId
+                  const swatchColors = [p.primaryColor, p.secondaryColor, p.accentColor, p.bgColor].filter(Boolean) as string[]
+                  const displayFont = p.headingFont ?? p.primaryFont ?? p.bodyFont ?? ''
+                  return (
+                    <button key={p.id} onClick={() => setEditId(p.id)}
+                      className={`w-full text-left rounded-xl border transition-all overflow-hidden ${isSelected ? 'border-[#5B5BD6] shadow-sm bg-white' : 'border-[#E2DED7] bg-white hover:border-[#C8C6C0] hover:shadow-sm'}`}>
+                      {/* Color strip */}
+                      {swatchColors.length > 0 && (
+                        <div className="flex h-1.5">
+                          {swatchColors.map((c, i) => <div key={i} className="flex-1" style={{ backgroundColor: c }} />)}
+                        </div>
+                      )}
+                      <div className="p-2.5">
+                        <div className="flex items-start justify-between gap-1 mb-1">
+                          <p className="text-[12px] font-semibold text-[#111218] leading-tight truncate flex-1" style={{ fontFamily: displayFont || undefined }}>{p.name}</p>
+                          {isApplied && <span className="flex-shrink-0 text-[8px] font-bold uppercase tracking-wide bg-[#DCFCE7] text-[#16A34A] px-1.5 py-0.5 rounded-full">Applied</span>}
+                        </div>
+                        {/* Logo + font preview */}
+                        <div className="flex items-center gap-1.5">
+                          {p.logoDataUrl
+                            ? <img src={p.logoDataUrl} className="w-5 h-5 object-contain rounded flex-shrink-0" alt="" />
+                            : p.logoLabel && <div className="w-5 h-5 rounded flex items-center justify-center text-white text-[7px] font-bold flex-shrink-0" style={{ backgroundColor: p.primaryColor ?? '#5B5BD6' }}>{p.logoLabel.slice(0,2)}</div>
+                          }
+                          {displayFont && <span className="text-[10px] text-[#9898AB] truncate">{displayFont}</span>}
+                        </div>
+                        {/* Scope badge */}
+                        <div className="mt-1.5 flex items-center gap-1">
+                          <span className={`text-[8px] font-semibold uppercase tracking-wide px-1 py-0.5 rounded ${p.scope === 'client' ? 'bg-[#DBEAFE] text-[#1E40AF]' : 'bg-[#F3F4F6] text-[#6B7280]'}`}>
+                            {p.scope === 'client' ? 'Reusable' : 'Project'}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* New + Import buttons */}
+              <div className="flex gap-1.5 mt-3">
+                <button onClick={() => { setNewProfName(''); setNewProfBase('blank'); setNewProfOpen(true) }}
+                  className="flex-1 h-8 text-[11px] font-semibold text-white bg-[#5B5BD6] rounded-lg hover:bg-[#4A4AC4] transition-colors">+ New</button>
+                <button onClick={() => {
+                  if (!editProfile) return
+                  setDupModal({ title: 'Duplicate Profile', defaultName: `${editProfile.name} — Copy`, onDup: (name, scope) => {
+                    const clone: StyleProfile = { ...editProfile, id: `sp${Date.now()}`, name, scope, source: `Based on ${editProfile.name}` }
+                    setLocalProfiles(prev => [...prev, clone])
+                    setEditId(clone.id)
+                    setDupModal(null)
+                  }})
+                }} title="Duplicate" className="h-8 w-8 flex items-center justify-center text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F4F2EE]">
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="4" y="4" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><path d="M2.5 10V2.5A.5.5 0 013 2h7.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                </button>
+                {localProfiles.length > 1 && editProfile && (
+                  <button onClick={() => {
+                    if (!confirm(`Delete "${editProfile.name}"?`)) return
+                    const remaining = localProfiles.filter(p => p.id !== editId)
+                    setLocalProfiles(remaining)
+                    setEditId(remaining[0]?.id ?? '')
+                  }} title="Delete" className="h-8 w-8 flex items-center justify-center text-[#C8C6C0] border border-[#E2DED7] rounded-lg hover:bg-[#FEF2F2] hover:text-[#EF4444] hover:border-[#FECACA] transition-colors">
+                    <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V2.5A.5.5 0 015.5 2h3a.5.5 0 01.5.5V4M5.5 6.5v4M8.5 6.5v4M3 4l.7 7.5A.5.5 0 004.2 12h5.6a.5.5 0 00.5-.5L11 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Apply to Project */}
+            {editProfile && (
+              <button onClick={() => { onSetActiveStyleProfileId(editId); onProjectMetaChange({ styleProfileId: editId }) }}
+                className={`w-full py-2 text-[11px] font-semibold rounded-xl transition-all ${activeStyleProfileId === editId ? 'bg-[#DCFCE7] text-[#16A34A] border border-[#BBF7D0]' : 'bg-[#5B5BD6] text-white hover:bg-[#4A4AC4] shadow-sm'}`}>
+                {activeStyleProfileId === editId ? '✓ Applied to Project' : 'Apply to Project'}
+              </button>
+            )}
+
+            {/* Section navigation */}
+            <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+              <p className="px-3 pt-2.5 pb-1 text-[9px] font-semibold text-[#9898AB] uppercase tracking-widest">Edit Profile</p>
+              {([
+                ['brand', 'Brand'],
+                ['colors', 'Colors'],
+                ['typography', 'Typography'],
+                ['headings', 'Headings'],
+                ['lists', 'Lists'],
+                ['tables', 'Tables'],
+                ['callouts', 'Callouts'],
+                ['links', 'Links'],
+              ] as const).map(([s, l]) => (
+                <button key={s} onClick={() => setBsSection(s as typeof bsSection)}
+                  className={`w-full text-left px-3 py-2 text-[12px] font-medium border-t border-[#F4F2EE] transition-colors ${bsSection === s ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#3D3D4E] hover:bg-[#F9F8F6]'}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+
+            {/* Inline rename */}
+            {editProfile && (
+              <div className="bg-white border border-[#E2DED7] rounded-xl p-3 space-y-2">
+                <p className="text-[9px] font-semibold text-[#9898AB] uppercase tracking-widest">Profile Name</p>
+                {renamingProfileId === editProfile.id ? (
+                  <input autoFocus value={profileRenameVal}
+                    onChange={e => setProfileRenameVal(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') saveProfileRename(); if (e.key === 'Escape') setRenamingProfileId(null) }}
+                    onBlur={saveProfileRename}
+                    className="w-full h-8 px-2 text-[12px] font-semibold border border-[#5B5BD6] rounded-lg focus:outline-none" />
+                ) : (
+                  <button onClick={() => { setProfileRenameVal(editProfile.name); setRenamingProfileId(editProfile.id) }}
+                    className="w-full text-left text-[12px] font-semibold text-[#111218] hover:text-[#5B5BD6] transition-colors group flex items-center justify-between">
+                    <span>{editProfile.name}</span>
+                    <svg className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M9.5 2.5l2 2-7 7H2.5v-2l7-7z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/><path d="M8 4l2 2" stroke="currentColor" strokeWidth="1.2"/></svg>
+                  </button>
+                )}
+                {editProfile.source && <p className="text-[9px] text-[#9898AB] italic truncate">From: {editProfile.source}</p>}
+              </div>
+            )}
+          </div>
+
+          {/* ── RIGHT: Profile editor ── */}
+          <div className="flex-1 min-w-0 space-y-4">
+            {editProfile && (
+              <>
+                {/* Brand: Logo + Theme Colors */}
+                {bsSection === 'brand' && (
+                  <div className="space-y-4">
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <p className="text-[12px] font-semibold text-[#111218] mb-3">Logo</p>
+                      <input ref={logoFileRef} type="file" accept=".svg,.png" className="hidden"
+                        onChange={e => handleLogoFile(e.target.files?.[0])} />
+                      <div className="flex items-start gap-4">
+                        {/* Logo placeholder — click anywhere to browse */}
+                        <button
+                          onClick={() => logoFileRef.current?.click()}
+                          className="w-24 h-24 rounded-xl border-2 border-dashed border-[#C8C6C0] hover:border-[#5B5BD6] hover:bg-[#F9F8FD] flex flex-col items-center justify-center flex-shrink-0 transition-colors group overflow-hidden"
+                          title="Browse SVG or PNG logo">
+                          {editProfile?.logoDataUrl ? (
+                            <>
+                              <img src={editProfile.logoDataUrl} alt="Logo" className="w-full h-full object-contain p-2" />
+                            </>
+                          ) : (
+                            <>
+                              <svg className="mb-1 text-[#C8C6C0] group-hover:text-[#5B5BD6] transition-colors" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                                <path d="M4 18l5-5 3.5 3.5 4.5-6L22 18H4z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/>
+                                <circle cx="8.5" cy="8.5" r="2" stroke="currentColor" strokeWidth="1.4"/>
+                                <rect x="2" y="2" width="20" height="20" rx="3.5" stroke="currentColor" strokeWidth="1.4"/>
+                              </svg>
+                              <span className="text-[9px] font-medium text-[#9898AB] group-hover:text-[#5B5BD6] transition-colors">Browse SVG/PNG</span>
+                            </>
+                          )}
+                        </button>
+
+                        <div className="flex-1 space-y-2">
+                          <div>
+                            <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Logo Text</label>
+                            <input value={editProfile.logoLabel ?? ''} onChange={e => patchProfile({ logoLabel: e.target.value })}
+                              placeholder="e.g. Acme Corporation, GOV"
+                              className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                            <p className="text-[10px] text-[#9898AB] mt-1">Displayed alongside the logo in HTML header and PDF page layouts.</p>
+                          </div>
+                          {editProfile?.logoDataUrl && (
+                            <button onClick={() => patchProfile({ logoDataUrl: undefined, logoFileName: undefined, logoMimeType: undefined })}
+                              className="text-[10px] text-[#9898AB] hover:text-[#EF4444] transition-colors">Remove logo image</button>
+                          )}
+                          <p className="text-[10px] text-[#9898AB]">Accepted: SVG, PNG · Click the placeholder to browse.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <p className="text-[12px] font-semibold text-[#111218] mb-3">Theme Colors</p>
+                      <div className="space-y-3">
+                        {([
+                          ['primaryColor', 'Primary', '#0F172A'],
+                          ['secondaryColor', 'Secondary', '#1E293B'],
+                          ['accentColor', 'Accent', '#6366F1'],
+                          ['bgColor', 'Background', '#FFFFFF'],
+                          ['surfaceColor', 'Surface', '#F9F8F6'],
+                        ] as const).map(([field, label, fallback]) => (
+                          <div key={field} className="flex items-center gap-3">
+                            <span className="w-24 text-[11px] font-medium text-[#3D3D4E] flex-shrink-0">{label}</span>
+                            <ColorPicker
+                              value={(editProfile as unknown as Record<string, string>)[field] ?? fallback}
+                              onChange={v => patchProfile({ [field]: v })}
+                              brandColors={brandColors}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => showSaved('brand')}
+                        className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium rounded-xl transition-colors">
+                        Save Brand Settings
+                      </button>
+                      {savedSection === 'brand' && <span className="text-[11px] text-[#16A34A] font-medium">✓ Saved</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Colors: semantic brand tokens */}
+                {bsSection === 'colors' && (
+                  <div className="space-y-4">
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <div className="flex items-baseline justify-between mb-3">
+                        <p className="text-[12px] font-semibold text-[#111218]">Brand Colors</p>
+                        <span className="text-[10px] text-[#9898AB]">Core palette</span>
+                      </div>
+                      <div className="space-y-2.5">
+                        {([
+                          ['primaryColor',   'Primary',    '#0F172A', 'Main brand color — headings, CTAs, key UI elements'],
+                          ['secondaryColor', 'Secondary',  '#1E293B', 'Supporting color — subheadings, secondary UI'],
+                          ['accentColor',    'Accent',     '#6366F1', 'Highlight color — links, active states, badges'],
+                          ['bgColor',        'Background', '#FFFFFF', 'Page background'],
+                          ['surfaceColor',   'Surface',    '#F9F8F6', 'Card and panel background'],
+                        ] as const).map(([field, label, fallback, desc]) => (
+                          <div key={field}>
+                            <div className="flex items-center gap-3">
+                              <span className="w-28 text-[11px] font-medium text-[#3D3D4E] flex-shrink-0">{label}</span>
+                              <ColorPicker value={(editProfile as unknown as Record<string, string>)[field] ?? fallback} onChange={v => patchProfile({ [field]: v })} brandColors={brandColors} />
+                              <span className="text-[10px] text-[#9898AB] flex-1">{desc}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <div className="flex items-baseline justify-between mb-3">
+                        <p className="text-[12px] font-semibold text-[#111218]">Text Colors</p>
+                        <span className="text-[10px] text-[#9898AB]">Semantic roles</span>
+                      </div>
+                      <div className="space-y-2.5">
+                        {([
+                          ['headingTextColor', 'Heading Text',  editProfile.primaryColor ?? '#111218', 'Used by H1–H4 by default'],
+                          ['bodyTextColor',    'Body Text',     '#374151',                            'Main paragraph text'],
+                          ['borderColorToken', 'Border',        '#E2DED7',                            'Dividers, card borders'],
+                          ['linkColor',        'Link',          editProfile.accentColor ?? '#5B5BD6', 'Hyperlink color'],
+                        ] as const).map(([field, label, fallback, desc]) => (
+                          <div key={field} className="flex items-center gap-3">
+                            <span className="w-28 text-[11px] font-medium text-[#3D3D4E] flex-shrink-0">{label}</span>
+                            <ColorPicker value={(editProfile as unknown as Record<string, string>)[field] ?? fallback} onChange={v => patchProfile({ [field]: v })} brandColors={brandColors} />
+                            <span className="text-[10px] text-[#9898AB] flex-1">{desc}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <div className="flex items-baseline justify-between mb-3">
+                        <p className="text-[12px] font-semibold text-[#111218]">Status Colors</p>
+                        <span className="text-[10px] text-[#9898AB]">Used by callouts, banners, badges</span>
+                      </div>
+                      <div className="space-y-2.5">
+                        {([
+                          ['successColor',  'Success',     '#16A34A'],
+                          ['infoColor',     'Information', '#2563EB'],
+                          ['warningColor',  'Warning',     '#D97706'],
+                          ['criticalColor', 'Critical',    '#DC2626'],
+                        ] as const).map(([field, label, fallback]) => (
+                          <div key={field} className="flex items-center gap-3">
+                            <span className="w-28 text-[11px] font-medium text-[#3D3D4E] flex-shrink-0">{label}</span>
+                            <ColorPicker value={(editProfile as unknown as Record<string, string>)[field] ?? fallback} onChange={v => patchProfile({ [field]: v })} brandColors={brandColors} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => showSaved('colors')}
+                        className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium rounded-xl transition-colors">
+                        Save Colors
+                      </button>
+                      {savedSection === 'colors' && <span className="text-[11px] text-[#16A34A] font-medium">✓ Saved</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Typography: font role definitions */}
+                {bsSection === 'typography' && (
+                  <div className="space-y-4">
+                    {/* Primary Font — single source of truth */}
+                    <div className="bg-white border border-[#5B5BD6] rounded-xl p-4" style={{ boxShadow: '0 0 0 1px #C7C5F4' }}>
+                      <div className="flex items-baseline justify-between mb-1">
+                        <p className="text-[12px] font-semibold text-[#111218]">Primary Font</p>
+                        <span className="text-[10px] text-[#5B5BD6] font-medium">Brand Default</span>
+                      </div>
+                      <p className="text-[11px] text-[#9898AB] mb-3">The brand's main typeface. Sets Heading Font, Body Font, and all inherited typography styles unless overridden individually.</p>
+                      <FontPicker
+                        value={editProfile.primaryFont ?? editProfile.headingFont ?? editProfile.bodyFont ?? 'Arial'}
+                        onChange={v => {
+                          setLocalProfiles(prev => prev.map(p => {
+                            if (p.id !== editId) return p
+                            const inherit = p.fontInherit ?? { h1: true, h2: true, h3: true, h4: true, body: true, caption: true }
+                            return {
+                              ...p,
+                              primaryFont: v,
+                              headingFont: v, bodyFont: v, fallbackFont: p.fallbackFont ?? v,
+                              h1: { ...p.h1, fontFamily: inherit.h1 !== false ? v : p.h1.fontFamily },
+                              h2: { ...p.h2, fontFamily: inherit.h2 !== false ? v : p.h2.fontFamily },
+                              h3: { ...p.h3, fontFamily: inherit.h3 !== false ? v : p.h3.fontFamily },
+                              h4: { ...p.h4, fontFamily: inherit.h4 !== false ? v : p.h4.fontFamily },
+                              body: { ...p.body, fontFamily: inherit.body !== false ? v : p.body.fontFamily },
+                              caption: { ...p.caption, fontFamily: inherit.caption !== false ? v : p.caption.fontFamily },
+                              fontInherit: inherit,
+                            }
+                          }))
+                        }}
+                        themeFonts={[(editProfile.primaryFont ?? ''), (editProfile.headingFont ?? ''), (editProfile.bodyFont ?? '')].filter(Boolean)}
+                      />
+                    </div>
+
+                    {/* Individual role pickers */}
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <p className="text-[12px] font-semibold text-[#111218] mb-1">Font Roles</p>
+                      <p className="text-[11px] text-[#9898AB] mb-4">Override roles independently. Heading Font updates H1–H4 styles that still inherit; Body Font updates Body and Caption.</p>
+                      <div className="space-y-4">
+                        {([
+                          ['headingFont', 'Heading Font', 'Used by H1–H4'],
+                          ['bodyFont', 'Body Font', 'Used by paragraphs, lists, captions'],
+                          ['fallbackFont', 'Fallback Font', 'Used when primary font is unavailable'],
+                          ['codeFont', 'Code Font', 'Monospace — used by code blocks'],
+                        ] as const).map(([field, label, desc]) => (
+                          <div key={field}>
+                            <div className="flex items-baseline justify-between mb-1">
+                              <label className="text-[11px] font-semibold text-[#111218]">{label}</label>
+                              <span className="text-[10px] text-[#9898AB]">{desc}</span>
+                            </div>
+                            <FontPicker
+                              value={(editProfile as unknown as Record<string, string>)[field] ?? editProfile.primaryFont ?? (field === 'codeFont' ? 'Courier New' : 'Arial')}
+                              onChange={v => {
+                                if (field === 'headingFont') {
+                                  setLocalProfiles(prev => prev.map(p => {
+                                    if (p.id !== editId) return p
+                                    const inherit = p.fontInherit ?? { h1: true, h2: true, h3: true, h4: true, body: true, caption: true }
+                                    return {
+                                      ...p, headingFont: v,
+                                      h1: { ...p.h1, fontFamily: inherit.h1 !== false ? v : p.h1.fontFamily },
+                                      h2: { ...p.h2, fontFamily: inherit.h2 !== false ? v : p.h2.fontFamily },
+                                      h3: { ...p.h3, fontFamily: inherit.h3 !== false ? v : p.h3.fontFamily },
+                                      h4: { ...p.h4, fontFamily: inherit.h4 !== false ? v : p.h4.fontFamily },
+                                    }
+                                  }))
+                                } else if (field === 'bodyFont') {
+                                  setLocalProfiles(prev => prev.map(p => {
+                                    if (p.id !== editId) return p
+                                    const inherit = p.fontInherit ?? { h1: true, h2: true, h3: true, h4: true, body: true, caption: true }
+                                    return {
+                                      ...p, bodyFont: v,
+                                      body: { ...p.body, fontFamily: inherit.body !== false ? v : p.body.fontFamily },
+                                      caption: { ...p.caption, fontFamily: inherit.caption !== false ? v : p.caption.fontFamily },
+                                    }
+                                  }))
+                                } else if (field === 'codeFont') {
+                                  setLocalProfiles(prev => prev.map(p => p.id !== editId ? p : {
+                                    ...p, codeFont: v, code: { ...p.code, fontFamily: v },
+                                  }))
+                                } else {
+                                  patchProfile({ [field]: v })
+                                }
+                              }}
+                              themeFonts={[(editProfile.primaryFont ?? ''), (editProfile.headingFont ?? ''), (editProfile.bodyFont ?? '')].filter(Boolean)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => showSaved('typography')}
+                        className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium rounded-xl transition-colors">
+                        Save Typography
+                      </button>
+                      {savedSection === 'typography' && <span className="text-[11px] text-[#16A34A] font-medium">✓ Saved</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Headings: H1–H4 + body */}
+                {bsSection === 'headings' && (
+                  <div className="space-y-4">
+                    {([
+                      { key: 'h1' as const, label: 'Heading 1' },
+                      { key: 'h2' as const, label: 'Heading 2' },
+                      { key: 'h3' as const, label: 'Heading 3' },
+                      { key: 'h4' as const, label: 'Heading 4' },
+                      { key: 'body' as const, label: 'Body / Paragraph' },
+                      { key: 'caption' as const, label: 'Caption' },
+                      { key: 'code' as const, label: 'Code / Monospace' },
+                    ]).map(({ key, label }) => {
+                      const ts = editProfile[key] as TypoStyle
+                      const isHeadingStyle = ['h1','h2','h3','h4'].includes(key)
+                      const isBodyStyle = ['body','caption'].includes(key)
+                      const brandFontForKey = isHeadingStyle ? (editProfile.headingFont ?? editProfile.primaryFont) : isBodyStyle ? (editProfile.bodyFont ?? editProfile.primaryFont) : key === 'code' ? editProfile.codeFont : undefined
+                      const inheritKey = key as keyof NonNullable<StyleProfile['fontInherit']>
+                      const isInheriting = editProfile.fontInherit?.[inheritKey] !== false && brandFontForKey !== undefined && ts.fontFamily === brandFontForKey
+                      return (
+                        <div key={key} className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <p className="text-[12px] font-semibold text-[#111218]">{label}</p>
+                            {isInheriting
+                              ? <span className="text-[9px] font-medium text-[#6366F1] bg-[#EEF2FF] px-2 py-0.5 rounded-full">Inheriting from {isHeadingStyle ? 'Heading Font' : isBodyStyle ? 'Body Font' : 'Brand'}</span>
+                              : brandFontForKey && <button onClick={() => {
+                                  setLocalProfiles(prev => prev.map(p => p.id !== editId ? p : {
+                                    ...p,
+                                    fontInherit: { ...(p.fontInherit ?? {}), [inheritKey]: true },
+                                    [key]: { ...(p[key] as TypoStyle), fontFamily: brandFontForKey }
+                                  }))
+                                }} className="text-[9px] text-[#5B5BD6] hover:underline">Reset to Brand</button>
+                            }
+                          </div>
+                          <div className="grid grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Font Family</label>
+                              <FontPicker value={ts.fontFamily} onChange={v => {
+                                setLocalProfiles(prev => prev.map(p => p.id !== editId ? p : {
+                                  ...p,
+                                  fontInherit: { ...(p.fontInherit ?? {}), [inheritKey]: v === brandFontForKey },
+                                  [key]: { ...(p[key] as TypoStyle), fontFamily: v }
+                                }))
+                              }}
+                                themeFonts={[(editProfile.primaryFont ?? ''), (editProfile.headingFont ?? ''), (editProfile.bodyFont ?? '')].filter(Boolean)} />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Size (pt)</label>
+                              <input type="number" value={ts.fontSize} min={7} max={72}
+                                onChange={e => patchTypo(key, { fontSize: Number(e.target.value) })}
+                                className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Weight</label>
+                              <select value={ts.fontWeight} onChange={e => patchTypo(key, { fontWeight: e.target.value })}
+                                className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                                <option value="400">Regular</option><option value="500">Medium</option>
+                                <option value="600">Semibold</option><option value="700">Bold</option><option value="800">ExtraBold</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Color</label>
+                              <ColorPicker value={ts.color} onChange={v => patchTypo(key, { color: v })} brandColors={brandColors} />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Space Before (pt)</label>
+                              <input type="number" value={ts.spaceBefore} min={0} max={100}
+                                onChange={e => patchTypo(key, { spaceBefore: Number(e.target.value) })}
+                                className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Space After (pt)</label>
+                              <input type="number" value={ts.spaceAfter} min={0} max={100}
+                                onChange={e => patchTypo(key, { spaceAfter: Number(e.target.value) })}
+                                className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <div className="flex items-center gap-3 mt-2">
+                      <button onClick={() => showSaved('headings')}
+                        className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium rounded-xl transition-colors">
+                        Save Heading Styles
+                      </button>
+                      {savedSection === 'headings' && <span className="text-[11px] text-[#16A34A] font-medium">✓ Saved</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Lists */}
+                {bsSection === 'lists' && (
+                  <div className="space-y-4">
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <p className="text-[12px] font-semibold text-[#111218] mb-3">Ordered List Numbering</p>
+                      <div className="grid grid-cols-3 gap-3">
+                        {(['orderedL1', 'orderedL2', 'orderedL3'] as const).map((k, i) => (
+                          <div key={k}>
+                            <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Level {i + 1}</label>
+                            <select value={editProfile.lists[k]} onChange={e => patchLists({ [k]: e.target.value })} className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                              <option value="1.">1. 2. 3.</option><option value="a.">a. b. c.</option><option value="i.">i. ii. iii.</option>
+                              <option value="A.">A. B. C.</option><option value="I.">I. II. III.</option><option value="1.1">1.1 / 1.2</option>
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <p className="text-[12px] font-semibold text-[#111218] mb-3">Bullet Style</p>
+                      <div className="grid grid-cols-3 gap-3">
+                        {(['bulletL1', 'bulletL2', 'bulletL3'] as const).map((k, i) => (
+                          <div key={k}>
+                            <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Level {i + 1}</label>
+                            <select value={editProfile.lists[k]} onChange={e => patchLists({ [k]: e.target.value })} className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                              <option value="•">• Bullet</option><option value="○">○ Circle</option><option value="–">– Dash</option><option value="▪">▪ Square</option>
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <p className="text-[12px] font-semibold text-[#111218] mb-3">Spacing & Indent</p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Item Spacing (px)</label>
+                          <input type="number" value={editProfile.lists.itemSpacing} min={0} max={40} onChange={e => patchLists({ itemSpacing: Number(e.target.value) })} className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Indentation (px)</label>
+                          <input type="number" value={editProfile.lists.indentation} min={8} max={64} onChange={e => patchLists({ indentation: Number(e.target.value) })} className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => showSaved('lists')}
+                        className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium rounded-xl transition-colors">
+                        Save List Styles
+                      </button>
+                      {savedSection === 'lists' && <span className="text-[11px] text-[#16A34A] font-medium">✓ Saved</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Tables */}
+                {bsSection === 'tables' && (
+                  <div className="space-y-4">
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <p className="text-[12px] font-semibold text-[#111218] mb-3">Header Row</p>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Background</label>
+                          <ColorPicker value={editProfile.tables.headerBgColor} onChange={v => patchTables({ headerBgColor: v })} brandColors={brandColors} />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Text Color</label>
+                          <ColorPicker value={editProfile.tables.headerTextColor} onChange={v => patchTables({ headerTextColor: v })} brandColors={brandColors} />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Font Weight</label>
+                          <select value={editProfile.tables.headerFontWeight} onChange={e => patchTables({ headerFontWeight: e.target.value })} className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                            <option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                      <p className="text-[12px] font-semibold text-[#111218] mb-3">Body & Borders</p>
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Body Text</label>
+                          <ColorPicker value={editProfile.tables.bodyTextColor} onChange={v => patchTables({ bodyTextColor: v })} brandColors={brandColors} />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Border Color</label>
+                          <ColorPicker value={editProfile.tables.borderColor} onChange={v => patchTables({ borderColor: v })} brandColors={brandColors} />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Cell Padding (px)</label>
+                          <input type="number" value={editProfile.tables.cellPadding} min={2} max={24} onChange={e => patchTables({ cellPadding: Number(e.target.value) })} className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Border Width (px)</label>
+                          <input type="number" value={editProfile.tables.borderWidth} min={0} max={4} onChange={e => patchTables({ borderWidth: Number(e.target.value) })} className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                        </div>
+                      </div>
+                      <div className="flex gap-4 flex-wrap">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={editProfile.tables.alternateRows} onChange={e => patchTables({ alternateRows: e.target.checked })} className="w-4 h-4 rounded accent-[#5B5BD6]" />
+                          <span className="text-[12px] text-[#3D3D4E]">Alternate row shading</span>
+                        </label>
+                        {editProfile.tables.alternateRows && (
+                          <div>
+                            <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Alt row</label>
+                            <ColorPicker value={editProfile.tables.alternateRowColor} onChange={v => patchTables({ alternateRowColor: v })} brandColors={brandColors} />
+                          </div>
+                        )}
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={editProfile.tables.firstColEmphasis} onChange={e => patchTables({ firstColEmphasis: e.target.checked })} className="w-4 h-4 rounded accent-[#5B5BD6]" />
+                          <span className="text-[12px] text-[#3D3D4E]">First column emphasis</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => showSaved('tables')}
+                        className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium rounded-xl transition-colors">
+                        Save Table Styles
+                      </button>
+                      {savedSection === 'tables' && <span className="text-[11px] text-[#16A34A] font-medium">✓ Saved</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Callouts */}
+                {bsSection === 'callouts' && (
+                  <div className="space-y-3">
+                    {(['note', 'tip', 'important', 'warning', 'example'] as const).map(key => {
+                      const defCallouts = mkCallouts('')
+                      const cs = editProfile.callouts?.[key] ?? defCallouts[key]
+                      return (
+                        <div key={key} className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <p className="text-[12px] font-semibold text-[#111218] capitalize">{key}</p>
+                            <div className="rounded-lg border-l-4 px-3 py-1 text-[11px] font-medium" style={{ borderColor: cs.accentColor, backgroundColor: cs.bgColor, color: cs.textColor }}>{cs.label} preview</div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Accent</label>
+                              <ColorPicker value={cs.accentColor} onChange={v => patchCallout(key, { accentColor: v })} brandColors={brandColors} />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Background</label>
+                              <ColorPicker value={cs.bgColor} onChange={v => patchCallout(key, { bgColor: v })} brandColors={brandColors} />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Label</label>
+                              <input value={cs.label} onChange={e => patchCallout(key, { label: e.target.value })}
+                                className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <div className="flex items-center gap-3 mt-1">
+                      <button onClick={() => showSaved('callouts')}
+                        className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium rounded-xl transition-colors">
+                        Save Callout Styles
+                      </button>
+                      {savedSection === 'callouts' && <span className="text-[11px] text-[#16A34A] font-medium">✓ Saved</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Links */}
+                {bsSection === 'links' && (
+                  <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                    <p className="text-[12px] font-semibold text-[#111218] mb-3">Link Style</p>
+                    <div className="flex gap-6 items-center">
+                      <div>
+                        <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Color</label>
+                        <ColorPicker value={editProfile.links.color} onChange={v => patchProfile({ links: { ...editProfile.links, color: v } })} brandColors={brandColors} />
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer mt-4">
+                        <input type="checkbox" checked={editProfile.links.underline} onChange={e => patchProfile({ links: { ...editProfile.links, underline: e.target.checked } })} className="w-4 h-4 rounded accent-[#5B5BD6]" />
+                        <span className="text-[12px] text-[#3D3D4E]">Underline</span>
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-3 mt-3">
+                      <button onClick={() => showSaved('links')}
+                        className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium rounded-xl transition-colors">
+                        Save Link Style
+                      </button>
+                      {savedSection === 'links' && <span className="text-[11px] text-[#16A34A] font-medium">✓ Saved</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Live Preview */}
+                <div>
+                  <p className="text-[12px] font-semibold text-[#111218] uppercase tracking-wide mb-2">Live Preview — {editProfile.name}</p>
+                  <StylePreview sp={editProfile} brandPrimaryColor={editProfile.primaryColor ?? brandColors[0]} />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── OUTPUT TEMPLATES TAB ── */}
+      {tab === 'output' && (
+        <div>
+          <div className="flex gap-1 bg-[#F4F2EE] rounded-lg p-1 mb-5 w-fit">
+            {([['layouts','PDF / Word Page Layouts'],['html','HTML Master Pages']] as const).map(([t, l]) => (
+              <button key={t} onClick={() => setOutputSubTab(t)} className={`px-4 py-1.5 rounded-md text-[12px] font-medium transition-all ${outputSubTab === t ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}>{l}</button>
+            ))}
+          </div>
+          {outputSubTab === 'layouts' && (
+        <div className="grid grid-cols-5 gap-6">
+          <div className="col-span-3 space-y-4">
+            {/* Layout selector with inline rename */}
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <label className="block text-[10px] text-[#9898AB] mb-1.5 uppercase tracking-wide">Page Layout</label>
+              <div className="flex items-center gap-2 mb-3">
+                {renamingLayoutId === editLayoutId ? (
+                  <input autoFocus value={layoutRenameVal} onChange={e => setLayoutRenameVal(e.target.value)}
+                    onBlur={commitLayoutRename}
+                    onKeyDown={e => { if (e.key === 'Enter') commitLayoutRename(); if (e.key === 'Escape') setRenamingLayoutId(null) }}
+                    className="flex-1 h-8 px-2 text-[12px] border border-[#5B5BD6] rounded-lg focus:outline-none" />
+                ) : (
+                  <div className="flex-1 relative group">
+                    <select value={editLayoutId} onChange={e => setEditLayoutId(e.target.value)}
+                      className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white pr-8">
+                      {[...pageLayouts].sort((a,b) => a.name.localeCompare(b.name)).map(pl => <option key={pl.id} value={pl.id}>{pl.name}</option>)}
+                    </select>
+                    <button onClick={() => { setRenamingLayoutId(editLayoutId); setLayoutRenameVal(editLayout?.name ?? '') }}
+                      className="absolute right-7 top-1 h-6 w-6 hidden group-hover:flex items-center justify-center text-[#9898AB] hover:text-[#5B5BD6] transition-colors bg-white">
+                      <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1 9.5h2L8.5 3 6 .5 1 6.5v3zM6 .5L8.5 3" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/></svg>
+                    </button>
+                  </div>
+                )}
+                <div className="flex gap-1.5 flex-shrink-0">
+                  <button onClick={() => {
+                    const newPl: PageLayout = {
+                      id: `pl${Date.now()}`, name: 'New Layout', clientId: projectMeta?.themeId || 'th1', layoutType: 'cover',
+                      pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#FFFFFF',
+                      topZone: [], centerZone: [], bottomZone: [], headerZone: [], footerZone: [],
+                    }
+                    onPageLayoutsChange([...pageLayouts, newPl])
+                    setEditLayoutId(newPl.id)
+                    setRenamingLayoutId(newPl.id); setLayoutRenameVal('New Layout')
+                  }} className="h-8 px-2.5 text-[11px] font-medium text-[#5B5BD6] border border-[#5B5BD6] rounded-lg hover:bg-[#EEEEFF]">+ New</button>
+                  <button onClick={() => {
+                    if (!editLayout) return
+                    const clone: PageLayout = { ...editLayout, id: `pl${Date.now()}`, name: `${editLayout.name} Copy` }
+                    const sorted = [...pageLayouts, clone].sort((a,b) => a.name.localeCompare(b.name))
+                    onPageLayoutsChange(sorted); setEditLayoutId(clone.id)
+                  }} className="h-8 px-2.5 text-[11px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F4F2EE]">Duplicate</button>
+                  {pageLayouts.length > 1 && <button onClick={() => {
+                    const next = pageLayouts.find(pl => pl.id !== editLayoutId)
+                    onPageLayoutsChange(pageLayouts.filter(pl => pl.id !== editLayoutId))
+                    if (next) setEditLayoutId(next.id)
+                  }} className="h-8 px-2.5 text-[11px] font-medium text-[#9898AB] border border-[#E2DED7] rounded-lg hover:text-[#EF4444] hover:border-[#FCA5A5]">Delete</button>}
+                </div>
+              </div>
+            </div>
+
+            {editLayout && (
+              <>
+                {/* Layout type & page settings */}
+                <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                  <p className="text-[12px] font-semibold text-[#111218] mb-3">Layout Type & Page Settings</p>
+                  <div className="grid grid-cols-3 gap-3 mb-3">
+                    <div>
+                      <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Layout Type</label>
+                      <select value={editLayout.layoutType} onChange={e => { patchLayout({ layoutType: e.target.value as PageLayout['layoutType'] }); setLayoutSubTab(e.target.value === 'content' ? 'content' : 'cover') }}
+                        className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                        <option value="cover">Cover Page</option><option value="content">Content Page</option>
+                        <option value="chapter">Chapter Opener</option><option value="custom">Custom</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Page Size</label>
+                      <select value={editLayout.pageSize} onChange={e => patchLayout({ pageSize: e.target.value as 'A4' | 'Letter' })}
+                        className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                        <option value="A4">A4</option><option value="Letter">Letter</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Orientation</label>
+                      <select value={editLayout.orientation} onChange={e => patchLayout({ orientation: e.target.value as 'portrait' | 'landscape' })}
+                        className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                        <option value="portrait">Portrait</option><option value="landscape">Landscape</option>
+                      </select>
+                    </div>
+                  </div>
+                  <p className="text-[11px] font-medium text-[#6B6B7E] mb-2">Margins (mm)</p>
+                  <div className="grid grid-cols-4 gap-2 mb-3">
+                    {(['marginTop','marginBottom','marginLeft','marginRight'] as const).map((k, i) => (
+                      <div key={k}>
+                        <label className="block text-[10px] text-[#9898AB] mb-1">{['Top','Bottom','Left','Right'][i]}</label>
+                        <input type="number" value={editLayout[k]} min={5} max={60} onChange={e => patchLayout({ [k]: Number(e.target.value) })}
+                          className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Background Color</label>
+                    <ColorPicker value={editLayout.bgColor} onChange={v => patchLayout({ bgColor: v })} brandColors={brandColors} />
+                  </div>
+                </div>
+
+                {/* Element designer */}
+                <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+                  <div className="flex gap-1 bg-[#F4F2EE] rounded-lg p-1 mb-4 w-fit">
+                    {(editLayout.layoutType === 'cover' || editLayout.layoutType === 'chapter' ? [['cover','Cover Zones']] : [['content','Content Regions']]).concat(
+                      editLayout.layoutType !== 'cover' && editLayout.layoutType !== 'chapter' ? [] : []
+                    ).map(([t, l]) => (
+                      <button key={t} onClick={() => setLayoutSubTab(t as 'cover' | 'content')}
+                        className={`px-3 py-1 rounded-md text-[11px] font-medium transition-all ${layoutSubTab === t ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}>{l}</button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] font-medium text-[#111218] mb-3">Page Element Placement</p>
+
+                  {(editLayout.layoutType === 'cover' || editLayout.layoutType === 'chapter') && (
+                    <div className="space-y-3">
+                      <ZoneEditor title="Top Zone" elements={editLayout.topZone} availableElements={ALL_PAGE_ELEMENTS}
+                        onUpdate={topZone => patchLayout({ topZone })} />
+                      <ZoneEditor title="Center Zone" elements={editLayout.centerZone} availableElements={ALL_PAGE_ELEMENTS}
+                        onUpdate={centerZone => patchLayout({ centerZone })} />
+                      <ZoneEditor title="Bottom Zone" elements={editLayout.bottomZone} availableElements={ALL_PAGE_ELEMENTS}
+                        onUpdate={bottomZone => patchLayout({ bottomZone })} />
+                    </div>
+                  )}
+                  {(editLayout.layoutType === 'content' || editLayout.layoutType === 'custom') && (
+                    <div className="space-y-3">
+                      <ZoneEditor title="Header Region" elements={editLayout.headerZone} availableElements={ALL_PAGE_ELEMENTS}
+                        onUpdate={headerZone => patchLayout({ headerZone })} />
+                      <ZoneEditor title="Footer Region" elements={editLayout.footerZone} availableElements={ALL_PAGE_ELEMENTS}
+                        onUpdate={footerZone => patchLayout({ footerZone })} />
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Layout preview */}
+          <div className="col-span-2">
+            <p className="text-[12px] font-semibold text-[#111218] uppercase tracking-wide mb-3">
+              {editLayout?.name ?? 'Layout'} Preview
+            </p>
+            {editLayout && (
+              <div>
+                {(editLayout.layoutType === 'cover' || editLayout.layoutType === 'chapter') ? (
+                  <div className="rounded-xl overflow-hidden border border-[#E2DED7] shadow-sm flex flex-col"
+                    style={{ aspectRatio: editLayout.orientation === 'landscape' ? '297/210' : '210/297', backgroundColor: editLayout.bgColor, padding: `${editLayout.marginTop * 0.7}px ${editLayout.marginLeft * 0.7}px`, minHeight: 260 }}>
+                    <div className="border border-white/20 rounded-lg p-2 mb-2 min-h-[40px]">
+                      <p className="text-white/50 text-[8px] uppercase tracking-wide mb-1">Top</p>
+                      <div className="flex gap-1 flex-wrap">
+                        {editLayout.topZone.filter(e => e.visible).map(e => (
+                          <span key={e.id} className="text-white text-[9px] font-medium bg-white/20 px-1.5 py-0.5 rounded">{e.label}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex-1 border border-white/20 rounded-lg p-2 my-1 flex flex-col justify-center">
+                      <p className="text-white/50 text-[8px] uppercase tracking-wide mb-1">Center</p>
+                      {editLayout.centerZone.filter(e => e.visible).map(e => (
+                        <div key={e.id} className={`text-white font-${e.label === 'Document Title' ? 'bold text-[14px]' : 'normal text-[9px]'} text-${e.alignment} mb-0.5`}>{e.label}</div>
+                      ))}
+                    </div>
+                    <div className="border border-white/20 rounded-lg p-2 mt-2 min-h-[40px]">
+                      <p className="text-white/50 text-[8px] uppercase tracking-wide mb-1">Bottom</p>
+                      <div className="flex gap-1 flex-wrap">
+                        {editLayout.bottomZone.filter(e => e.visible).map(e => (
+                          <span key={e.id} className="text-white/70 text-[8px] bg-white/10 px-1.5 py-0.5 rounded">{e.label}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl overflow-hidden border border-[#E2DED7] shadow-sm bg-white"
+                    style={{ aspectRatio: editLayout.orientation === 'landscape' ? '297/210' : '210/297', minHeight: 260 }}>
+                    <div className="border-b border-[#E2DED7] px-4 py-2 flex items-center gap-2">
+                      {editLayout.headerZone.filter(e => e.visible).map(e => (
+                        <span key={e.id} className={`text-[9px] text-[#6B6B7E] ${e.alignment === 'right' ? 'ml-auto' : e.alignment === 'center' ? 'mx-auto' : ''}`}>{e.label}</span>
+                      ))}
+                    </div>
+                    <div className="px-4 py-3 flex-1">
+                      <div className="h-1.5 bg-[#F4F2EE] rounded w-2/3 mb-2" />
+                      <div className="h-1 bg-[#F4F2EE] rounded w-full mb-1" />
+                      <div className="h-1 bg-[#F4F2EE] rounded w-4/5 mb-1" />
+                      <div className="h-1 bg-[#F4F2EE] rounded w-full mb-1" />
+                      <div className="h-1 bg-[#F4F2EE] rounded w-3/4" />
+                    </div>
+                    <div className="border-t border-[#E2DED7] px-4 py-2 flex items-center gap-2">
+                      {editLayout.footerZone.filter(e => e.visible).map(e => (
+                        <span key={e.id} className={`text-[9px] text-[#9898AB] ${e.alignment === 'right' ? 'ml-auto' : e.alignment === 'center' ? 'mx-auto' : ''}`}>{e.label}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <p className="text-[10px] text-[#9898AB] mt-2 text-center">
+                  {editLayout.pageSize} · {editLayout.orientation} · {editLayout.marginTop}mm margins
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+          )}
+          {outputSubTab === 'html' && (() => {
+            const canvasBlocks = editHmp ? getMasterBlocks(editHmpId, editHmp.masterType) : []
+            const selectedBlock = canvasBlocks.find(b => b.id === selectedBlockId) ?? null
+            const selectedIdx = canvasBlocks.findIndex(b => b.id === selectedBlockId)
+            const REQUIRED_BLOCKS = new Set(['body', 'header'])
+
+            // Component library organized by category
+            const homeLibrary: Record<string, string[]> = {
+              'Structure': ['Section', 'Columns', 'Divider', 'Spacer', 'Footer'],
+              'Content': ['Hero', 'Welcome Text', 'Rich Text', 'Heading', 'Image', 'Image + Text', 'Video', 'Button / CTA'],
+              'Navigation': ['Header', 'Search', 'Navigation Cards', 'Knowledge Categories', 'Quick Links', 'Featured Links', 'Breadcrumb'],
+              'Dynamic': ['Recent Content', 'Recently Created', 'Recently Updated', 'Featured Topics', 'Popular Topics'],
+              'Interactive': ['Accordion / FAQ', 'Checklist', 'Progress Bar', 'Tabs', 'Stepper', 'Timeline', 'Announcement Banner', 'Carousel', 'Feedback Form'],
+            }
+            const topicLibrary: Record<string, string[]> = {
+              'Structure': ['Header', 'Footer', 'Divider', 'Spacer'],
+              'Navigation': ['Search', 'Breadcrumb', 'Left Navigation', 'On This Page', 'Previous / Next', 'Related Topics'],
+              'Content': ['Main Content', 'Rich Text', 'Image', 'Announcement Banner'],
+              'Interactive': ['Feedback', 'Accordion / FAQ', 'Tabs'],
+            }
+            const library = editHmp?.masterType === 'home' ? homeLibrary : topicLibrary
+            const allComponents = Object.values(library).flat()
+            const filteredLibrary = libSearch.trim()
+              ? { 'Results': allComponents.filter(c => c.toLowerCase().includes(libSearch.toLowerCase())) }
+              : library
+
+            // Helpers
+            const moveBlock = (idx: number, dir: -1 | 1) => {
+              const arr = [...canvasBlocks]
+              const target = idx + dir
+              if (target < 0 || target >= arr.length) return
+              ;[arr[idx], arr[target]] = [arr[target], arr[idx]]
+              setMasterBlocks(editHmpId, arr)
+            }
+            const removeBlock = (id: string) => {
+              if (REQUIRED_BLOCKS.has(id)) return
+              setMasterBlocks(editHmpId, canvasBlocks.filter(b => b.id !== id))
+              if (selectedBlockId === id) setSelectedBlockId(null)
+            }
+            const duplicateBlock = (idx: number) => {
+              const src = canvasBlocks[idx]
+              const clone: MasterBlock = { ...src, id: `${src.type}-${Date.now()}`, label: src.label }
+              const arr = [...canvasBlocks]
+              arr.splice(idx + 1, 0, clone)
+              setMasterBlocks(editHmpId, arr)
+              // copy props
+              patchBlockProps(clone.id, getBlockProps(src.id))
+              setSelectedBlockId(clone.id)
+            }
+            const toggleHide = (id: string) => {
+              const bp = getBlockProps(id)
+              patchBlockProps(id, { hidden: !bp.hidden })
+            }
+            const addComponent = (label: string) => {
+              const newBlock: MasterBlock = { id: `${label.toLowerCase().replace(/\s+/g,'-')}-${Date.now()}`, type: label.toLowerCase().replace(/\s+/g,'-'), label }
+              const arr = [...canvasBlocks]
+              const insertAt = selectedIdx >= 0 ? selectedIdx + 1 : arr.length
+              arr.splice(insertAt, 0, newBlock)
+              setMasterBlocks(editHmpId, arr)
+              setSelectedBlockId(newBlock.id)
+              patchBlockProps(newBlock.id, getDefaultProps(newBlock.type))
+            }
+            const getDefaultProps = (type: string): Record<string, unknown> => {
+              if (type === 'hero') return { heading: 'Welcome to Our Documentation', description: 'Find guides, tutorials, and reference materials.', bgColor: '#5B5BD6', height: 'Standard', alignment: 'center', showSearch: true, showCta: true, ctaLabel: 'Get Started' }
+              if (type === 'welcome-text') return { heading: 'Welcome', body: 'Find guidance, tutorials, and reference information.', bgColor: '', fontSize: 'Standard' }
+              if (type === 'navigation-cards') return { title: 'Browse by Category', columns: 3, cards: [{id:'c1',title:'Getting Started',desc:'Begin here',icon:'🚀'},{id:'c2',title:'API Reference',desc:'Technical docs',icon:'📖'},{id:'c3',title:'Tutorials',desc:'Step by step',icon:'🎓'},{id:'c4',title:'FAQ',desc:'Common questions',icon:'❓'},{id:'c5',title:'Community',desc:'Join the discussion',icon:'💬'},{id:'c6',title:'Release Notes',desc:'What\'s new',icon:'📋'}] }
+              if (type === 'announcement-banner') return { variant: 'info', text: 'Welcome to the documentation portal!', dismissible: true }
+              if (type === 'accordion-/-faq') return { title: 'Frequently Asked Questions', items: [{id:'a1',q:'What is this?',a:'This is a documentation portal.'},{id:'a2',q:'How do I get started?',a:'See the Getting Started guide.'},{id:'a3',q:'Where can I find support?',a:'Visit our community forum.'}], mode: 'single' }
+              if (type === 'checklist') return { title: 'Getting Started Checklist', items: [{id:'i1',text:'Read the introduction',done:false},{id:'i2',text:'Install the software',done:false},{id:'i3',text:'Configure your environment',done:false},{id:'i4',text:'Run your first command',done:false}], showProgress: true }
+              if (type === 'tabs') return { tabs: [{id:'t1',label:'Overview',content:'Overview content goes here.'},{id:'t2',label:'Installation',content:'Installation steps here.'},{id:'t3',label:'Configuration',content:'Configuration options here.'}], activeTab: 't1' }
+              if (type === 'recent-content') return { source: 'recently-updated', count: 5, layout: 'cards', columns: 3 }
+              if (type === 'progress-bar') return { label: 'Progress', value: 40, showPercent: true }
+              if (type === 'rich-text') return { content: 'Enter your content here. You can use **bold**, *italic*, and other formatting.' }
+              if (type === 'heading') return { text: 'Section Heading', level: 2 }
+              if (type === 'button-/-cta') return { label: 'Learn More', href: '#', variant: 'primary', alignment: 'center' }
+              if (type === 'image-+-text') return { heading: 'Feature Highlight', body: 'Describe your feature here.', imagePosition: 'left' }
+              if (type === 'featured-links') return { title: 'Featured', links: [{id:'l1',label:'Quick Start Guide'},{id:'l2',label:'API Authentication'},{id:'l3',label:'Release Notes'}] }
+              return {}
+            }
+
+            // Block canvas renderer
+            const renderBlock = (block: MasterBlock, idx: number) => {
+              const bp = getBlockProps(block.id)
+              const isSelected = block.id === selectedBlockId
+              const isHidden = !!bp.hidden
+              const isRequired = REQUIRED_BLOCKS.has(block.id)
+
+              return (
+                <div key={block.id}
+                  draggable
+                  onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('blockIdx', String(idx)) }}
+                  onDragOver={e => { e.preventDefault(); setDragOverIdx(idx) }}
+                  onDrop={e => {
+                    e.preventDefault()
+                    const fromIdx = parseInt(e.dataTransfer.getData('blockIdx') ?? '-1')
+                    if (fromIdx < 0 || fromIdx === idx) { setDragOverIdx(null); return }
+                    const arr = [...canvasBlocks]
+                    const [moved] = arr.splice(fromIdx, 1)
+                    arr.splice(idx, 0, moved)
+                    setMasterBlocks(editHmpId, arr)
+                    setDragOverIdx(null)
+                  }}
+                  onDragEnd={() => setDragOverIdx(null)}
+                  onClick={() => setSelectedBlockId(isSelected ? null : block.id)}
+                  className={`relative group border-b border-[#F4F2EE] transition-all cursor-pointer ${isSelected ? 'ring-2 ring-[#5B5BD6] ring-inset' : 'hover:bg-[#FAFAF9]'} ${isHidden ? 'opacity-40' : ''} ${dragOverIdx === idx ? 'border-t-2 border-t-[#5B5BD6]' : ''}`}>
+                  {/* Block content */}
+                  {block.type === 'header' && (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-[#5B5BD6]">
+                      {editHmp?.showLogo && <div className="w-5 h-5 bg-white/20 rounded text-white text-[8px] font-bold flex items-center justify-center">L</div>}
+                      <span className="text-white text-[10px] font-semibold flex-1">Documentation</span>
+                      {editHmp?.showSearch && <div className="h-5 w-16 bg-white/20 rounded text-white/70 text-[8px] flex items-center px-1.5">Search…</div>}
+                    </div>
+                  )}
+                  {block.type === 'hero' && (
+                    <div className="px-4 py-5 text-center relative overflow-hidden"
+                      style={{ background: (bp.bgColor as string) || '#5B5BD6' }}>
+                      <p className="text-white font-bold text-[11px] mb-1">{(bp.heading as string) || 'Welcome to Our Documentation'}</p>
+                      <p className="text-white/75 text-[8px] mb-2">{(bp.description as string) || 'Find guides and tutorials'}</p>
+                      {!!bp.showSearch && <div className="inline-flex bg-white/20 rounded-full px-3 py-1 text-white text-[8px] mb-2">🔍 Search documentation…</div>}
+                      {!!bp.showCta && <div className="inline-flex bg-white text-[#5B5BD6] rounded px-2 py-0.5 text-[8px] font-semibold ml-1">{(bp.ctaLabel as string) || 'Get Started'}</div>}
+                    </div>
+                  )}
+                  {block.type === 'welcome-text' && (
+                    <div className="px-4 py-3" style={{ background: (bp.bgColor as string) || 'transparent' }}>
+                      {!!bp.heading && <p className="text-[10px] font-bold text-[#111218] mb-1">{bp.heading as string}</p>}
+                      <p className="text-[9px] text-[#6B6B7E]">{(bp.body as string) || 'Welcome text goes here.'}</p>
+                    </div>
+                  )}
+                  {block.type === 'rich-text' && (
+                    <div className="px-4 py-3">
+                      <div className="text-[9px] text-[#3D3D4E] space-y-1">
+                        <div className="h-1 bg-[#E5E5EA] rounded w-full" />
+                        <div className="h-1 bg-[#E5E5EA] rounded w-5/6" />
+                        <div className="h-1 bg-[#E5E5EA] rounded w-4/5" />
+                      </div>
+                    </div>
+                  )}
+                  {block.type === 'heading' && (
+                    <div className="px-4 py-2">
+                      <p className="font-bold text-[#111218]" style={{ fontSize: (bp.level as number) === 2 ? 12 : (bp.level as number) === 3 ? 10 : 14 }}>{(bp.text as string) || 'Section Heading'}</p>
+                    </div>
+                  )}
+                  {block.type === 'search' && (
+                    <div className="px-4 py-3 flex justify-center border-b border-[#F4F2EE]">
+                      <div className="w-2/3 h-7 bg-[#F4F2EE] border border-[#E2DED7] rounded-full flex items-center px-3 text-[9px] text-[#9898AB]">🔍 Search documentation…</div>
+                    </div>
+                  )}
+                  {block.type === 'breadcrumb' && (
+                    <div className="px-4 py-1.5 bg-[#F9F8F6] text-[8px] text-[#9898AB]">Home › Getting Started › Installation</div>
+                  )}
+                  {block.type === 'navigation-cards' && (
+                    <div className="px-3 py-3">
+                      {!!bp.title && <p className="text-[9px] font-semibold text-[#111218] mb-2">{bp.title as string}</p>}
+                      <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${Math.min((bp.columns as number) || 3, responsiveView === 'mobile' ? 1 : responsiveView === 'tablet' ? 2 : (bp.columns as number) || 3)}, 1fr)` }}>
+                        {((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>) || []).map(c => (
+                          <div key={c.id} className="border border-[#E2DED7] rounded-lg p-2"><span className="text-[10px]">{c.icon}</span><p className="text-[8px] font-semibold text-[#3D3D4E] mt-0.5">{c.title}</p><p className="text-[7px] text-[#9898AB]">{c.desc}</p></div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {block.type === 'featured-links' && (
+                    <div className="px-3 py-2">
+                      {(bp as {title?: string}).title && <p className="text-[9px] font-semibold text-[#111218] mb-1.5">{(bp as {title: string}).title}</p>}
+                      {((bp.links as Array<{id:string;label:string}>) || [{id:'l1',label:'Quick Start Guide'},{id:'l2',label:'API Authentication'},{id:'l3',label:'Release Notes'}]).map(l => (
+                        <div key={l.id} className="text-[8px] text-[#5B5BD6] py-0.5">→ {l.label}</div>
+                      ))}
+                    </div>
+                  )}
+                  {block.type === 'announcement-banner' && (
+                    <div className={`px-3 py-2 flex items-center gap-2 ${(bp.variant as string) === 'warning' ? 'bg-[#FEF3C7] border-b border-[#FDE68A]' : (bp.variant as string) === 'error' ? 'bg-[#FEE2E2] border-b border-[#FCA5A5]' : (bp.variant as string) === 'success' ? 'bg-[#DCFCE7] border-b border-[#BBF7D0]' : 'bg-[#EEEEFF] border-b border-[#C7C5F4]'}`}>
+                      <span className="text-[10px]">{(bp.variant as string) === 'warning' ? '⚠️' : (bp.variant as string) === 'error' ? '🚨' : (bp.variant as string) === 'success' ? '✅' : 'ℹ️'}</span>
+                      <p className="text-[9px] flex-1">{(bp.text as string) || 'Announcement text here'}</p>
+                      {!!bp.dismissible && <span className="text-[9px] text-[#9898AB]">✕</span>}
+                    </div>
+                  )}
+                  {block.type === 'accordion-/-faq' && (
+                    <div className="px-3 py-2">
+                      {!!bp.title && <p className="text-[9px] font-semibold text-[#111218] mb-2">{bp.title as string}</p>}
+                      {((bp.items as Array<{id:string;q:string;a:string}>) || []).map((item, i) => (
+                        <div key={item.id} className={`border-t border-[#F4F2EE] py-1.5 ${i === 0 ? 'border-t-0' : ''}`}>
+                          <div className="flex justify-between items-center"><p className="text-[8px] font-semibold text-[#3D3D4E]">{item.q}</p><span className="text-[8px] text-[#9898AB]">+</span></div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {block.type === 'checklist' && (
+                    <div className="px-3 py-2">
+                      {!!bp.title && <p className="text-[9px] font-semibold text-[#111218] mb-2">{bp.title as string}</p>}
+                      {!!bp.showProgress && (
+                        <div className="mb-2 bg-[#F4F2EE] rounded-full h-1.5 overflow-hidden">
+                          <div className="h-full bg-[#22C55E] rounded-full" style={{ width: '25%' }} />
+                        </div>
+                      )}
+                      {((bp.items as Array<{id:string;text:string;done:boolean}>) || []).map(item => (
+                        <label key={item.id} className="flex items-center gap-1.5 py-0.5 cursor-pointer">
+                          <input type="checkbox" defaultChecked={item.done} className="w-3 h-3 rounded accent-[#5B5BD6]" />
+                          <span className="text-[8px] text-[#3D3D4E]">{item.text}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {block.type === 'tabs' && (
+                    <div className="px-3 py-2">
+                      <div className="flex gap-0 border-b border-[#E2DED7] mb-2">
+                        {((bp.tabs as Array<{id:string;label:string;content:string}>) || []).map((t, i) => (
+                          <div key={t.id} className={`px-2 py-1 text-[8px] font-medium border-b-2 -mb-px ${i === 0 ? 'border-[#5B5BD6] text-[#5B5BD6]' : 'border-transparent text-[#9898AB]'}`}>{t.label}</div>
+                        ))}
+                      </div>
+                      <p className="text-[8px] text-[#6B6B7E]">{((bp.tabs as Array<{id:string;label:string;content:string}>) || [])[0]?.content || 'Tab content'}</p>
+                    </div>
+                  )}
+                  {block.type === 'progress-bar' && (
+                    <div className="px-4 py-2">
+                      <div className="flex justify-between mb-1"><span className="text-[8px] text-[#6B6B7E]">{(bp.label as string) || 'Progress'}</span>{!!bp.showPercent && <span className="text-[8px] font-semibold text-[#5B5BD6]">{(bp.value as number) || 0}%</span>}</div>
+                      <div className="bg-[#E5E5EA] rounded-full h-2 overflow-hidden"><div className="h-full bg-[#5B5BD6] rounded-full" style={{ width: `${(bp.value as number) || 0}%` }} /></div>
+                    </div>
+                  )}
+                  {block.type === 'recent-content' && (
+                    <div className="px-3 py-2">
+                      <p className="text-[9px] font-semibold text-[#111218] mb-2">
+                        {(bp.source as string) === 'featured-topics' ? 'Featured Topics' : (bp.source as string) === 'recently-created' ? 'Recently Created' : 'Recently Updated'}
+                      </p>
+                      {(bp.layout as string) === 'cards' ? (
+                        <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${Math.min((bp.columns as number) || 3, 3)}, 1fr)` }}>
+                          {['Getting Started Guide','API Reference','Configuration Guide','Troubleshooting','Release Notes'].slice(0,(bp.count as number)||3).map((t,i) => (
+                            <div key={i} className="border border-[#E2DED7] rounded p-1.5"><p className="text-[7px] font-medium text-[#3D3D4E] truncate">{t}</p><p className="text-[7px] text-[#9898AB] mt-0.5">Updated 2d ago</p></div>
+                          ))}
+                        </div>
+                      ) : (
+                        ['Getting Started Guide','API Reference','Configuration Guide'].map((t,i) => (
+                          <div key={i} className="flex items-center gap-2 py-0.5 border-b border-[#F9F8F6]"><div className="w-1.5 h-1.5 rounded-full bg-[#5B5BD6] flex-shrink-0" /><p className="text-[8px] text-[#3D3D4E]">{t}</p><p className="text-[7px] text-[#9898AB] ml-auto">2d ago</p></div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                  {block.type === 'button-/-cta' && (
+                    <div className={`px-4 py-3 flex ${(bp.alignment as string) === 'right' ? 'justify-end' : (bp.alignment as string) === 'left' ? 'justify-start' : 'justify-center'}`}>
+                      <div className={`px-3 py-1.5 rounded-lg text-[9px] font-semibold ${(bp.variant as string) === 'secondary' ? 'border border-[#5B5BD6] text-[#5B5BD6]' : 'bg-[#5B5BD6] text-white'}`}>{(bp.label as string) || 'Learn More'}</div>
+                    </div>
+                  )}
+                  {block.type === 'image-+-text' && (
+                    <div className={`px-3 py-2 flex gap-3 items-center ${(bp.imagePosition as string) === 'right' ? 'flex-row-reverse' : ''}`}>
+                      <div className="w-16 h-12 bg-[#F4F2EE] rounded border border-[#E2DED7] flex items-center justify-center text-[16px] flex-shrink-0">🖼</div>
+                      <div><p className="text-[9px] font-semibold text-[#111218]">{(bp.heading as string) || 'Feature Highlight'}</p><p className="text-[8px] text-[#6B6B7E] mt-0.5">{(bp.body as string) || 'Describe your feature here.'}</p></div>
+                    </div>
+                  )}
+                  {block.type === 'divider' && <div className="px-4 py-2"><div className="border-t border-[#E2DED7]" /></div>}
+                  {block.type === 'spacer' && <div className="h-6 bg-[#F9F8F6]" />}
+                  {block.type === 'previous-/-next' && (
+                    <div className="px-3 py-2 flex justify-between border-t border-[#F4F2EE]">
+                      <span className="text-[8px] text-[#5B5BD6]">← Previous Topic</span>
+                      <span className="text-[8px] text-[#5B5BD6]">Next Topic →</span>
+                    </div>
+                  )}
+                  {block.type === 'footer' && (
+                    <div className="px-3 py-2 bg-[#111218] text-center">
+                      <p className="text-[8px] text-[#9898AB]">© 2026 Organization · Privacy · Terms · Contact</p>
+                    </div>
+                  )}
+                  {block.type === 'body' && (
+                    <div className="flex relative select-none" style={{ minHeight: 140 }}
+                      onMouseMove={e => {
+                        if (!colDragActive) return
+                        const delta = e.clientX - colDragStartX
+                        if (colDragActive === 'nav') patchHmp({ navWidth: Math.max(120, Math.min(400, colDragStartWidth + delta * 4)) })
+                        else patchHmp({ otpWidth: Math.max(120, Math.min(300, colDragStartWidth - delta * 4)) })
+                      }}
+                      onMouseUp={() => setColDragActive(null)}
+                      onMouseLeave={() => setColDragActive(null)}>
+                      {editHmp?.showLeftNav && <>
+                        <div className="border-r border-[#E2DED7] p-2 flex-shrink-0 bg-[#F9F8F6]" style={{ width: Math.max(48, Math.min(90, (editHmp?.navWidth ?? 280) * 0.25)) }}>
+                          <p className="text-[7px] font-bold text-[#9898AB] uppercase mb-1">Nav</p>
+                          {['Introduction','Getting Started','Installation','Configuration','Troubleshoot'].map((t,i) => <div key={i} className={`text-[7px] py-0.5 px-1 rounded mb-0.5 truncate ${i===0?'bg-[#EEEEFF] text-[#5B5BD6] font-semibold':'text-[#6B6B7E]'}`}>{t}</div>)}
+                          <p className="text-[7px] text-[#9898AB] mt-1 opacity-60">{editHmp?.navWidth}px</p>
+                        </div>
+                        <div className="w-1.5 flex-shrink-0 flex items-center justify-center cursor-col-resize bg-transparent hover:bg-[#EEEEFF] group/drag transition-colors z-10"
+                          onMouseDown={e => { e.preventDefault(); setColDragActive('nav'); setColDragStartX(e.clientX); setColDragStartWidth(editHmp?.navWidth ?? 280) }}>
+                          <div className="w-0.5 h-8 rounded-full bg-[#C8C6C0] group-hover/drag:bg-[#5B5BD6] transition-colors" />
+                        </div>
+                      </>}
+                      <div className="flex-1 p-3 overflow-hidden">
+                        <div className="text-[10px] font-bold text-[#111218] mb-1.5">Getting Started Guide</div>
+                        <div className="space-y-1 mb-2"><div className="h-1 bg-[#E5E5EA] rounded w-full" /><div className="h-1 bg-[#E5E5EA] rounded w-5/6" /><div className="h-1 bg-[#E5E5EA] rounded w-4/5" /></div>
+                        <div className="text-[8px] font-semibold text-[#3D3D4E] mb-1">Installation</div>
+                        <div className="bg-[#F4F2EE] rounded px-2 py-1 font-mono text-[7px] text-[#3D3D4E] mb-2">npm install presight-docs</div>
+                        <div className="border border-[#F0E6D3] bg-[#FEF3C7] rounded px-2 py-1"><span className="text-[7px] font-semibold text-[#78350F]">Note </span><span className="text-[7px] text-[#92400E]">Requires Node 18+</span></div>
+                      </div>
+                      {editHmp?.showOnThisPage && <>
+                        <div className="w-1.5 flex-shrink-0 flex items-center justify-center cursor-col-resize bg-transparent hover:bg-[#EEEEFF] group/drag transition-colors z-10"
+                          onMouseDown={e => { e.preventDefault(); setColDragActive('otp'); setColDragStartX(e.clientX); setColDragStartWidth(editHmp?.otpWidth ?? 220) }}>
+                          <div className="w-0.5 h-8 rounded-full bg-[#C8C6C0] group-hover/drag:bg-[#5B5BD6] transition-colors" />
+                        </div>
+                        <div className="border-l border-[#E2DED7] p-2 flex-shrink-0 bg-[#F9F8F6]" style={{ width: Math.max(48, Math.min(72, (editHmp?.otpWidth ?? 220) * 0.22)) }}>
+                          <p className="text-[7px] font-bold text-[#9898AB] uppercase mb-1">On page</p>
+                          {['Overview','Installation','Config','Usage','Testing'].map((t,i) => <div key={i} className="text-[7px] text-[#9898AB] py-0.5 pl-1 border-l border-[#E2DED7] truncate">{t}</div>)}
+                          <p className="text-[7px] text-[#9898AB] mt-1 opacity-60">{editHmp?.otpWidth ?? 220}px</p>
+                        </div>
+                      </>}
+                    </div>
+                  )}
+                  {!['header','hero','welcome-text','rich-text','heading','search','breadcrumb','body','navigation-cards','featured-links','announcement-banner','accordion-/-faq','checklist','tabs','progress-bar','recent-content','button-/-cta','image-+-text','divider','spacer','previous-/-next','footer'].includes(block.type) && (
+                    <div className="px-3 py-2 bg-[#F9F8F6]"><p className="text-[9px] text-[#6B6B7E] font-medium">{block.label}</p></div>
+                  )}
+                  {/* Block action bar - shows on hover/select */}
+                  <div className={`absolute top-1 right-1 ${isSelected ? 'flex' : 'hidden group-hover:flex'} items-center gap-0.5 bg-white border border-[#E2DED7] rounded-md shadow-sm px-1 py-0.5 z-20`}>
+                    <span className="text-[9px] text-[#9898AB] px-0.5 cursor-grab">⋮⋮</span>
+                    <button onClick={e => { e.stopPropagation(); moveBlock(idx, -1) }} className="text-[#9898AB] hover:text-[#111218] px-0.5 text-[10px]" title="Move up">↑</button>
+                    <button onClick={e => { e.stopPropagation(); moveBlock(idx, 1) }} className="text-[#9898AB] hover:text-[#111218] px-0.5 text-[10px]" title="Move down">↓</button>
+                    <button onClick={e => { e.stopPropagation(); duplicateBlock(idx) }} className="text-[#9898AB] hover:text-[#5B5BD6] px-0.5 text-[9px]" title="Duplicate">⧉</button>
+                    <button onClick={e => { e.stopPropagation(); toggleHide(block.id) }} className={`px-0.5 text-[9px] ${isHidden ? 'text-[#5B5BD6]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`} title={isHidden ? 'Show' : 'Hide'}>{isHidden ? '👁' : '🙈'}</button>
+                    {!isRequired && <button onClick={e => { e.stopPropagation(); removeBlock(block.id) }} className="text-[#9898AB] hover:text-[#EF4444] px-0.5 text-[10px]" title="Delete">✕</button>}
+                  </div>
+                </div>
+              )
+            }
+
+            // Properties inspector content
+            const renderInspector = () => {
+              if (!selectedBlock) return (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Master Type</label>
+                    <select value={editHmp?.masterType} onChange={e => patchHmp({ masterType: e.target.value as HtmlMasterPage['masterType'] })}
+                      className="w-full h-8 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                      <option value="home">Home</option><option value="topic">Topic</option><option value="landing">Landing</option><option value="custom">Custom</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Content Width (px)</label>
+                    <input type="number" value={editHmp?.contentWidth ?? 1200} min={600} max={1600} step={100}
+                      onChange={e => patchHmp({ contentWidth: Number(e.target.value) })}
+                      className="w-full h-8 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={editHmp?.stickyNav ?? false} onChange={e => patchHmp({ stickyNav: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" />
+                    <span className="text-[11px] text-[#3D3D4E]">Sticky navigation</span>
+                  </label>
+                  <p className="text-[10px] text-[#9898AB] pt-2 border-t border-[#F4F2EE]">Click a block to inspect its properties.</p>
+                </div>
+              )
+              const bp = getBlockProps(selectedBlock.id)
+              const patch = (p: Record<string, unknown>) => patchBlockProps(selectedBlock.id, p)
+              const idx = canvasBlocks.findIndex(b => b.id === selectedBlock.id)
+              return (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#F4F2EE]">
+                    <p className="text-[10px] font-bold text-[#111218]">{selectedBlock.label}</p>
+                    <div className="flex gap-1">
+                      <button onClick={() => moveBlock(idx, -1)} className="text-[#9898AB] hover:text-[#111218] text-[11px]" title="Move up">↑</button>
+                      <button onClick={() => moveBlock(idx, 1)} className="text-[#9898AB] hover:text-[#111218] text-[11px]" title="Move down">↓</button>
+                      <button onClick={() => duplicateBlock(idx)} className="text-[#9898AB] hover:text-[#5B5BD6] text-[10px]" title="Duplicate">⧉</button>
+                      {!REQUIRED_BLOCKS.has(selectedBlock.id) && <button onClick={() => removeBlock(selectedBlock.id)} className="text-[#9898AB] hover:text-[#EF4444] text-[11px]" title="Delete">✕</button>}
+                    </div>
+                  </div>
+                  {/* Visibility */}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={!bp.hidden} onChange={e => patch({ hidden: !e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" />
+                    <span className="text-[11px] text-[#3D3D4E]">Visible</span>
+                  </label>
+                  {/* Type-specific properties */}
+                  {selectedBlock.type === 'hero' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Heading</label>
+                      <input value={(bp.heading as string) || ''} onChange={e => patch({ heading: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Description</label>
+                      <textarea value={(bp.description as string) || ''} onChange={e => patch({ description: e.target.value })} rows={2} className="w-full px-2 py-1 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] resize-none" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Background Color</label>
+                      <input type="color" value={(bp.bgColor as string) || '#5B5BD6'} onChange={e => patch({ bgColor: e.target.value })} className="w-full h-7 rounded border border-[#E2DED7]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Alignment</label>
+                      <div className="flex gap-1">{['left','center','right'].map(a => <button key={a} onClick={() => patch({ alignment: a })} className={`flex-1 py-1 rounded border text-[10px] capitalize ${(bp.alignment as string) === a ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{a}</button>)}</div></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Height</label>
+                      <select value={(bp.height as string) || 'Standard'} onChange={e => patch({ height: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg bg-white focus:outline-none">
+                        <option value="Compact">Compact</option><option value="Standard">Standard</option><option value="Large">Large</option>
+                      </select></div>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!bp.showSearch} onChange={e => patch({ showSearch: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Search bar</span></label>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!bp.showCta} onChange={e => patch({ showCta: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Primary CTA</span></label>
+                    {bp.showCta && <div><label className="block text-[10px] text-[#9898AB] mb-1">CTA Label</label>
+                      <input value={(bp.ctaLabel as string) || ''} onChange={e => patch({ ctaLabel: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>}
+                  </>}
+                  {selectedBlock.type === 'welcome-text' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Heading</label>
+                      <input value={(bp.heading as string) || ''} placeholder="Optional heading" onChange={e => patch({ heading: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Body Text</label>
+                      <textarea value={(bp.body as string) || ''} onChange={e => patch({ body: e.target.value })} rows={3} className="w-full px-2 py-1 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] resize-none" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Background</label>
+                      <input type="color" value={(bp.bgColor as string) || '#FFFFFF'} onChange={e => patch({ bgColor: e.target.value })} className="w-full h-7 rounded border border-[#E2DED7]" /></div>
+                  </>}
+                  {selectedBlock.type === 'heading' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Text</label>
+                      <input value={(bp.text as string) || ''} onChange={e => patch({ text: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Level</label>
+                      <div className="flex gap-1">{[1,2,3].map(l => <button key={l} onClick={() => patch({ level: l })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.level as number) === l ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>H{l}</button>)}</div></div>
+                  </>}
+                  {selectedBlock.type === 'navigation-cards' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Section Title</label>
+                      <input value={(bp.title as string) || ''} onChange={e => patch({ title: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Columns</label>
+                      <div className="flex gap-1">{[2,3,4].map(c => <button key={c} onClick={() => patch({ columns: c })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.columns as number) === c ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{c}</button>)}</div></div>
+                    <div className="space-y-1">
+                      <label className="block text-[10px] text-[#9898AB] mb-1">Cards</label>
+                      {((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>) || []).map((card, ci) => (
+                        <div key={card.id} className="flex gap-1 items-center">
+                          <input value={card.title} onChange={e => { const cards = [...((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>)||[])]; cards[ci]={...card,title:e.target.value}; patch({cards}) }} className="flex-1 h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                          <button onClick={() => { const cards = ((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>)||[]).filter((_,i)=>i!==ci); patch({cards}) }} className="text-[#9898AB] hover:text-[#EF4444] text-[10px] px-0.5">✕</button>
+                        </div>
+                      ))}
+                      <button onClick={() => { const cards = [...((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>)||[]),{id:`c${Date.now()}`,title:'New Card',desc:'',icon:'📄'}]; patch({cards}) }} className="w-full py-1 text-[10px] text-[#5B5BD6] border border-dashed border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF]">+ Add Card</button>
+                    </div>
+                  </>}
+                  {selectedBlock.type === 'announcement-banner' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Text</label>
+                      <input value={(bp.text as string) || ''} onChange={e => patch({ text: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Type</label>
+                      <div className="flex gap-1">{(['info','success','warning','error'] as const).map(v => <button key={v} onClick={() => patch({ variant: v })} className={`flex-1 py-1 rounded border text-[9px] capitalize ${(bp.variant as string) === v ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{v}</button>)}</div></div>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!bp.dismissible} onChange={e => patch({ dismissible: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Dismissible</span></label>
+                  </>}
+                  {selectedBlock.type === 'accordion-/-faq' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Title</label>
+                      <input value={(bp.title as string) || ''} onChange={e => patch({ title: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Mode</label>
+                      <div className="flex gap-1"><button onClick={() => patch({ mode: 'single' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.mode as string) !== 'multiple' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Single open</button><button onClick={() => patch({ mode: 'multiple' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.mode as string) === 'multiple' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Multiple</button></div></div>
+                    <div className="space-y-1">
+                      {((bp.items as Array<{id:string;q:string;a:string}>) || []).map((item, ii) => (
+                        <div key={item.id} className="flex gap-1 items-start">
+                          <div className="flex-1 space-y-1">
+                            <input value={item.q} placeholder="Question" onChange={e => { const items=[...((bp.items as Array<{id:string;q:string;a:string}>)||[])]; items[ii]={...item,q:e.target.value}; patch({items}) }} className="w-full h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                            <input value={item.a} placeholder="Answer" onChange={e => { const items=[...((bp.items as Array<{id:string;q:string;a:string}>)||[])]; items[ii]={...item,a:e.target.value}; patch({items}) }} className="w-full h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                          </div>
+                          <button onClick={() => { const items=((bp.items as Array<{id:string;q:string;a:string}>)||[]).filter((_,i)=>i!==ii); patch({items}) }} className="text-[#9898AB] hover:text-[#EF4444] text-[10px] mt-1">✕</button>
+                        </div>
+                      ))}
+                      <button onClick={() => { const items=[...((bp.items as Array<{id:string;q:string;a:string}>)||[]),{id:`a${Date.now()}`,q:'New Question',a:'Answer here.'}]; patch({items}) }} className="w-full py-1 text-[10px] text-[#5B5BD6] border border-dashed border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF]">+ Add Item</button>
+                    </div>
+                  </>}
+                  {selectedBlock.type === 'checklist' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Title</label>
+                      <input value={(bp.title as string) || ''} onChange={e => patch({ title: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!bp.showProgress} onChange={e => patch({ showProgress: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Show progress bar</span></label>
+                    <div className="space-y-1">
+                      {((bp.items as Array<{id:string;text:string;done:boolean}>) || []).map((item, ii) => (
+                        <div key={item.id} className="flex gap-1 items-center">
+                          <input value={item.text} onChange={e => { const items=[...((bp.items as Array<{id:string;text:string;done:boolean}>)||[])]; items[ii]={...item,text:e.target.value}; patch({items}) }} className="flex-1 h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                          <button onClick={() => { const items=((bp.items as Array<{id:string;text:string;done:boolean}>)||[]).filter((_,i)=>i!==ii); patch({items}) }} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>
+                        </div>
+                      ))}
+                      <button onClick={() => { const items=[...((bp.items as Array<{id:string;text:string;done:boolean}>)||[]),{id:`i${Date.now()}`,text:'New item',done:false}]; patch({items}) }} className="w-full py-1 text-[10px] text-[#5B5BD6] border border-dashed border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF]">+ Add Item</button>
+                    </div>
+                  </>}
+                  {selectedBlock.type === 'tabs' && <>
+                    <div className="space-y-1">
+                      {((bp.tabs as Array<{id:string;label:string;content:string}>) || []).map((tab, ti) => (
+                        <div key={tab.id} className="flex gap-1 items-center">
+                          <input value={tab.label} onChange={e => { const tabs=[...((bp.tabs as Array<{id:string;label:string;content:string}>)||[])]; tabs[ti]={...tab,label:e.target.value}; patch({tabs}) }} className="flex-1 h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" placeholder="Tab label" />
+                          {((bp.tabs as Array<unknown>)||[]).length > 1 && <button onClick={() => { const tabs=((bp.tabs as Array<{id:string;label:string;content:string}>)||[]).filter((_,i)=>i!==ti); patch({tabs}) }} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>}
+                        </div>
+                      ))}
+                      <button onClick={() => { const tabs=[...((bp.tabs as Array<{id:string;label:string;content:string}>)||[]),{id:`t${Date.now()}`,label:'New Tab',content:'Tab content.'}]; patch({tabs}) }} className="w-full py-1 text-[10px] text-[#5B5BD6] border border-dashed border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF]">+ Add Tab</button>
+                    </div>
+                  </>}
+                  {selectedBlock.type === 'progress-bar' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Label</label>
+                      <input value={(bp.label as string) || ''} onChange={e => patch({ label: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Value ({(bp.value as number) || 0}%)</label>
+                      <input type="range" min={0} max={100} value={(bp.value as number) || 0} onChange={e => patch({ value: Number(e.target.value) })} className="w-full accent-[#5B5BD6]" /></div>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!bp.showPercent} onChange={e => patch({ showPercent: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Show percentage</span></label>
+                  </>}
+                  {selectedBlock.type === 'recent-content' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Source</label>
+                      <select value={(bp.source as string) || 'recently-updated'} onChange={e => patch({ source: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg bg-white focus:outline-none">
+                        <option value="recently-updated">Recently Updated</option>
+                        <option value="recently-created">Recently Created</option>
+                        <option value="featured-topics">Featured Topics</option>
+                        <option value="popular-topics">Popular Topics</option>
+                      </select></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Count</label>
+                      <div className="flex gap-1">{[3,5,10].map(c => <button key={c} onClick={() => patch({ count: c })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.count as number) === c ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{c}</button>)}</div></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Layout</label>
+                      <div className="flex gap-1"><button onClick={() => patch({ layout: 'cards' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.layout as string) === 'cards' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Cards</button><button onClick={() => patch({ layout: 'list' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.layout as string) === 'list' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>List</button></div></div>
+                    {(bp.layout as string) === 'cards' && <div><label className="block text-[10px] text-[#9898AB] mb-1">Columns</label>
+                      <div className="flex gap-1">{[2,3,4].map(c => <button key={c} onClick={() => patch({ columns: c })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.columns as number) === c ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{c}</button>)}</div></div>}
+                  </>}
+                  {selectedBlock.type === 'header' && <>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showLogo ?? true} onChange={e => patchHmp({ showLogo: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Show Logo</span></label>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showSearch ?? true} onChange={e => patchHmp({ showSearch: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Show Search</span></label>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.stickyNav ?? false} onChange={e => patchHmp({ stickyNav: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Sticky Header</span></label>
+                  </>}
+                  {selectedBlock.type === 'body' && <>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showLeftNav ?? true} onChange={e => patchHmp({ showLeftNav: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Left Navigation</span></label>
+                    {editHmp?.showLeftNav && <div><label className="block text-[10px] text-[#9898AB] mb-1">Nav Width (px)</label>
+                      <input type="number" value={editHmp?.navWidth ?? 280} min={160} max={420} onChange={e => patchHmp({ navWidth: Number(e.target.value) })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>}
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showOnThisPage ?? true} onChange={e => patchHmp({ showOnThisPage: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">On This Page</span></label>
+                    {editHmp?.showOnThisPage && <div><label className="block text-[10px] text-[#9898AB] mb-1">OTP Width (px)</label>
+                      <input type="number" value={editHmp?.otpWidth ?? 220} min={140} max={320} onChange={e => patchHmp({ otpWidth: Number(e.target.value) })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>}
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showFeedback ?? false} onChange={e => patchHmp({ showFeedback: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Feedback</span></label>
+                    <div className="pt-1 border-t border-[#F4F2EE]">
+                      <label className="block text-[10px] text-[#9898AB] mb-1.5 uppercase tracking-wide">Body Layout</label>
+                      <div className="space-y-1">
+                        {[{label:'Content only',nav:false,otp:false},{label:'Left Nav + Content',nav:true,otp:false},{label:'Content + On This Page',nav:false,otp:true},{label:'Left Nav + Content + On This Page',nav:true,otp:true}].map(opt => (
+                          <button key={opt.label} onClick={() => patchHmp({ showLeftNav: opt.nav, showOnThisPage: opt.otp })}
+                            className={`w-full text-left text-[10px] px-2 py-1.5 rounded-lg border transition-all ${editHmp?.showLeftNav === opt.nav && editHmp?.showOnThisPage === opt.otp ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6] font-medium' : 'border-[#F4F2EE] text-[#6B6B7E] hover:border-[#E2DED7]'}`}>{opt.label}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </>}
+                  {selectedBlock.type === 'button-/-cta' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Label</label>
+                      <input value={(bp.label as string) || ''} onChange={e => patch({ label: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Style</label>
+                      <div className="flex gap-1"><button onClick={() => patch({ variant: 'primary' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.variant as string) !== 'secondary' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Primary</button><button onClick={() => patch({ variant: 'secondary' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.variant as string) === 'secondary' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Outline</button></div></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Alignment</label>
+                      <div className="flex gap-1">{['left','center','right'].map(a => <button key={a} onClick={() => patch({ alignment: a })} className={`flex-1 py-1 rounded border text-[10px] capitalize ${(bp.alignment as string) === a ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{a}</button>)}</div></div>
+                  </>}
+                  {selectedBlock.type === 'image-+-text' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Heading</label>
+                      <input value={(bp.heading as string) || ''} onChange={e => patch({ heading: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Body</label>
+                      <textarea value={(bp.body as string) || ''} onChange={e => patch({ body: e.target.value })} rows={2} className="w-full px-2 py-1 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none resize-none" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Image Position</label>
+                      <div className="flex gap-1"><button onClick={() => patch({ imagePosition: 'left' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.imagePosition as string) !== 'right' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Left</button><button onClick={() => patch({ imagePosition: 'right' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.imagePosition as string) === 'right' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Right</button></div></div>
+                  </>}
+                </div>
+              )
+            }
+
+            return (
+              <div>
+                {/* Master page selector bar */}
+                <div className="bg-white border border-[#E2DED7] rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap">
+                  <div className="flex-1 min-w-48 relative group">
+                    {renamingHmpId === editHmpId ? (
+                      <input autoFocus value={hmpRenameVal} onChange={e => setHmpRenameVal(e.target.value)}
+                        onBlur={commitHmpRename}
+                        onKeyDown={e => { if (e.key === 'Enter') commitHmpRename(); if (e.key === 'Escape') setRenamingHmpId(null) }}
+                        className="w-full h-8 px-2 text-[12px] border border-[#5B5BD6] rounded-lg focus:outline-none" />
+                    ) : (
+                      <>
+                        <select value={editHmpId} onChange={e => { setEditHmpId(e.target.value); setSelectedBlockId(null) }}
+                          className="w-full h-8 px-2 text-[12px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white pr-8">
+                          {[...htmlMasterPages].sort((a,b) => a.name.localeCompare(b.name)).map(h => (
+                            <option key={h.id} value={h.id}>{h.name} · {h.masterType}</option>
+                          ))}
+                        </select>
+                        <button onClick={() => { setRenamingHmpId(editHmpId); setHmpRenameVal(editHmp?.name ?? '') }}
+                          className="absolute right-7 top-1 h-6 w-6 hidden group-hover:flex items-center justify-center text-[#9898AB] hover:text-[#5B5BD6] bg-white">
+                          <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1 9.5h2L8.5 3 6 .5 1 6.5v3zM6 .5L8.5 3" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/></svg>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <button onClick={() => setNewHmpOpen(true)} className="h-8 px-2.5 text-[11px] font-medium text-[#5B5BD6] border border-[#5B5BD6] rounded-lg hover:bg-[#EEEEFF] flex-shrink-0">+ New</button>
+                  <button onClick={() => {
+                    if (!editHmp) return
+                    const clone: HtmlMasterPage = { ...editHmp, id: `hmp${Date.now()}`, name: `${editHmp.name} Copy` }
+                    const sorted = [...htmlMasterPages, clone].sort((a,b) => a.name.localeCompare(b.name))
+                    onHtmlMasterPagesChange(sorted); setEditHmpId(clone.id)
+                    setMasterBlocks(clone.id, [...canvasBlocks])
+                    canvasBlocks.forEach(b => patchBlockProps(clone.id + '_' + b.id, getBlockProps(b.id)))
+                  }} className="h-8 px-2.5 text-[11px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F4F2EE] flex-shrink-0">Duplicate</button>
+                  {htmlMasterPages.length > 1 && <button onClick={() => {
+                    const next = htmlMasterPages.find(h => h.id !== editHmpId)
+                    onHtmlMasterPagesChange(htmlMasterPages.filter(h => h.id !== editHmpId))
+                    if (next) { setEditHmpId(next.id); setSelectedBlockId(null) }
+                  }} className="h-8 px-2.5 text-[11px] font-medium text-[#9898AB] border border-[#E2DED7] rounded-lg hover:text-[#EF4444] hover:border-[#FCA5A5] flex-shrink-0">Delete</button>}
+                  {hmpSaveState === 'saving' && <span className="text-[10px] text-[#9898AB] animate-pulse flex-shrink-0">Saving…</span>}
+                  {hmpSaveState === 'saved' && <span className="text-[10px] text-[#22C55E] flex-shrink-0">✓ Saved</span>}
+                  <div className="flex items-center gap-0.5 bg-[#F4F2EE] rounded-lg p-0.5 ml-auto">
+                    {(['desktop','tablet','mobile'] as const).map(v => (
+                      <button key={v} onClick={() => setResponsiveView(v)}
+                        className={`px-2 py-1 rounded text-[10px] font-medium transition-all capitalize ${responsiveView === v ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB]'}`}>
+                        {v === 'desktop' ? '🖥' : v === 'tablet' ? '📱' : '📲'} {v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {editHmp && (
+                  <div className="grid grid-cols-12 gap-4" style={{ minHeight: 560 }}>
+                    {/* LEFT: Component Library with search + categories */}
+                    <div className="col-span-2 bg-white border border-[#E2DED7] rounded-xl overflow-hidden flex flex-col">
+                      <div className="px-2 py-2 border-b border-[#F4F2EE] space-y-1.5">
+                        <p className="text-[10px] font-bold text-[#9898AB] uppercase tracking-wide">Components</p>
+                        <input value={libSearch} onChange={e => setLibSearch(e.target.value)} placeholder="Search…"
+                          className="w-full h-6 px-2 text-[10px] border border-[#E2DED7] rounded-md focus:outline-none focus:border-[#5B5BD6]" />
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-1.5">
+                        {Object.entries(filteredLibrary).map(([cat, comps]) => (
+                          <div key={cat} className="mb-2">
+                            {!libSearch.trim() && <p className="text-[8px] font-bold text-[#C8C6C0] uppercase tracking-wider px-1.5 pt-1 pb-0.5">{cat}</p>}
+                            {comps.map(comp => (
+                              <button key={comp} onClick={() => addComponent(comp)}
+                                className="w-full text-left px-1.5 py-1 rounded-md text-[10px] text-[#3D3D4E] hover:bg-[#EEEEFF] hover:text-[#5B5BD6] transition-colors flex items-center gap-1 group">
+                                <span className="text-[#D1D0C8] group-hover:text-[#C7C5F4] text-[8px]">+</span>
+                                <span className="truncate">{comp}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ))}
+                        {libSearch.trim() && Object.values(filteredLibrary).flat().length === 0 && (
+                          <p className="text-[10px] text-[#9898AB] px-2 py-4 text-center">No components match</p>
+                        )}
+                      </div>
+                      <div className="px-2 py-1.5 border-t border-[#F4F2EE]">
+                        <p className="text-[8px] text-[#9898AB]">Click or drag to add</p>
+                      </div>
+                    </div>
+
+                    {/* CENTER: Canvas */}
+                    <div className="col-span-7 bg-[#F4F2EE] border border-[#E2DED7] rounded-xl overflow-hidden flex flex-col">
+                      <div className="px-3 py-2 border-b border-[#E2DED7] bg-white flex items-center justify-between">
+                        <p className="text-[11px] font-semibold text-[#111218]">{editHmp.name}</p>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] text-[#9898AB] capitalize">{responsiveView}</span>
+                          {selectedBlock && <button onClick={() => setSelectedBlockId(null)} className="text-[9px] text-[#9898AB] hover:text-[#6B6B7E]">Deselect</button>}
+                        </div>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-3">
+                        <div className={`bg-white rounded-lg border border-[#E2DED7] overflow-hidden mx-auto transition-all ${responsiveView === 'mobile' ? 'max-w-[320px]' : responsiveView === 'tablet' ? 'max-w-[600px]' : 'w-full'}`}>
+                          {canvasBlocks.length === 0 ? (
+                            <div className="p-8 text-center">
+                              <p className="text-[12px] text-[#9898AB] mb-2">No blocks yet</p>
+                              <p className="text-[10px] text-[#C8C6C0]">Click components in the library to add them</p>
+                            </div>
+                          ) : canvasBlocks.map((block, idx) => renderBlock(block, idx))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* RIGHT: Properties Inspector */}
+                    <div className="col-span-3 bg-white border border-[#E2DED7] rounded-xl overflow-hidden flex flex-col">
+                      <div className="px-3 py-2 border-b border-[#F4F2EE]">
+                        <p className="text-[10px] font-bold text-[#9898AB] uppercase tracking-wide">
+                          {selectedBlock ? selectedBlock.label : 'Master Settings'}
+                        </p>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-3">
+                        {renderInspector()}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* New Master Page Modal */}
+                {newHmpOpen && (
+                  <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40">
+                    <div className="bg-white rounded-2xl shadow-2xl border border-[#E2DED7] w-[400px] p-6">
+                      <h3 className="text-[15px] font-semibold text-[#111218] mb-4">Create HTML Master Page</h3>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#111218] uppercase tracking-wide mb-1">Name</label>
+                          <input autoFocus value={newHmpName} onChange={e => setNewHmpName(e.target.value)} placeholder="e.g. Wide Topic Master"
+                            className="w-full h-9 px-3 text-[13px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]"
+                            onKeyDown={e => e.key === 'Enter' && newHmpName.trim() && document.getElementById('create-hmp-btn')?.click()} />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#111218] uppercase tracking-wide mb-1">Type</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {(['home','topic','landing','custom'] as const).map(t => (
+                              <button key={t} onClick={() => setNewHmpType(t)}
+                                className={`py-2 rounded-lg border text-[12px] font-medium capitalize transition-all ${newHmpType === t ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E] hover:border-[#C8C6C0]'}`}>{t}</button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#111218] uppercase tracking-wide mb-1">Base On</label>
+                          <select value={newHmpBaseOn} onChange={e => setNewHmpBaseOn(e.target.value)}
+                            className="w-full h-9 px-3 text-[13px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] bg-white">
+                            <option value="blank">Blank</option>
+                            {htmlMasterPages.filter(h => h.masterType === newHmpType || newHmpType === 'custom').sort((a,b) => a.name.localeCompare(b.name)).map(h => (
+                              <option key={h.id} value={h.id}>{h.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 mt-5">
+                        <button id="create-hmp-btn" disabled={!newHmpName.trim()} onClick={() => {
+                          const baseHmp = newHmpBaseOn !== 'blank' ? htmlMasterPages.find(h => h.id === newHmpBaseOn) : null
+                          const newHmp: HtmlMasterPage = baseHmp
+                            ? { ...baseHmp, id: `hmp${Date.now()}`, name: newHmpName.trim(), masterType: newHmpType }
+                            : {
+                                id: `hmp${Date.now()}`, name: newHmpName.trim(), clientId: projectMeta?.themeId || 'th1', masterType: newHmpType,
+                                showHeader: true, showLogo: true, showSearch: true, showBreadcrumb: newHmpType !== 'home',
+                                showLeftNav: newHmpType !== 'home', navWidth: 280, showOnThisPage: newHmpType !== 'home', otpWidth: 220, showPrevNext: true,
+                                showFeedback: false, showFooter: true, stickyNav: false, contentWidth: 1200,
+                                showHero: newHmpType === 'home', showNavCards: newHmpType === 'home', showFeaturedLinks: false, showRecentContent: false,
+                              }
+                          const sorted = [...htmlMasterPages, newHmp].sort((a,b) => a.name.localeCompare(b.name))
+                          onHtmlMasterPagesChange(sorted); setEditHmpId(newHmp.id); setSelectedBlockId(null)
+                          if (baseHmp) setMasterBlocks(newHmp.id, [...getMasterBlocks(newHmpBaseOn, baseHmp.masterType)])
+                          setNewHmpOpen(false); setNewHmpName(''); setNewHmpType('topic'); setNewHmpBaseOn('blank')
+                        }} className="flex-1 py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-40 text-white text-[13px] font-medium rounded-xl transition-colors">Create</button>
+                        <button onClick={() => { setNewHmpOpen(false); setNewHmpName(''); setNewHmpType('topic'); setNewHmpBaseOn('blank') }}
+                          className="py-2 px-4 border border-[#E2DED7] text-[13px] text-[#6B6B7E] rounded-xl hover:bg-[#F4F2EE]">Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* ── VARIABLES TAB ── */}
+      {tab === 'variables' && (() => {
+        const activeThemeId = projectMeta?.themeId ?? themes[0]?.id ?? 'th1'
+        const vars = themeVariables[activeThemeId] ?? []
+        const patchVar = (id: string, patch: Partial<Variable>) =>
+          onThemeVarsChange(activeThemeId, prev => (prev ?? []).map(v => v.id === id ? { ...v, ...patch } : v))
+        const addVar = () => {
+          if (!varNewName.trim()) return
+          const safeName = varNewName.trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '')
+          onThemeVarsChange(activeThemeId, prev => [...(prev ?? []), { id: `v${Date.now()}`, name: safeName, value: varNewValue.trim() || safeName, description: varNewDesc.trim() || undefined }])
+          setVarNewName(''); setVarNewValue(''); setVarNewDesc(''); setVarShowAddForm(false)
+        }
+        return (
+          <div className="max-w-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-[15px] font-semibold text-[#111218]">Variables</h3>
+                <p className="text-[12px] text-[#9898AB] mt-0.5">Linked to theme: <span className="font-medium text-[#6B6B7E]">{themes.find(t => t.id === activeThemeId)?.name ?? 'Active Theme'}</span></p>
+              </div>
+              <button onClick={() => setVarShowAddForm(true)} className="flex items-center gap-1.5 h-8 px-3 bg-[#5B5BD6] text-white rounded-lg text-[12px] font-medium hover:bg-[#4A4AC4] transition-colors">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="white" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                New Variable
+              </button>
+            </div>
+
+            {/* Variable list */}
+            <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden mb-4">
+              {vars.length === 0 && !varShowAddForm ? (
+                <div className="px-6 py-12 text-center">
+                  <div className="w-10 h-10 rounded-xl bg-[#FEF3C7] flex items-center justify-center mx-auto mb-3">
+                    <span className="text-[18px]">⚙</span>
+                  </div>
+                  <p className="text-[13px] font-medium text-[#111218] mb-1">No variables yet</p>
+                  <p className="text-[12px] text-[#9898AB]">Add variables to reuse dynamic content across your project. Use them while authoring with <code className="bg-[#F4F2EE] px-1 rounded text-[11px]">{'{{VarName}}'}</code></p>
+                </div>
+              ) : (
+                <table className="w-full text-[12px]">
+                  <thead className="bg-[#F9F8F6] border-b border-[#E2DED7]">
+                    <tr>
+                      <th className="text-left px-4 py-2.5 font-semibold text-[#6B6B7E] text-[10px] uppercase tracking-wide w-[180px]">Token</th>
+                      <th className="text-left px-4 py-2.5 font-semibold text-[#6B6B7E] text-[10px] uppercase tracking-wide">Value</th>
+                      <th className="text-left px-4 py-2.5 font-semibold text-[#6B6B7E] text-[10px] uppercase tracking-wide hidden sm:table-cell">Description</th>
+                      <th className="w-16" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vars.map(v => (
+                      <tr key={v.id} className="border-b border-[#F4F2EE] last:border-0 group hover:bg-[#FAFAF9] transition-colors">
+                        <td className="px-4 py-2.5 align-middle">
+                          <code className="bg-[#FEF3C7] border border-[#D97706]/20 text-[#92400E] px-1.5 py-0.5 rounded text-[11px] font-mono-code">{`{{${v.name}}}`}</code>
+                        </td>
+                        <td className="px-4 py-2.5 align-middle">
+                          {varEditingId === v.id ? (
+                            <input autoFocus defaultValue={v.value}
+                              className="w-full border border-[#5B5BD6] rounded px-2 py-1 text-[12px] focus:outline-none"
+                              onBlur={e => { patchVar(v.id, { value: e.target.value }); setVarEditingId(null) }}
+                              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setVarEditingId(null) }}
+                            />
+                          ) : (
+                            <span className="text-[#3D3D4E] cursor-text hover:text-[#111218] select-text" onDoubleClick={() => setVarEditingId(v.id)}>{v.value}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 align-middle hidden sm:table-cell">
+                          <span className="text-[#9898AB]">{v.description ?? '—'}</span>
+                        </td>
+                        <td className="px-4 py-2.5 align-middle">
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => setVarEditingId(v.id)} className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#EEEEFF] text-[#9898AB] hover:text-[#5B5BD6] transition-colors" title="Edit value">
+                              <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M9.5 2.5l2 2-7 7H2.5v-2l7-7z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/></svg>
+                            </button>
+                            <button onClick={() => onThemeVarsChange(activeThemeId, prev => (prev ?? []).filter(x => x.id !== v.id))} className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#FEF2F2] text-[#9898AB] hover:text-[#DC2626] transition-colors" title="Delete">
+                              <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M1 1l7 7M8 1L1 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* Inline add form */}
+              {varShowAddForm && (
+                <div className="border-t border-[#E2DED7] px-4 py-3 bg-[#FAFAF9]">
+                  <p className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide mb-2">New Variable</p>
+                  <div className="flex gap-2 flex-wrap">
+                    <div className="flex-1 min-w-[120px]">
+                      <label className="block text-[10px] text-[#9898AB] mb-1">Token Name (no spaces)</label>
+                      <input autoFocus value={varNewName} onChange={e => setVarNewName(e.target.value)}
+                        placeholder="e.g. ProductName"
+                        className="w-full h-8 border border-[#E2DED7] rounded-lg px-2.5 text-[12px] focus:outline-none focus:border-[#5B5BD6]"
+                        onKeyDown={e => e.key === 'Enter' && addVar()}
+                      />
+                    </div>
+                    <div className="flex-1 min-w-[120px]">
+                      <label className="block text-[10px] text-[#9898AB] mb-1">Value</label>
+                      <input value={varNewValue} onChange={e => setVarNewValue(e.target.value)}
+                        placeholder="e.g. Nexus Platform"
+                        className="w-full h-8 border border-[#E2DED7] rounded-lg px-2.5 text-[12px] focus:outline-none focus:border-[#5B5BD6]"
+                        onKeyDown={e => e.key === 'Enter' && addVar()}
+                      />
+                    </div>
+                    <div className="flex-1 min-w-[140px]">
+                      <label className="block text-[10px] text-[#9898AB] mb-1">Description (optional)</label>
+                      <input value={varNewDesc} onChange={e => setVarNewDesc(e.target.value)}
+                        placeholder="What is this used for?"
+                        className="w-full h-8 border border-[#E2DED7] rounded-lg px-2.5 text-[12px] focus:outline-none focus:border-[#5B5BD6]"
+                        onKeyDown={e => e.key === 'Enter' && addVar()}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    <button onClick={addVar} className="h-7 px-3 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-medium hover:bg-[#4A4AC4] transition-colors">Add Variable</button>
+                    <button onClick={() => { setVarShowAddForm(false); setVarNewName(''); setVarNewValue(''); setVarNewDesc('') }} className="h-7 px-3 border border-[#E2DED7] text-[#6B6B7E] rounded-lg text-[11px] hover:bg-[#F4F2EE] transition-colors">Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Usage hint */}
+            <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl px-4 py-3 flex gap-3">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="flex-shrink-0 mt-0.5 text-[#3B82F6]"><circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.3"/><path d="M8 7.5v4M8 5.5v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              <div>
+                <p className="text-[12px] font-medium text-[#1D4ED8] mb-0.5">Using Variables while authoring</p>
+                <p className="text-[12px] text-[#3B82F6] leading-relaxed">In the Author section, type the first 3 letters of any variable name to get an inline suggestion. Select it to insert <code className="bg-white/60 px-1 rounded text-[11px]">{'{{VarName}}'}</code>. Editing the variable value here updates it everywhere it is used.</p>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      <div className="flex justify-between mt-8 pt-4 border-t border-[#E2DED7]">
+        <button onClick={() => onNav('create')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors bg-white">← Project Details</button>
+        <button onClick={() => onNav('sources')} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
+          Continue — Sources
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Screen: Sources ───────────────────────────────────────────────────────────
+type FileEntry = { id: string; fileId: string | null; file: File; status: 'adding' | 'ready' | 'unsupported' }
+
+const ACCEPTED_MIME = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain',
+  'text/markdown',
+  'image/png',
+  'image/jpeg',
+  'video/mp4',
+])
+const ACCEPTED_EXT = new Set(['.pdf','.docx','.pptx','.txt','.md','.markdown','.png','.jpg','.jpeg','.mp4'])
+
+function getFileExt(f: File): string {
+  const byMime: Record<string, string> = {
+    'application/pdf': 'pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+    'text/plain': 'txt',
+    'text/markdown': 'md',
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'video/mp4': 'mp4',
+  }
+  return byMime[f.type] || (f.name.split('.').pop() ?? '').toLowerCase()
+}
+
+function isAcceptedFile(f: File): boolean {
+  if (ACCEPTED_MIME.has(f.type)) return true
+  const ext = '.' + (f.name.split('.').pop() ?? '').toLowerCase()
+  return ACCEPTED_EXT.has(ext)
+}
+
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1_048_576) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1_048_576).toFixed(1)} MB`
+}
+
+const TYPE_BG: Record<string, string> = {
+  pdf: 'bg-[#DC2626]', docx: 'bg-[#0EA5E9]', pptx: 'bg-[#D97706]',
+  txt: 'bg-[#6B6B7E]', md: 'bg-[#3D3D4E]', markdown: 'bg-[#3D3D4E]',
+  png: 'bg-[#16A34A]', jpg: 'bg-[#16A34A]', jpeg: 'bg-[#16A34A]',
+  mp4: 'bg-[#8B5CF6]',
+}
+
+const DEMO_SOURCE_NAMES = [
+  'Nexus_Technical_Specification_v3.2.pdf',
+  'UX_Research_Findings_Q3.docx',
+  'Product_Roadmap_Deck.pptx',
+  'Support_Ticket_Analysis_Oct.pdf',
+]
+
+function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtractions, onRetryExtraction, isDemoMode, onSetDemoMode }: {
+  onNav: (s: Screen) => void
+  sources?: ProjectSource[]
+  onSourceAdd?: (file: File) => Promise<string>
+  onSourceRemove?: (fileId: string) => void
+  sourceExtractions?: Record<string, SourceExtraction>
+  onRetryExtraction?: (fileId: string, file: File) => void
+  isDemoMode: boolean
+  onSetDemoMode: (v: boolean) => void
+}) {
+  const [entries, setEntries] = useState<FileEntry[]>(() =>
+    (sources ?? []).map(s => ({ id: crypto.randomUUID(), fileId: s.fileId, file: s.file, status: 'ready' as const }))
+  )
+  const [dragOver, setDragOver] = useState(false)
+  const [unsupportedNames, setUnsupportedNames] = useState<string[]>([])
+  const [duplicateNames, setDuplicateNames] = useState<string[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [viewingFileId, setViewingFileId] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [showSearch, setShowSearch] = useState(false)
+
+  const processFiles = (rawFiles: FileList | File[]) => {
+    const arr = Array.from(rawFiles)
+    const bad = arr.filter(f => !isAcceptedFile(f)).map(f => f.name)
+    if (bad.length) setUnsupportedNames(prev => [...prev, ...bad.filter(n => !prev.includes(n))])
+
+    const good = arr.filter(isAcceptedFile)
+    const existingNames = new Set(entries.map(e => e.file.name))
+    const dupes = good.filter(f => existingNames.has(f.name))
+    if (dupes.length) {
+      setDuplicateNames(prev => [...prev, ...dupes.map(f => f.name).filter(n => !prev.includes(n))])
+    }
+    const fresh = good.filter(f => !existingNames.has(f.name))
+
+    fresh.forEach(file => {
+      const entryId = crypto.randomUUID()
+      setEntries(prev => [...prev, { id: entryId, fileId: null, file, status: 'adding' as const }])
+      if (onSourceAdd) {
+        onSourceAdd(file).then(fileId => {
+          setEntries(prev => prev.map(e => e.id === entryId ? { ...e, fileId, status: 'ready' as const } : e))
+        }).catch(() => {
+          setEntries(prev => prev.filter(e => e.id !== entryId))
+        })
+      } else {
+        setTimeout(() => {
+          setEntries(prev => prev.map(e => e.id === entryId ? { ...e, status: 'ready' as const } : e))
+        }, 400)
+      }
+    })
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    if (!isDemoMode) processFiles(e.dataTransfer.files)
+  }
+
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); if (!isDemoMode) setDragOver(true) }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false)
+  }
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) processFiles(e.target.files)
+    e.target.value = ''
+  }
+
+  const openPicker = () => { if (!isDemoMode) fileInputRef.current?.click() }
+
+  const removeEntry = (id: string) => {
+    setEntries(prev => {
+      const entry = prev.find(e => e.id === id)
+      if (entry?.fileId) onSourceRemove?.(entry.fileId)
+      return prev.filter(e => e.id !== id)
+    })
+  }
+
+  const readyEntries = entries.filter(e => e.status === 'ready')
+  const addingEntries = entries.filter(e => e.status === 'adding')
+  const canAnalyze = isDemoMode || (readyEntries.length > 0 && addingEntries.length === 0)
+
+  const searchResults = searchQuery.trim().length > 1 && sourceExtractions
+    ? searchExtractions(sourceExtractions, searchQuery)
+    : []
+
+  const viewingExtraction = viewingFileId ? sourceExtractions?.[viewingFileId] : null
+
+  const handleAnalyze = () => {
+    onNav('analysis')
+  }
+
+  const activateDemoMode = () => {
+    onSetDemoMode(true)
+    setEntries([])
+    setUnsupportedNames([])
+    setDuplicateNames([])
+  }
+
+  const deactivateDemoMode = () => {
+    onSetDemoMode(false)
+  }
+
+  return (
+    <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".pdf,.docx,.pptx,.txt,.md,.markdown,.png,.jpg,.jpeg,.mp4,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,text/markdown,image/png,image/jpeg,video/mp4"
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={handleInputChange}
+      />
+
+      <div className="mb-7">
+        <div className="flex items-end justify-between mb-1">
+          <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest">Step 1 of 3</p>
+          {!isDemoMode ? (
+            <button
+              onClick={activateDemoMode}
+              className="text-[11px] text-[#9898AB] hover:text-[#5B5BD6] transition-colors underline underline-offset-2 decoration-dotted"
+            >
+              Use demo project instead →
+            </button>
+          ) : (
+            <button
+              onClick={deactivateDemoMode}
+              className="text-[11px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors underline underline-offset-2 decoration-dotted"
+            >
+              Switch to my files
+            </button>
+          )}
+        </div>
+        <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Add Source Material</h1>
+        <p className="text-[14px] text-[#6B6B7E]">Upload the documents, specs, and references that contain your product knowledge.</p>
+      </div>
+
+      {isDemoMode && (
+        <div className="mb-4 flex items-center gap-3 bg-[#F3F0FF] border border-[#DDD6FE] rounded-xl px-4 py-3 fade-in">
+          <span className="text-[#8B5CF6] text-[14px]">✦</span>
+          <p className="text-[12px] text-[#5B21B6] flex-1">Demo mode active — using the Nexus Platform sample project with 4 pre-loaded source documents.</p>
+          <button onClick={deactivateDemoMode} className="text-[11px] font-medium text-[#8B5CF6] hover:text-[#5B21B6] transition-colors flex-shrink-0">Exit demo</button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-5">
+        <div className="col-span-2 space-y-4">
+          {/* Drop zone */}
+          {!isDemoMode ? (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Upload source files — click or drag files here"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={openPicker}
+            onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && openPicker()}
+            className={`border-2 border-dashed rounded-xl p-10 text-center transition-all cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 ${
+              dragOver
+                ? 'border-[#5B5BD6] bg-[#EEEEFF] scale-[1.01]'
+                : 'border-[#D8D4CE] bg-white hover:border-[#5B5BD6] hover:bg-[#FAFAFE]'
+            }`}
+          >
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center mx-auto mb-3 transition-colors ${dragOver ? 'bg-[#DDDEFF]' : 'bg-[#F4F2EE]'}`}>
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M10 13V4M6 7l4-3 4 3M4 16h12" stroke={dragOver ? '#5B5BD6' : '#9898AB'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+            {dragOver ? (
+              <p className="text-[14px] font-medium text-[#5B5BD6] mb-1">Release to add files</p>
+            ) : (
+              <>
+                <p className="text-[14px] font-medium text-[#111218] mb-1">
+                  Drop files here or{' '}
+                  <span className="text-[#5B5BD6] underline underline-offset-2 decoration-dotted">browse</span>
+                </p>
+                <p className="text-[12px] text-[#9898AB]">PDF, DOCX, PPTX, TXT, Markdown, PNG, JPG, MP4</p>
+              </>
+            )}
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={e => { e.stopPropagation(); openPicker() }}
+              className="mt-4 text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] border border-[#5B5BD6] hover:border-[#4A4AC4] px-4 py-1.5 rounded-lg transition-colors"
+            >
+              Choose Files
+            </button>
+          </div>
+          ) : null}
+
+          {/* Duplicate filename warning */}
+          {duplicateNames.length > 0 && (
+            <div className="flex items-start gap-3 bg-[#FEE2E2] border border-[#FECACA] rounded-xl px-4 py-3">
+              <div className="w-4 h-4 rounded-full bg-[#DC2626] flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-white text-[9px] font-bold">!</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[12px] font-semibold text-[#991B1B] mb-0.5">Duplicate filename</p>
+                <p className="text-[12px] text-[#7F1D1D]">
+                  {duplicateNames.join(', ')} — a source with this filename already exists. Rename the file or remove the existing source before uploading again.
+                </p>
+              </div>
+              <button
+                onClick={() => setDuplicateNames([])}
+                aria-label="Dismiss"
+                className="text-[#DC2626] hover:text-[#991B1B] transition-colors flex-shrink-0"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {/* Unsupported file warning */}
+          {unsupportedNames.length > 0 && (
+            <div className="flex items-start gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3">
+              <div className="w-4 h-4 rounded-full bg-[#D97706] flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-white text-[9px] font-bold">!</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[12px] font-semibold text-[#92400E] mb-0.5">Unsupported file type</p>
+                <p className="text-[12px] text-[#78350F]">
+                  {unsupportedNames.join(', ')} — only PDF, DOCX, PPTX, TXT, Markdown, PNG, JPG, and MP4 are accepted.
+                </p>
+              </div>
+              <button
+                onClick={() => setUnsupportedNames([])}
+                aria-label="Dismiss"
+                className="text-[#D97706] hover:text-[#92400E] transition-colors flex-shrink-0"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {/* Demo file list */}
+          {isDemoMode && (
+            <div className="bg-white border border-[#DDD6FE] rounded-xl overflow-hidden fade-in">
+              <div className="px-4 py-3 border-b border-[#DDD6FE] flex items-center justify-between">
+                <span className="text-[12px] font-semibold text-[#111218]">Demo Source Files</span>
+                <span className="text-[11px] text-[#8B5CF6] font-medium">4 files · read-only</span>
+              </div>
+              {DEMO_SOURCE_NAMES.map(name => {
+                const ext = name.split('.').pop()?.toLowerCase() ?? ''
+                const bgColor = TYPE_BG[ext] ?? 'bg-[#6B6B7E]'
+                const sizes: Record<string, string> = { 'Nexus_Technical_Specification_v3.2.pdf': '4.2 MB', 'UX_Research_Findings_Q3.docx': '1.8 MB', 'Product_Roadmap_Deck.pptx': '12.4 MB', 'Support_Ticket_Analysis_Oct.pdf': '890 KB' }
+                return (
+                  <div key={name} className="flex items-center gap-3 px-4 py-3 border-b border-[#F4F2EE] last:border-0">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 ${bgColor}`}>
+                      {ext.toUpperCase().slice(0, 4)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] font-medium text-[#111218] truncate">{name}</p>
+                      <p className="text-[11px] text-[#9898AB]">{sizes[name] ?? '—'}</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <div className="w-3.5 h-3.5 rounded-full bg-[#DCFCE7] flex items-center justify-center">
+                        <svg width="7" height="7" viewBox="0 0 7 7" fill="none"><path d="M1 3.5l2 2L6 1.5" stroke="#16A34A" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                      </div>
+                      <span className="text-[11px] text-[#16A34A] font-medium">Ready</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* File list */}
+          {!isDemoMode && entries.length > 0 && (
+            <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-[#E2DED7] flex items-center justify-between">
+                <span className="text-[12px] font-semibold text-[#111218]">Source Files</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] text-[#9898AB]">{entries.length} {entries.length === 1 ? 'file' : 'files'}</span>
+                  {readyEntries.length > 0 && (
+                    <button
+                      onClick={() => setShowSearch(s => !s)}
+                      className={`text-[11px] font-medium flex items-center gap-1 px-2 py-0.5 rounded-md transition-colors ${showSearch ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#9898AB] hover:text-[#5B5BD6] hover:bg-[#F4F2EE]'}`}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1.3"/><path d="M8 8l2 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                      Search content
+                    </button>
+                  )}
+                </div>
+              </div>
+              {/* Search bar */}
+              {showSearch && (
+                <div className="px-4 py-3 border-b border-[#E2DED7] bg-[#FAFAFE]">
+                  <div className="relative">
+                    <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9898AB]" width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="5.5" cy="5.5" r="3.5" stroke="currentColor" strokeWidth="1.3"/><path d="M9 9l2 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                    <input
+                      autoFocus
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      placeholder="Search extracted content…"
+                      className="w-full pl-8 pr-8 py-2 text-[12px] bg-white border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] text-[#111218] placeholder-[#C8C6C0]"
+                    />
+                    {searchQuery && (
+                      <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#C8C6C0] hover:text-[#9898AB]">
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                      </button>
+                    )}
+                  </div>
+                  {searchQuery.trim().length > 1 && (
+                    <p className="text-[11px] text-[#9898AB] mt-2">{searchResults.length === 0 ? 'No matches found.' : `${searchResults.length} match${searchResults.length !== 1 ? 'es' : ''} across sources`}</p>
+                  )}
+                  {searchResults.length > 0 && (
+                    <div className="mt-2 max-h-64 overflow-y-auto space-y-1.5">
+                      {searchResults.map((hit, i) => {
+                        const before = hit.text.slice(0, hit.matchStart)
+                        const match = hit.text.slice(hit.matchStart, hit.matchEnd)
+                        const after = hit.text.slice(hit.matchEnd)
+                        const snippet = (before.length > 60 ? '…' + before.slice(-60) : before) + match + (after.length > 80 ? after.slice(0, 80) + '…' : after)
+                        return (
+                          <div key={i} className="bg-white border border-[#E2DED7] rounded-lg px-3 py-2">
+                            <div className="flex items-baseline gap-2 mb-0.5">
+                              <span className="text-[10px] font-semibold text-[#5B5BD6] truncate max-w-[140px]">{hit.fileName}</span>
+                              <span className="text-[10px] text-[#9898AB] flex-shrink-0">{hit.location}</span>
+                            </div>
+                            <p className="text-[11px] text-[#3D3D4E] leading-snug">
+                              {before.length > 60 ? '…' + before.slice(-60) : before}
+                              <mark className="bg-[#FEF08A] text-[#111218] px-0.5 rounded-sm not-italic font-medium">{match}</mark>
+                              {after.length > 80 ? after.slice(0, 80) + '…' : after}
+                            </p>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+              {entries.map(entry => {
+                const ext = getFileExt(entry.file)
+                const bgColor = TYPE_BG[ext] ?? 'bg-[#6B6B7E]'
+                const extraction = entry.fileId ? sourceExtractions?.[entry.fileId] : undefined
+                const isViewing = viewingFileId === entry.fileId
+                return (
+                  <div key={entry.id} className="border-b border-[#F4F2EE] last:border-0">
+                    <div className="flex items-center gap-3 px-4 py-3 group">
+                      {/* Type badge */}
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 ${bgColor}`}>
+                        {ext.toUpperCase().slice(0, 4)}
+                      </div>
+
+                      {/* Name + size */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-medium text-[#111218] truncate" title={entry.file.name}>
+                          {entry.file.name}
+                        </p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[11px] text-[#9898AB]">{fmtSize(entry.file.size)}</span>
+                          {extraction && entry.status === 'ready' && (
+                            <>
+                              <span className="text-[#E2DED7]">·</span>
+                              {extraction.status === 'extracting' && (
+                                <span className="flex items-center gap-1 text-[10px] text-[#5B5BD6]">
+                                  <span className="w-2 h-2 border border-[#5B5BD6] border-t-transparent rounded-full animate-spin inline-block" />
+                                  Extracting…
+                                </span>
+                              )}
+                              {extraction.status === 'extracted' && (
+                                <span className="text-[10px] text-[#16A34A] font-medium">
+                                  ✓ {extraction.blocks.length} blocks
+                                </span>
+                              )}
+                              {extraction.status === 'partial' && (
+                                <span className="text-[10px] text-[#D97706] font-medium">
+                                  ⚠ Partial — {extraction.blocks.length} blocks
+                                </span>
+                              )}
+                              {extraction.status === 'failed' && (
+                                <span className="text-[10px] text-[#DC2626] font-medium">Extraction failed</span>
+                              )}
+                              {extraction.status === 'unsupported' && (
+                                <span className="text-[10px] text-[#9898AB]">Extraction not supported</span>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Upload status */}
+                      {entry.status === 'adding' ? (
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <div className="w-3 h-3 border-[1.5px] border-[#5B5BD6] border-t-transparent rounded-full animate-spin" />
+                          <span className="text-[11px] text-[#5B5BD6] font-medium">Adding…</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <div className="w-3.5 h-3.5 rounded-full bg-[#DCFCE7] flex items-center justify-center">
+                            <svg width="7" height="7" viewBox="0 0 7 7" fill="none">
+                              <path d="M1 3.5l2 2L6 1.5" stroke="#16A34A" strokeWidth="1.2" strokeLinecap="round"/>
+                            </svg>
+                          </div>
+                          <span className="text-[11px] text-[#16A34A] font-medium">Saved</span>
+                        </div>
+                      )}
+
+                      {/* View extraction button */}
+                      {entry.fileId && extraction && (extraction.status === 'extracted' || extraction.status === 'partial') && (
+                        <button
+                          onClick={() => setViewingFileId(isViewing ? null : (entry.fileId ?? null))}
+                          className={`text-[11px] font-medium px-2 py-1 rounded-md transition-colors flex-shrink-0 ${isViewing ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#9898AB] hover:text-[#5B5BD6] hover:bg-[#F4F2EE]'}`}
+                        >
+                          {isViewing ? 'Hide' : 'View'}
+                        </button>
+                      )}
+                      {entry.fileId && extraction?.status === 'failed' && (
+                        <button
+                          onClick={() => onRetryExtraction?.(entry.fileId!, entry.file)}
+                          className="text-[11px] font-medium text-[#DC2626] hover:text-[#991B1B] px-2 py-1 rounded-md hover:bg-[#FEE2E2] transition-colors flex-shrink-0"
+                        >
+                          Retry
+                        </button>
+                      )}
+
+                      {/* Remove */}
+                      <button
+                        onClick={() => removeEntry(entry.id)}
+                        aria-label={`Remove ${entry.file.name}`}
+                        className="w-6 h-6 rounded flex items-center justify-center text-[#C8C6C0] hover:text-[#DC2626] hover:bg-[#FEE2E2] opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-all outline-none focus-visible:ring-1 focus-visible:ring-[#DC2626] flex-shrink-0"
+                      >
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                          <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                        </svg>
+                      </button>
+                    </div>
+
+                    {/* Inline extraction view */}
+                    {isViewing && viewingExtraction && (
+                      <div className="border-t border-[#E2DED7] bg-[#FAFAFE] px-4 py-4 max-h-80 overflow-y-auto">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3 text-[11px] text-[#9898AB]">
+                            <span className="font-medium text-[#6B6B7E]">{viewingExtraction.parser ?? 'parser'}</span>
+                            <span>·</span>
+                            <span>{viewingExtraction.blocks.length} blocks</span>
+                            {viewingExtraction.pageCount != null && <><span>·</span><span>{viewingExtraction.pageCount} pages</span></>}
+                            {viewingExtraction.charCount != null && <><span>·</span><span>{viewingExtraction.charCount.toLocaleString()} chars</span></>}
+                          </div>
+                        </div>
+                        {viewingExtraction.warnings.map((w, i) => (
+                          <div key={i} className="flex items-start gap-2 mb-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-lg px-3 py-2">
+                            <span className="text-[#D97706] text-[11px] flex-shrink-0">⚠</span>
+                            <p className="text-[11px] text-[#78350F]">{w}</p>
+                          </div>
+                        ))}
+                        <div className="space-y-1.5">
+                          {viewingExtraction.blocks.map(block => (
+                            <div key={block.id} className="bg-white border border-[#E8E4DD] rounded-lg px-3 py-2">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                                  block.type === 'heading' ? 'bg-[#DDDEFF] text-[#4A4AC4]' :
+                                  block.type === 'table' ? 'bg-[#DCFCE7] text-[#15803D]' :
+                                  block.type === 'list-item' ? 'bg-[#FEF3C7] text-[#92400E]' :
+                                  block.type === 'code' ? 'bg-[#F3F0FF] text-[#6D28D9]' :
+                                  'bg-[#F4F2EE] text-[#6B6B7E]'
+                                }`}>
+                                  {block.type === 'heading' ? `H${block.headingLevel ?? ''}` : block.type}
+                                </span>
+                                {block.page != null && <span className="text-[10px] text-[#9898AB]">p. {block.page}</span>}
+                                {block.sectionPath?.length ? <span className="text-[10px] text-[#9898AB] truncate max-w-[200px]">{block.sectionPath[block.sectionPath.length - 1]}</span> : null}
+                                {block.inferred && <span className="text-[9px] text-[#C8C6C0] italic">inferred</span>}
+                              </div>
+                              {block.type === 'table' && block.tableData ? (
+                                <div className="overflow-x-auto">
+                                  <table className="text-[10px] border-collapse">
+                                    {block.tableData.map((row, ri) => (
+                                      <tr key={ri}>
+                                        {row.map((cell, ci) => (
+                                          <td key={ci} className={`border border-[#E2DED7] px-2 py-1 ${ri === 0 ? 'font-semibold bg-[#F4F2EE]' : ''}`}>{cell}</td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </table>
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-[#3D3D4E] leading-snug line-clamp-4">{block.text}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Integrations sidebar — unchanged */}
+        <div className="space-y-4">
+          <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+            <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-3">Import From</p>
+            {[
+              { label: 'SharePoint', icon: '📁' },
+              { label: 'OneDrive', icon: '☁️' },
+              { label: 'Microsoft Teams', icon: '💼' },
+              { label: 'Google Drive', icon: '📂' },
+              { label: 'URL / Web Page', icon: '🔗' },
+            ].map(int => (
+              <div key={int.label} className="flex items-center gap-2.5 py-2 border-b border-[#F4F2EE] last:border-0 opacity-50">
+                <span className="text-base">{int.icon}</span>
+                <span className="text-[13px] text-[#111218] flex-1">{int.label}</span>
+                <span className="text-[9px] font-semibold text-[#9898AB] uppercase tracking-wider bg-[#F4F2EE] px-1.5 py-0.5 rounded">
+                  Soon
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-[#F9F8F6] border border-[#E2DED7] rounded-xl p-4">
+            <p className="text-[12px] font-medium text-[#6B6B7E] leading-relaxed">
+              AI will analyze your sources to identify concepts, coverage, and potential gaps before proposing a structure.
+            </p>
+          </div>
+
+          <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+            <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-2">Or try a demo</p>
+            <p className="text-[12px] text-[#6B6B7E] leading-relaxed mb-3">
+              Explore the full analysis flow with a pre-loaded Nexus Platform demonstration project.
+            </p>
+            <button
+              onClick={isDemoMode ? deactivateDemoMode : activateDemoMode}
+              className={`w-full text-[12px] font-medium border py-2 rounded-lg transition-colors ${
+                isDemoMode
+                  ? 'bg-[#EEEEFF] text-[#5B5BD6] border-[#5B5BD6]'
+                  : 'text-[#5B5BD6] border-[#5B5BD6] hover:bg-[#EEEEFF]'
+              }`}
+            >
+              {isDemoMode ? '✓ Demo project active' : 'Use demo project'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-end gap-3 mt-6">
+        {!canAnalyze && entries.length === 0 && (
+          <p className="text-[12px] text-[#9898AB] mr-2">Add at least one source file to continue.</p>
+        )}
+        {addingEntries.length > 0 && (
+          <p className="text-[12px] text-[#9898AB] mr-2">Processing files…</p>
+        )}
+        <button
+          onClick={handleAnalyze}
+          disabled={!canAnalyze}
+          aria-disabled={!canAnalyze}
+          className={`flex items-center gap-2 text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors ${
+            canAnalyze
+              ? 'bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white cursor-pointer'
+              : 'bg-[#E2DED7] text-[#9898AB] cursor-not-allowed'
+          }`}
+        >
+          Analyze Sources
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Screen: Analysis ──────────────────────────────────────────────────────────
+
+type SupportLevel = 'Strong' | 'Partial' | 'Limited'
+type GapResolution = 'needs-info' | 'not-applicable' | 'resolved'
+
+const ANALYSIS_CONCEPTS: {
+  id: number; label: string; support: SupportLevel; sourceCount: number;
+  sources: { file: string; section: string; snippet: string }[];
+  related: string[];
+}[] = [
+  {
+    id: 1, label: 'User Authentication', support: 'Strong', sourceCount: 3,
+    sources: [
+      { file: 'Nexus Technical Spec v3.2', section: '§4.2 — Authentication Methods', snippet: 'Users may authenticate via OAuth 2.0, SAML 2.0, or username/password credentials managed by the workspace administrator.' },
+      { file: 'UX Research Findings Q3', section: 'Page 12 — Login Experience', snippet: 'Login flow tested with 24 participants; 91% completed without assistance.' },
+      { file: 'Support Ticket Analysis', section: 'Category: Auth & Access', snippet: 'Authentication issues account for 18% of all Tier-1 support tickets.' },
+    ],
+    related: ['API Integration', 'Admin Configuration'],
+  },
+  {
+    id: 2, label: 'Project Dashboard', support: 'Strong', sourceCount: 4,
+    sources: [
+      { file: 'Nexus Technical Spec v3.2', section: '§6.1 — Dashboard Architecture', snippet: 'Renders project cards, activity feeds, and notification summaries in a configurable grid layout.' },
+      { file: 'UX Research Findings Q3', section: 'Page 8 — Dashboard Findings', snippet: '83% of participants preferred the compact card view; sticky filter bar rated highly.' },
+    ],
+    related: ['Notification System', 'Widgets and Panels'],
+  },
+  {
+    id: 3, label: 'Team Collaboration', support: 'Partial', sourceCount: 2,
+    sources: [
+      { file: 'Nexus Technical Spec v3.2', section: '§9 — Collaboration Features', snippet: 'Real-time co-editing and threaded comments are supported within project workspaces.' },
+    ],
+    related: ['Project Dashboard', 'Notification System'],
+  },
+  {
+    id: 4, label: 'Data Import/Export', support: 'Partial', sourceCount: 2,
+    sources: [
+      { file: 'Nexus Technical Spec v3.2', section: '§11.3 — Data Exchange', snippet: 'Supports CSV, JSON, and XML import. Export available in PDF, XLSX, and JSON formats.' },
+    ],
+    related: ['API Integration'],
+  },
+  {
+    id: 5, label: 'Notification System', support: 'Partial', sourceCount: 1,
+    sources: [
+      { file: 'Support Ticket Analysis', section: 'Category: Notifications', snippet: 'Delivery delays reported in 6% of tickets; resolved by clearing the notification cache.' },
+    ],
+    related: ['Project Dashboard'],
+  },
+  {
+    id: 6, label: 'API Integration', support: 'Limited', sourceCount: 1,
+    sources: [
+      { file: 'Nexus Technical Spec v3.2', section: '§14 — API Overview', snippet: 'REST API documented in the Developer Portal. OAuth token required for all authenticated calls.' },
+    ],
+    related: ['User Authentication', 'Data Import/Export'],
+  },
+  {
+    id: 7, label: 'Reporting & Analytics', support: 'Limited', sourceCount: 1,
+    sources: [
+      { file: 'Product Roadmap Deck', section: 'Q4 Features', snippet: 'Advanced reporting planned for Q4. Current version includes basic project metrics only.' },
+    ],
+    related: ['Project Dashboard'],
+  },
+]
+
+const ANALYSIS_GAPS = [
+  { id: 1, text: 'Mobile application features not covered in any source document', severity: 'warning' as const },
+  { id: 2, text: 'Offline mode — mentioned once in Technical Spec but underdocumented', severity: 'warning' as const },
+  { id: 3, text: 'SSO/SAML configuration steps not found in sources', severity: 'error' as const },
+]
+
+const DETECTED_STANDARDS = [
+  { label: 'Preferred voice', value: 'Active', origin: 'Content Style Guide' },
+  { label: 'Instruction style', value: 'Task-oriented', origin: 'Content Style Guide' },
+  { label: 'Heading pattern', value: 'Action-based ("How to…", "Configure…")', origin: 'Approved Samples' },
+  { label: 'Procedure style', value: 'Numbered steps', origin: 'Style Guide + Approved Samples' },
+  { label: 'Notes & Warnings', value: 'Used throughout samples', origin: 'Approved Samples' },
+  { label: 'Terminology rules', value: '17 preferred terms detected', origin: 'Content Style Guide' },
+  { label: 'Document structure', value: 'User Guide pattern matched', origin: 'Platform Default' },
+]
+
+const GAP_DEMO_EVIDENCE: Record<number, { file: string; snippet: string }[]> = {
+  1: [
+    { file: 'Nexus Technical Spec v3.2', snippet: 'Mobile SDK is listed as a future deliverable in Appendix C with no current API surface documented.' },
+    { file: 'Product Roadmap Deck', snippet: 'Mobile app (iOS/Android) targeted for H2 next fiscal year. Feature parity with web not guaranteed at launch.' },
+  ],
+  2: [
+    { file: 'Nexus Technical Spec v3.2', snippet: 'Offline mode: "planned for a future release" (§8.4). No sync protocol or conflict-resolution behavior specified.' },
+  ],
+  3: [],
+}
+
+const GAP_AI_RESPONSES: Record<number, string> = {
+  1: "Mobile application features are not present in your source material. I recommend noting this scope boundary explicitly in your guide's introduction, and flagging the section for update once mobile documentation becomes available.",
+  2: 'Offline mode is mentioned once in the Technical Spec as planned but unspecified. Consider adding a brief note in the relevant section: "Offline capabilities are planned for a future release. Refer to release notes for availability." This sets expectations without overpromising.',
+  3: 'SSO/SAML configuration steps are absent from all source documents. This is a high-severity gap — authentication setup is typically a top support driver. I recommend requesting this documentation from the engineering or security team before generating the guide, or marking the section as a placeholder pending review.',
+}
+
+const COVERAGE_LABEL_CYCLE = ['Well represented', 'Partially represented', 'Well represented', 'Limited use', 'Partially represented', 'Well represented', 'Limited use']
+
+const SUPPORT_STYLE: Record<SupportLevel, { pill: string; dot: string }> = {
+  Strong:  { pill: 'bg-[#DCFCE7] text-[#15803D]', dot: '#16A34A' },
+  Partial: { pill: 'bg-[#FEF3C7] text-[#B45309]', dot: '#D97706' },
+  Limited: { pill: 'bg-[#F4F2EE] text-[#6B6B7E]', dot: '#C8C6C0' },
+}
+
+const COVERAGE_STYLE: Record<string, { dot: string; text: string }> = {
+  'Well represented':      { dot: 'bg-[#16A34A]', text: 'text-[#15803D]' },
+  'Partially represented': { dot: 'bg-[#D97706]', text: 'text-[#B45309]' },
+  'Limited use':           { dot: 'bg-[#C8C6C0]', text: 'text-[#6B6B7E]' },
+}
+
+function AnalysisScreen({ onNav, files, isDemoMode, analysisStale, onAnalysisDone }: {
+  onNav: (s: Screen) => void
+  files: File[]
+  isDemoMode: boolean
+  analysisStale?: boolean
+  onAnalysisDone?: (result: AnalysisResult) => void
+}) {
+  const [phase, setPhase] = useState<'loading' | 'done'>('loading')
+  const [step, setStep] = useState(0)
+  const [expandedConcept, setExpandedConcept] = useState<number | null>(null)
+  const [standardsOpen, setStandardsOpen] = useState(false)
+  const [showAllStandards, setShowAllStandards] = useState(false)
+  const [standardDecisions, setStandardDecisions] = useState<Record<string, 'use' | 'edit' | 'ignore'>>({})
+  const [editedValues, setEditedValues] = useState<Record<string, string>>({})
+  const [gapStates, setGapStates] = useState<Record<number, GapResolution>>({})
+  const [expandedGap, setExpandedGap] = useState<number | null>(null)
+  const [showContinueWarning, setShowContinueWarning] = useState(false)
+  const [viewSourceModal, setViewSourceModal] = useState<{ file: string; snippet: string; section: string } | null>(null)
+  const [evidenceModal, setEvidenceModal] = useState<{ gapId: number; text: string } | null>(null)
+  const [askAiModal, setAskAiModal] = useState<{ gapId: number; text: string } | null>(null)
+  const [askAiLoading, setAskAiLoading] = useState(false)
+  const [askAiDone, setAskAiDone] = useState(false)
+  const addSourceRef = useRef<HTMLInputElement>(null)
+  const gapsRef = useRef<HTMLDivElement>(null)
+
+  const handleAddSourceFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Sources are managed centrally; this handler is a no-op stub
+    e.target.value = ''
+  }
+
+  const openAskAi = (gapId: number, text: string) => {
+    setAskAiModal({ gapId, text })
+    setAskAiLoading(true)
+    setAskAiDone(false)
+    setTimeout(() => { setAskAiLoading(false); setAskAiDone(true) }, 1600)
+  }
+
+  const fileCount = isDemoMode ? 4 : (files.length || 1)
+  const loaderNames = isDemoMode
+    ? DEMO_SOURCE_NAMES.slice(0, 3)
+    : files.length > 0
+    ? files.slice(0, 3).map(f => f.name)
+    : ['Your_uploaded_file.pdf']
+
+  const LOAD_STEPS = ['Parsing document structure…', 'Extracting key concepts…', 'Mapping terminology…', 'Identifying coverage gaps…']
+
+  useEffect(() => {
+    setStep(0)
+    const delays = [700, 1300, 1850, 2350]
+    const timers = delays.map((d, i) => setTimeout(() => setStep(i + 1), d))
+    const done = setTimeout(() => {
+      setPhase('done')
+      onAnalysisDone?.({
+        revision: Date.now(),
+        concepts: ANALYSIS_CONCEPTS.map(c => ({ id: c.id, label: c.label, support: c.support, related: c.related })),
+        gaps: ANALYSIS_GAPS.map(g => ({ id: g.id, text: g.text, severity: g.severity })),
+        sourceFiles: isDemoMode ? DEMO_SOURCE_NAMES : files.map(f => f.name),
+      })
+    }, 2750)
+    return () => { timers.forEach(clearTimeout); clearTimeout(done) }
+  }, [])
+
+
+  if (phase === 'loading') {
+    return (
+      <div className="flex-1 flex items-center justify-center fade-in">
+        <div className="text-center max-w-sm w-full">
+          <div className="w-14 h-14 rounded-2xl bg-[#EEEEFF] flex items-center justify-center mx-auto mb-5">
+            <div className="w-6 h-6 border-2 border-[#5B5BD6] border-t-transparent rounded-full animate-spin" />
+          </div>
+          <h2 className="text-[16px] font-semibold text-[#111218] mb-1">Analyzing Sources</h2>
+          <p className="text-[13px] text-[#6B6B7E] mb-5">
+            Reading {fileCount} source {fileCount === 1 ? 'document' : 'documents'}…
+          </p>
+          <div className="flex flex-wrap justify-center gap-1.5 mb-5">
+            {loaderNames.map(name => (
+              <span key={name} className="text-[11px] font-medium text-[#5B5BD6] bg-[#EEEEFF] px-2 py-0.5 rounded truncate max-w-[200px]">{name}</span>
+            ))}
+            {files.length > 3 && <span className="text-[11px] text-[#9898AB] bg-[#F4F2EE] px-2 py-0.5 rounded">+{files.length - 3} more</span>}
+          </div>
+          <div className="space-y-2 text-left bg-white border border-[#E2DED7] rounded-xl p-4">
+            {LOAD_STEPS.map((s, i) => (
+              <div key={i} className={`flex items-center gap-2.5 text-[12px] ${i < step ? 'text-[#111218]' : 'text-[#9898AB]'}`}>
+                {i < step
+                  ? <div className="w-3.5 h-3.5 rounded-full bg-[#16A34A] flex items-center justify-center flex-shrink-0"><svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2L6.5 2" stroke="white" strokeWidth="1.2" strokeLinecap="round"/></svg></div>
+                  : i === step
+                  ? <div className="w-3.5 h-3.5 border-[1.5px] border-[#5B5BD6] border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  : <div className="w-3.5 h-3.5 rounded-full border-2 border-[#E2DED7] flex-shrink-0" />
+                }
+                {s}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const coverageList = (isDemoMode || files.length === 0 ? SOURCE_FILES.map(f => f.name) : files.map(f => f.name))
+    .map((name, i) => ({ name, label: COVERAGE_LABEL_CYCLE[i % COVERAGE_LABEL_CYCLE.length] }))
+
+  const unresolvedGaps = ANALYSIS_GAPS.filter(g => !gapStates[g.id] || gapStates[g.id] === 'needs-info').length
+
+  const setGapResolution = (id: number, state: GapResolution) => {
+    setGapStates(prev => ({ ...prev, [id]: state }))
+    setExpandedGap(null)
+  }
+  const clearGapResolution = (id: number) =>
+    setGapStates(prev => { const n = { ...prev }; delete n[id]; return n })
+
+  const handleContinue = () => {
+    if (unresolvedGaps > 0 && !showContinueWarning) {
+      setShowContinueWarning(true)
+    } else {
+      onNav('structure')
+    }
+  }
+
+  return (
+    <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in">
+      {/* Hidden file input for Add Source gap action */}
+      <input
+        ref={addSourceRef}
+        type="file"
+        multiple
+        accept=".pdf,.docx,.pptx,.txt,.md,.markdown,.png,.jpg,.jpeg,.mp4,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,text/markdown,image/png,image/jpeg,video/mp4"
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={handleAddSourceFile}
+      />
+
+      {/* Sources changed stale banner */}
+      {analysisStale && (
+        <div className="mb-4 flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3">
+          <div className="w-2 h-2 rounded-full bg-[#F59E0B] animate-pulse flex-shrink-0" />
+          <p className="text-[12px] text-[#92400E] flex-1"><span className="font-semibold">Sources changed since last analysis.</span> Re-run Analysis to reflect the latest source files.</p>
+          <button onClick={() => window.location.reload()} className="text-[11px] font-semibold text-[#92400E] border border-[#FDE68A] px-2.5 py-1 rounded-lg hover:bg-[#FDE68A]/50">Re-analyze</button>
+        </div>
+      )}
+      {/* Prototype simulation banner */}
+      {!isDemoMode && files.length > 0 && (
+        <div className="mb-5 flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3 fade-in">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0">
+            <path d="M7 1.5L12.5 12H1.5L7 1.5z" stroke="#D97706" strokeWidth="1.3" strokeLinejoin="round"/>
+            <path d="M7 5.5v3M7 10v.5" stroke="#D97706" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+          <p className="text-[12px] text-[#92400E]">
+            <span className="font-semibold">Prototype analysis simulation</span> — concept detection, source evidence, and gap identification shown below are illustrative. Real content extraction from your uploaded files is not performed in this prototype.
+          </p>
+        </div>
+      )}
+
+      {/* ── Summary header ── */}
+      <div className="flex items-start justify-between mb-7">
+        <div>
+          <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1.5">Source Analysis</h1>
+          <p className="text-[13px] text-[#6B6B7E]">
+            {fileCount} source {fileCount === 1 ? 'document' : 'documents'} analyzed
+            {' · '}7 concepts detected
+            {' · '}{unresolvedGaps} {unresolvedGaps === 1 ? 'gap' : 'gaps'}
+            {' · '}No source conflicts
+            {isDemoMode && (
+              <><span className="text-[#D8D4CE] mx-1.5">·</span>1 style guide · 2 approved samples referenced</>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 bg-[#DCFCE7] text-[#15803D] text-[12px] font-medium px-3 py-1.5 rounded-full flex-shrink-0">
+          <div className="w-1.5 h-1.5 rounded-full bg-[#16A34A]" />
+          Analysis complete
+        </div>
+      </div>
+
+      {/* ── Main grid ── */}
+      <div className="grid grid-cols-3 gap-5">
+
+        {/* LEFT col: Concepts · Gaps · Conflicts */}
+        <div className="col-span-2 space-y-4">
+
+          {/* Detected Concepts */}
+          <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[#E2DED7]">
+              <h3 className="text-[13px] font-semibold text-[#111218]">Detected Concepts</h3>
+              <p className="text-[11px] text-[#9898AB] mt-0.5">
+                {isDemoMode
+                  ? 'Based on evidence across your source files. Click any concept to view source references.'
+                  : 'Representative concept analysis. Click to see concept details.'}
+              </p>
+            </div>
+            <div className="divide-y divide-[#F4F2EE]">
+              {ANALYSIS_CONCEPTS.map(concept => {
+                const sty = SUPPORT_STYLE[concept.support]
+                const isOpen = expandedConcept === concept.id
+                const displayCount = isDemoMode ? concept.sourceCount : Math.min(concept.sourceCount, Math.max(files.length, 1))
+                return (
+                  <div key={concept.id}>
+                    <button
+                      onClick={() => setExpandedConcept(isOpen ? null : concept.id)}
+                      className="w-full flex items-center gap-3 px-5 py-3 hover:bg-[#FAFAF8] transition-colors text-left group outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#5B5BD6]"
+                    >
+                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: sty.dot }} />
+                      <span className="flex-1 text-[13px] font-medium text-[#111218]">{concept.label}</span>
+                      <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${sty.pill}`}>{concept.support}</span>
+                      <span className="text-[11px] text-[#9898AB] flex-shrink-0 w-[68px] text-right tabular-nums">
+                        {displayCount} {displayCount === 1 ? 'source' : 'sources'}
+                      </span>
+                      <svg className={`text-[#C8C6C0] group-hover:text-[#9898AB] transition-transform flex-shrink-0 ${isOpen ? 'rotate-180' : ''}`} width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+
+                    {isOpen && (
+                      <div className="bg-[#F9F8F6] border-t border-[#EEECE8] px-5 py-4 fade-in">
+                        <div className="space-y-4">
+                          {/* Supporting sources */}
+                          <div>
+                            <p className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wider mb-2.5">Supporting Sources</p>
+                            {isDemoMode ? (
+                              <div className="space-y-3">
+                                {concept.sources.map((src, i) => (
+                                  <div key={i}>
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                      <div className="w-3.5 h-3.5 rounded bg-[#8B5CF6] flex items-center justify-center flex-shrink-0">
+                                        <span className="text-white text-[7px] font-bold leading-none">S</span>
+                                      </div>
+                                      <span className="text-[12px] font-semibold text-[#111218]">{src.file}</span>
+                                      <span className="text-[11px] text-[#9898AB]">· {src.section}</span>
+                                    </div>
+                                    <p className="text-[12px] text-[#6B6B7E] italic leading-relaxed ml-5">"{src.snippet}"</p>
+                                    <button
+                                      onClick={() => setViewSourceModal(src)}
+                                      className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors ml-5 mt-0.5"
+                                    >
+                                      View source →
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="flex items-start gap-2">
+                                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="mt-0.5 flex-shrink-0"><circle cx="7" cy="7" r="6" stroke="#9898AB" strokeWidth="1.2"/><path d="M7 6.5v3.5M7 4.5v.5" stroke="#9898AB" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                                  <p className="text-[12px] text-[#6B6B7E] leading-relaxed">
+                                    Source evidence extraction is available in the production analysis engine.
+                                    {files.length > 0 && <> Your {files.length === 1 ? 'uploaded file' : `${files.length} uploaded files`} will be analyzed when connected.</>}
+                                  </p>
+                                </div>
+                                {files.length > 0 && (
+                                  <div className="space-y-1 mt-1">
+                                    {files.slice(0, displayCount).map((f, i) => (
+                                      <div key={i} className="flex items-center gap-1.5">
+                                        <div className={`w-5 h-5 rounded text-[8px] font-bold text-white flex items-center justify-center flex-shrink-0 ${TYPE_BG[getFileExt(f)] ?? 'bg-[#6B6B7E]'}`}>
+                                          {getFileExt(f).toUpperCase().slice(0, 3)}
+                                        </div>
+                                        <span className="text-[12px] text-[#111218] truncate flex-1">{f.name}</span>
+                                        <button
+                                          onClick={() => setViewSourceModal({ file: f.name, snippet: '', section: `${fmtSize(f.size)} · ${getFileExt(f).toUpperCase()}` })}
+                                          className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors flex-shrink-0"
+                                        >
+                                          View →
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          {/* Related concepts */}
+                          {concept.related.length > 0 && (
+                            <div>
+                              <p className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wider mb-1.5">Related Concepts</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {concept.related.map(r => (
+                                  <span key={r} className="text-[11px] font-medium text-[#5B5BD6] bg-[#EEEEFF] px-2 py-0.5 rounded-full">{r}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Potential Gaps */}
+          <div ref={gapsRef} id="potential-gaps" className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[#E2DED7]">
+              <h3 className="text-[13px] font-semibold text-[#111218]">Potential Gaps</h3>
+              <p className="text-[11px] text-[#9898AB] mt-0.5">Topics that may need additional source material. Hover each item for actions.</p>
+            </div>
+            {unresolvedGaps === 0 ? (
+              <div className="px-5 py-5 flex items-center gap-2.5 fade-in">
+                <div className="w-4 h-4 rounded-full bg-[#DCFCE7] flex items-center justify-center flex-shrink-0">
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2L6.5 2" stroke="#16A34A" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                </div>
+                <p className="text-[13px] text-[#15803D] font-medium">No unresolved gaps — all items addressed.</p>
+              </div>
+            ) : (
+            <div className="divide-y divide-[#F4F2EE]">
+              {ANALYSIS_GAPS.map(gap => {
+                const resolution = gapStates[gap.id]
+                const isExpanded = expandedGap === gap.id
+                return (
+                  <div key={gap.id} className={`transition-colors ${resolution === 'resolved' ? 'bg-[#FAFFFC]' : resolution === 'not-applicable' ? 'opacity-55' : ''}`}>
+                    <div className="flex items-start gap-3 px-5 py-3.5 group">
+                      <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${gap.severity === 'error' ? 'bg-[#DC2626]' : 'bg-[#D97706]'}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-[13px] text-[#111218] leading-relaxed ${resolution === 'not-applicable' ? 'line-through text-[#9898AB]' : ''}`}>
+                          {gap.text}
+                        </p>
+                        {resolution && resolution !== 'needs-info' && (
+                          <span className={`inline-flex items-center gap-1 mt-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full ${
+                            resolution === 'resolved' ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#F4F2EE] text-[#9898AB]'
+                          }`}>
+                            {resolution === 'resolved' ? '✓ Resolved' : '— Not applicable'}
+                          </span>
+                        )}
+                      </div>
+                      {!resolution ? (
+                        <button
+                          onClick={() => setExpandedGap(isExpanded ? null : gap.id)}
+                          className="flex-shrink-0 text-[11px] font-medium text-[#9898AB] hover:text-[#5B5BD6] opacity-0 group-hover:opacity-100 focus-visible:opacity-100 outline-none px-2 py-0.5 rounded hover:bg-[#F4F2EE] transition-all"
+                        >
+                          Actions
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => clearGapResolution(gap.id)}
+                          className="flex-shrink-0 text-[11px] text-[#C8C6C0] hover:text-[#9898AB] opacity-0 group-hover:opacity-100 focus-visible:opacity-100 outline-none transition-all"
+                        >
+                          Undo
+                        </button>
+                      )}
+                    </div>
+                    {isExpanded && !resolution && (
+                      <div className="px-10 pb-3.5 flex flex-wrap gap-2 fade-in">
+                        <button
+                          onClick={() => setEvidenceModal({ gapId: gap.id, text: gap.text })}
+                          className="text-[11px] font-medium text-[#5B5BD6] border border-[#5B5BD6] px-2.5 py-1 rounded-lg hover:bg-[#EEEEFF] transition-colors"
+                        >
+                          Review Evidence
+                        </button>
+                        <button
+                          onClick={() => addSourceRef.current?.click()}
+                          className="text-[11px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-2.5 py-1 rounded-lg hover:bg-[#F4F2EE] transition-colors"
+                        >
+                          Add Source
+                        </button>
+                        <button
+                          onClick={() => setGapResolution(gap.id, 'not-applicable')}
+                          className="text-[11px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-2.5 py-1 rounded-lg hover:bg-[#F4F2EE] transition-colors"
+                        >
+                          Mark Not Applicable
+                        </button>
+                        <button
+                          onClick={() => setGapResolution(gap.id, 'resolved')}
+                          className="text-[11px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-2.5 py-1 rounded-lg hover:bg-[#F4F2EE] transition-colors"
+                        >
+                          Mark Resolved
+                        </button>
+                        <button
+                          onClick={() => openAskAi(gap.id, gap.text)}
+                          className="text-[11px] font-medium text-[#8B5CF6] border border-[#DDD6FE] px-2.5 py-1 rounded-lg hover:bg-[#F3F0FF] transition-colors"
+                        >
+                          Ask AI
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            )}
+          </div>
+
+          {/* Source Conflicts */}
+          <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[#E2DED7]">
+              <h3 className="text-[13px] font-semibold text-[#111218]">Source Conflicts</h3>
+            </div>
+            <div className="px-5 py-4 flex items-center gap-2.5">
+              <div className="w-4 h-4 rounded-full bg-[#DCFCE7] flex items-center justify-center flex-shrink-0">
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2L6.5 2" stroke="#16A34A" strokeWidth="1.3" strokeLinecap="round"/></svg>
+              </div>
+              <p className="text-[13px] text-[#6B6B7E]">No conflicting product information detected.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT col: Coverage · Standards · Readiness */}
+        <div className="space-y-4">
+
+          {/* Source Coverage */}
+          <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-4 py-3.5 border-b border-[#E2DED7]">
+              <h3 className="text-[12px] font-semibold text-[#111218]">Source Coverage</h3>
+            </div>
+            <div className="p-4 space-y-3">
+              {coverageList.map((f, i) => {
+                const cs = COVERAGE_STYLE[f.label] ?? COVERAGE_STYLE['Partially represented']
+                const display = f.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ')
+                return (
+                  <div key={i}>
+                    <p className="text-[12px] font-medium text-[#111218] truncate mb-1" title={f.name}>{display}</p>
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${cs.dot}`} />
+                      <span className={`text-[11px] font-medium ${cs.text}`}>{f.label}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Standards & References */}
+          <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-4 py-3.5 border-b border-[#E2DED7]">
+              <h3 className="text-[12px] font-semibold text-[#111218]">Standards & References</h3>
+              <p className="text-[10px] text-[#9898AB] mt-0.5">Separate from source material analysis</p>
+            </div>
+            <div className="p-4">
+              {isDemoMode && (
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  <span className="text-[10px] font-semibold text-[#8B5CF6] bg-[#F3F0FF] px-2 py-0.5 rounded-full">1 Content Style Guide</span>
+                  <span className="text-[10px] font-semibold text-[#8B5CF6] bg-[#F3F0FF] px-2 py-0.5 rounded-full">2 Approved Samples</span>
+                </div>
+              )}
+              <div className="space-y-2 mb-3">
+                {DETECTED_STANDARDS.slice(0, showAllStandards ? undefined : 4).map(s => (
+                  <div key={s.label} className="flex items-start gap-1.5">
+                    <div className="w-1 h-1 rounded-full bg-[#D8D4CE] mt-1.5 flex-shrink-0" />
+                    <p className="text-[11px] leading-snug">
+                      <span className="text-[#9898AB]">{s.label}: </span>
+                      <span className="font-medium text-[#111218]">{s.value}</span>
+                    </p>
+                  </div>
+                ))}
+                {!showAllStandards && DETECTED_STANDARDS.length > 4 && (
+                  <button
+                    onClick={() => setShowAllStandards(true)}
+                    className="text-[11px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors ml-2.5"
+                  >
+                    + {DETECTED_STANDARDS.length - 4} more
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setStandardsOpen(true)}
+                className="w-full text-center text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] border border-[#5B5BD6] hover:border-[#4A4AC4] py-1.5 rounded-lg transition-colors"
+              >
+                Review detected standards
+              </button>
+            </div>
+          </div>
+
+          {/* Readiness */}
+          <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-2">
+              {unresolvedGaps > 0 ? (
+                <div className="w-5 h-5 rounded bg-[#FEF3C7] flex items-center justify-center flex-shrink-0">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M5 1L9 9H1L5 1z" stroke="#D97706" strokeWidth="1.2" strokeLinejoin="round"/>
+                    <path d="M5 4v2.5M5 7.5v.2" stroke="#D97706" strokeWidth="1.2" strokeLinecap="round"/>
+                  </svg>
+                </div>
+              ) : (
+                <div className="w-5 h-5 rounded bg-[#DCFCE7] flex items-center justify-center flex-shrink-0">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M1.5 5l2.5 2.5L8.5 2" stroke="#16A34A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+              )}
+              <span className="text-[12px] font-semibold text-[#111218]">
+                {unresolvedGaps === 0 ? 'Ready to structure' : 'Ready with gaps'}
+              </span>
+            </div>
+            <p className="text-[12px] text-[#6B6B7E] leading-relaxed mb-2">
+              Most core topics are well-supported.
+              {unresolvedGaps > 0 && (
+                <> {unresolvedGaps} information {unresolvedGaps === 1 ? 'gap requires' : 'gaps require'} review.</>
+              )}
+            </p>
+            {unresolvedGaps > 0 ? (
+              <button
+                onClick={() => {
+                  gapsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  const firstUnresolved = ANALYSIS_GAPS.find(g => !gapStates[g.id] || gapStates[g.id] === 'needs-info')
+                  if (firstUnresolved) setExpandedGap(firstUnresolved.id)
+                }}
+                className="text-[11px] font-medium text-[#D97706] hover:text-[#B45309] transition-colors"
+              >
+                Review gaps →
+              </button>
+            ) : (
+              <span className="text-[11px] font-medium text-[#15803D]">No unresolved gaps</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Continue action ── */}
+      <div className="flex items-center justify-end gap-3 mt-6">
+        {showContinueWarning && (
+          <div className="flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-lg px-4 py-2.5 fade-in">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1.5L12.5 12H1.5L7 1.5z" stroke="#D97706" strokeWidth="1.3" strokeLinejoin="round"/>
+              <path d="M7 5.5v3M7 10v.5" stroke="#D97706" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+            <p className="text-[12px] text-[#92400E]">
+              {unresolvedGaps} unresolved {unresolvedGaps === 1 ? 'gap' : 'gaps'} — you can continue and address them during authoring.
+            </p>
+            <button onClick={() => onNav('structure')} className="text-[12px] font-semibold text-[#92400E] hover:text-[#78350F] transition-colors whitespace-nowrap">
+              Continue anyway
+            </button>
+            <button onClick={() => setShowContinueWarning(false)} className="text-[#D97706] hover:text-[#92400E] flex-shrink-0 transition-colors">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+              </svg>
+            </button>
+          </div>
+        )}
+        <button
+          onClick={handleContinue}
+          className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors"
+        >
+          Review AI-Proposed TOC
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+      </div>
+
+      {/* ── Standards Modal ── */}
+      {standardsOpen && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setStandardsOpen(false)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-[#E2DED7] flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-[14px] font-semibold text-[#111218]">Detected Standards</h3>
+                {isDemoMode ? (
+                  <div className="flex gap-1.5 mt-1.5">
+                    <span className="text-[10px] font-semibold text-[#8B5CF6] bg-[#F3F0FF] px-2 py-0.5 rounded-full">1 Content Style Guide</span>
+                    <span className="text-[10px] font-semibold text-[#8B5CF6] bg-[#F3F0FF] px-2 py-0.5 rounded-full">2 Approved Sample Documents</span>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-[#9898AB] mt-1">Inferred from prototype — not extracted from your files</p>
+                )}
+              </div>
+              <button onClick={() => setStandardsOpen(false)} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors flex-shrink-0 ml-4">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div className="px-6 pt-4 pb-2 flex-shrink-0">
+              <p className="text-[12px] text-[#6B6B7E] leading-relaxed">
+                These standards guide generated content. You can change them before generation.
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 pb-2">
+              <div className="divide-y divide-[#F4F2EE]">
+                {DETECTED_STANDARDS.map(s => {
+                  const decision = standardDecisions[s.label] ?? 'use'
+                  const displayValue = editedValues[s.label] ?? s.value
+                  const isIgnored = decision === 'ignore'
+                  const isEditing = decision === 'edit'
+                  return (
+                    <div key={s.label} className={`py-3 transition-opacity ${isIgnored ? 'opacity-40' : ''}`}>
+                      <div className="flex items-start gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wide">{s.label}</p>
+                            <span className="text-[9px] font-medium text-[#9898AB] bg-[#F4F2EE] px-1.5 py-0.5 rounded-full">
+                              {isDemoMode ? s.origin : 'Prototype inference'}
+                            </span>
+                          </div>
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              value={displayValue}
+                              onChange={e => setEditedValues(prev => ({ ...prev, [s.label]: e.target.value }))}
+                              className="w-full text-[13px] font-medium text-[#111218] bg-[#F9F8F6] border border-[#5B5BD6] rounded-lg px-2.5 py-1.5 outline-none focus:ring-1 focus:ring-[#5B5BD6]"
+                            />
+                          ) : (
+                            <p className={`text-[13px] font-medium ${isIgnored ? 'text-[#9898AB] line-through' : 'text-[#111218]'}`}>
+                              {displayValue}
+                              {editedValues[s.label] && !isEditing && decision === 'use' && (
+                                <span className="ml-2 text-[10px] font-semibold text-[#5B5BD6] bg-[#EEEEFF] px-1.5 py-0.5 rounded-full not-italic">edited</span>
+                              )}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center bg-[#F4F2EE] rounded-lg p-0.5 flex-shrink-0 mt-0.5">
+                          {(['use', 'edit', 'ignore'] as const).map(action => (
+                            <button
+                              key={action}
+                              onClick={() => setStandardDecisions(prev => ({ ...prev, [s.label]: action }))}
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-medium capitalize transition-all ${
+                                decision === action
+                                  ? action === 'ignore'
+                                    ? 'bg-white text-[#DC2626] shadow-sm'
+                                    : action === 'edit'
+                                    ? 'bg-white text-[#5B5BD6] shadow-sm'
+                                    : 'bg-white text-[#111218] shadow-sm'
+                                  : 'text-[#9898AB] hover:text-[#6B6B7E]'
+                              }`}
+                            >
+                              {action}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-[#E2DED7] flex-shrink-0 space-y-3">
+              <div className="bg-[#F3F0FF] border border-[#DDD6FE] rounded-xl px-4 py-3">
+                <p className="text-[12px] text-[#5B21B6] leading-relaxed">
+                  Reference documents guide structure and writing style. Current source material remains the authority for product facts.
+                </p>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setStandardsOpen(false)}
+                  className="text-[12px] font-medium text-white bg-[#5B5BD6] hover:bg-[#4A4AC4] px-4 py-2 rounded-lg transition-colors"
+                >
+                  Apply standards
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── View Source Modal ── */}
+      {viewSourceModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setViewSourceModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <h3 className="text-[14px] font-semibold text-[#111218]">Source Reference</h3>
+              <button onClick={() => setViewSourceModal(null)} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+            <div className="px-6 py-5">
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-4 h-4 rounded bg-[#8B5CF6] flex items-center justify-center flex-shrink-0">
+                  <span className="text-white text-[7px] font-bold">S</span>
+                </div>
+                <span className="text-[12px] font-semibold text-[#111218]">{viewSourceModal.file}</span>
+              </div>
+              <p className="text-[11px] text-[#9898AB] mb-3">{viewSourceModal.section}</p>
+              {isDemoMode && viewSourceModal.snippet ? (
+                <p className="text-[13px] text-[#6B6B7E] italic leading-relaxed bg-[#F9F8F6] rounded-lg px-4 py-3 border border-[#E2DED7]">"{viewSourceModal.snippet}"</p>
+              ) : (
+                <div className="bg-[#FEF3C7] border border-[#FDE68A] rounded-lg px-4 py-3">
+                  <p className="text-[12px] text-[#92400E]">
+                    <span className="font-semibold">File not parsed</span> — this prototype does not extract or display content from uploaded files. Source evidence shown in the analysis is illustrative.
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="px-6 pb-4 flex justify-end">
+              <button onClick={() => setViewSourceModal(null)} className="text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-4 py-1.5 rounded-lg hover:bg-[#F4F2EE] transition-colors">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Gap Evidence Modal ── */}
+      {evidenceModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setEvidenceModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <h3 className="text-[14px] font-semibold text-[#111218]">Gap Evidence</h3>
+              <button onClick={() => setEvidenceModal(null)} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+            <div className="px-6 py-5">
+              <p className="text-[12px] font-medium text-[#111218] mb-3">{evidenceModal.text}</p>
+              {isDemoMode && GAP_DEMO_EVIDENCE[evidenceModal.gapId]?.length > 0 ? (
+                <div className="space-y-3">
+                  {GAP_DEMO_EVIDENCE[evidenceModal.gapId].map((ev, i) => (
+                    <div key={i} className="bg-[#F9F8F6] border border-[#E2DED7] rounded-lg px-4 py-3">
+                      <p className="text-[11px] font-semibold text-[#9898AB] mb-1">{ev.file}</p>
+                      <p className="text-[12px] text-[#6B6B7E] italic">"{ev.snippet}"</p>
+                    </div>
+                  ))}
+                </div>
+              ) : isDemoMode ? (
+                <div className="bg-[#FEE2E2] border border-[#FECACA] rounded-lg px-4 py-3">
+                  <p className="text-[12px] text-[#991B1B]">No supporting evidence found in source documents for this gap.</p>
+                </div>
+              ) : (
+                <div className="bg-[#FEF3C7] border border-[#FDE68A] rounded-lg px-4 py-3">
+                  <p className="text-[12px] text-[#92400E]">
+                    <span className="font-semibold">Prototype mode</span> — evidence cannot be extracted from your uploaded files in this prototype.
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="px-6 pb-4 flex justify-end">
+              <button onClick={() => setEvidenceModal(null)} className="text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-4 py-1.5 rounded-lg hover:bg-[#F4F2EE] transition-colors">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Ask AI Modal ── */}
+      {askAiModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => { if (!askAiLoading) setAskAiModal(null) }}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-[#8B5CF6]">✦</span>
+                <h3 className="text-[14px] font-semibold text-[#111218]">AI Guidance</h3>
+              </div>
+              {!askAiLoading && (
+                <button onClick={() => setAskAiModal(null)} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                </button>
+              )}
+            </div>
+            <div className="px-6 py-5">
+              <p className="text-[11px] text-[#9898AB] mb-3 italic">{askAiModal.text}</p>
+              {askAiLoading ? (
+                <div className="space-y-2">
+                  <div className="h-3 shimmer rounded w-full" />
+                  <div className="h-3 shimmer rounded w-5/6" />
+                  <div className="h-3 shimmer rounded w-4/5" />
+                  <div className="h-3 shimmer rounded w-full mt-1" />
+                  <div className="h-3 shimmer rounded w-3/4" />
+                </div>
+              ) : askAiDone ? (
+                <div>
+                  <p className="text-[13px] text-[#111218] leading-relaxed">{GAP_AI_RESPONSES[askAiModal.gapId]}</p>
+                  <p className="text-[10px] text-[#9898AB] mt-3 italic">Prototype response — for demonstration only.</p>
+                </div>
+              ) : null}
+            </div>
+            {!askAiLoading && (
+              <div className="px-6 pb-4 flex justify-end">
+                <button onClick={() => setAskAiModal(null)} className="text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-4 py-1.5 rounded-lg hover:bg-[#F4F2EE] transition-colors">Close</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Screen: Structure ─────────────────────────────────────────────────────────
+
+type TocItem = { id: number; title: string; level: 1 | 2 | 3 | 4; words: number; parentId?: number; isNew?: boolean; hasGap?: boolean; analysisConceptIds?: number[]; supportingSourceIds?: string[] }
+
+type AnalysisResult = {
+  revision: number
+  concepts: { id: number; label: string; support: string; related: string[] }[]
+  gaps: { id: number; text: string; severity: string }[]
+  sourceFiles: string[]
+}
+
+const ALT_TOC: TocItem[] = [
+  { id: 1,  title: 'Overview',                 level: 1, words: 280 },
+  { id: 2,  title: 'Platform Architecture',    level: 2, words: 340, parentId: 1 },
+  { id: 3,  title: 'Key Concepts',             level: 2, words: 190, parentId: 1 },
+  { id: 4,  title: 'Account Setup',            level: 1, words: 420 },
+  { id: 5,  title: 'Creating Your Workspace',  level: 2, words: 310, parentId: 4 },
+  { id: 18, title: 'Workspace Regions',        level: 3, words: 140, parentId: 5 },
+  { id: 6,  title: 'Inviting Your Team',       level: 2, words: 260, parentId: 4 },
+  { id: 7,  title: 'Core Workflows',           level: 1, words: 680 },
+  { id: 8,  title: 'Dashboard Navigation',     level: 2, words: 350, parentId: 7 },
+  { id: 9,  title: 'Managing Projects',        level: 2, words: 440, parentId: 7 },
+  { id: 19, title: 'Project Templates',        level: 3, words: 180, parentId: 9 },
+  { id: 20, title: 'Access Controls',          level: 3, words: 150, parentId: 9 },
+  { id: 10, title: 'Collaboration & Comments', level: 2, words: 280, parentId: 7 },
+  { id: 11, title: 'Administration',           level: 1, words: 520 },
+  { id: 12, title: 'User Roles & Permissions', level: 2, words: 390, parentId: 11 },
+  { id: 13, title: 'SSO / SAML Configuration', level: 2, words: 200, parentId: 11, hasGap: true },
+  { id: 14, title: 'Integrations',             level: 1, words: 380 },
+  { id: 15, title: 'API Reference',            level: 2, words: 310, parentId: 14 },
+  { id: 16, title: 'Troubleshooting',          level: 1, words: 460 },
+  { id: 17, title: 'Common Issues',            level: 2, words: 380, parentId: 16 },
+]
+
+const GEN_OPTION_CHOICES: Record<string, string[]> = {
+  'Writing Style':   ['Technical / Professional', 'Conversational', 'Formal', 'Plain Language'],
+  'Reading Level':   ['Beginner', 'Intermediate', 'Advanced', 'Expert'],
+  'Tone':            ['Direct and Clear', 'Instructional', 'Supportive', 'Neutral'],
+  'Format':          ['Structured with Steps', 'Narrative', 'Reference', 'Mixed'],
+}
+
+const SECTION_SUPPORT: Record<number, { strength: 'Strong' | 'Partial' | 'Limited'; sources: string[]; concepts: string[] }> = {
+  1:  { strength: 'Strong',   sources: ['Nexus Technical Spec v3.2', 'Product Roadmap Deck'], concepts: ['Project Dashboard', 'User Authentication'] },
+  2:  { strength: 'Partial',  sources: ['Nexus Technical Spec v3.2'], concepts: ['API Integration'] },
+  3:  { strength: 'Strong',   sources: ['Nexus Technical Spec v3.2', 'UX Research Findings Q3'], concepts: ['User Authentication', 'Team Collaboration'] },
+  4:  { strength: 'Partial',  sources: ['UX Research Findings Q3'], concepts: ['User Authentication'] },
+  6:  { strength: 'Partial',  sources: ['Nexus Technical Spec v3.2'], concepts: ['Team Collaboration'] },
+  7:  { strength: 'Strong',   sources: ['Nexus Technical Spec v3.2', 'UX Research Findings Q3', 'Support Ticket Analysis'], concepts: ['Project Dashboard', 'Notification System'] },
+  9:  { strength: 'Strong',   sources: ['Nexus Technical Spec v3.2', 'UX Research Findings Q3'], concepts: ['Project Dashboard', 'Team Collaboration'] },
+  11: { strength: 'Partial',  sources: ['Nexus Technical Spec v3.2'], concepts: ['User Authentication'] },
+  12: { strength: 'Partial',  sources: ['Nexus Technical Spec v3.2'], concepts: ['User Authentication'] },
+  13: { strength: 'Limited',  sources: [], concepts: [] },
+  14: { strength: 'Limited',  sources: ['Nexus Technical Spec v3.2'], concepts: ['API Integration', 'Data Import/Export'] },
+  16: { strength: 'Partial',  sources: ['Support Ticket Analysis'], concepts: ['Notification System'] },
+}
+
+const SUGGEST_SUBSECTIONS: Record<number, string[]> = {
+  1:  ['What is Nexus?', 'Who is this guide for?', 'Document conventions'],
+  4:  ['System requirements', 'Browser support', 'Account verification'],
+  7:  ['Creating a new project', 'Using the activity feed', 'Keyboard shortcuts'],
+  11: ['Audit logs', 'Data retention settings', 'Billing & subscription'],
+  14: ['Webhooks', 'OAuth setup', 'Third-party apps'],
+  16: ['Contacting support', 'Error code reference'],
+}
+
+function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysisResult, analysisRevision, sourcesRevision, tocGeneratedFromRev, tocHumanModified, onTocAccepted }: {
+  onNav: (s: Screen) => void
+  isDemoMode: boolean
+  toc?: TocItem[]
+  onTocChange?: (toc: TocItem[]) => void
+  analysisResult?: AnalysisResult | null
+  analysisRevision?: number
+  sourcesRevision?: number
+  tocGeneratedFromRev?: number
+  tocHumanModified?: boolean
+  onTocAccepted?: (toc: TocItem[], fromAnalysisRev: number) => void
+}) {
+  const [localToc, setLocalToc] = useState<TocItem[]>([])
+  const toc = tocProp ?? localToc
+  const setToc = (newToc: TocItem[] | ((prev: TocItem[]) => TocItem[])) => {
+    const resolved = typeof newToc === 'function' ? newToc(toc) : newToc
+    if (onTocChange) onTocChange(resolved)
+    else setLocalToc(resolved)
+  }
+  const [editing, setEditing] = useState<number | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [selected, setSelected] = useState<number | null>(null)
+  const [dragId, setDragId] = useState<number | null>(null)
+  const [dragOver, setDragOverId] = useState<number | null>(null)
+  const [newlyAdded, setNewlyAdded] = useState<number | null>(null)
+
+  // Generation state
+  const [generating, setGenerating] = useState(false)
+  const [proposedToc, setProposedToc] = useState<TocItem[] | null>(null)
+  const [compareModal, setCompareModal] = useState(false)
+
+  // Derived flags
+  const hasToc = (tocProp ?? localToc).length > 0
+  const tocAnalysisStale = hasToc && tocGeneratedFromRev !== undefined && analysisRevision !== undefined
+    && analysisRevision >= 0 && analysisRevision > tocGeneratedFromRev
+  const analysisIsStale = (sourcesRevision ?? 0) > (analysisRevision ?? -1) && (analysisRevision ?? -1) >= 0
+  const noAnalysis = (analysisRevision ?? -1) < 0
+
+  const generateFromAnalysis = () => {
+    const activeAnalysis: AnalysisResult | null = analysisResult ?? (isDemoMode ? {
+      revision: 0, gaps: ANALYSIS_GAPS,
+      sourceFiles: [],
+      concepts: ANALYSIS_CONCEPTS.map((c: typeof ANALYSIS_CONCEPTS[0]) => ({ id: c.id, label: c.label, support: c.support, related: c.related })),
+    } : null)
+    if (!activeAnalysis) return
+    setGenerating(true)
+    setTimeout(() => {
+      let nextId = 1000
+      const concepts = activeAnalysis.concepts
+      const items: TocItem[] = []
+      const ovId = nextId++
+      items.push({ id: ovId, title: 'Overview', level: 1, words: 280 })
+      const gsId = nextId++
+      items.push({ id: gsId, title: 'Getting Started', level: 1, words: 0 })
+      items.push({ id: nextId++, title: 'Prerequisites', level: 2, words: 180, parentId: gsId })
+      items.push({ id: nextId++, title: 'Installation & Setup', level: 2, words: 320, parentId: gsId })
+      const strong = concepts.filter(c => c.support === 'Strong')
+      const partial = concepts.filter(c => c.support === 'Partial')
+      const limited = concepts.filter(c => c.support === 'Limited')
+      strong.forEach(c => {
+        const topId = nextId++
+        items.push({ id: topId, title: c.label, level: 1, words: 500, analysisConceptIds: [c.id] })
+        c.related.slice(0, 2).forEach(rel => {
+          const relC = concepts.find(x => x.label === rel)
+          items.push({ id: nextId++, title: rel, level: 2, words: 250, parentId: topId, analysisConceptIds: relC ? [relC.id] : [] })
+        })
+      })
+      if (partial.length > 0) {
+        const grpId = nextId++
+        items.push({ id: grpId, title: 'Advanced Features', level: 1, words: 0 })
+        partial.forEach(c => { items.push({ id: nextId++, title: c.label, level: 2, words: 350, parentId: grpId, analysisConceptIds: [c.id] }) })
+      }
+      if (limited.length > 0) {
+        const refId = nextId++
+        items.push({ id: refId, title: 'Reference', level: 1, words: 0 })
+        limited.forEach(c => { items.push({ id: nextId++, title: c.label, level: 2, words: 200, parentId: refId, analysisConceptIds: [c.id] }) })
+      }
+      if (activeAnalysis.gaps.length > 0) {
+        const trId = nextId++
+        items.push({ id: trId, title: 'Troubleshooting', level: 1, words: 0 })
+        items.push({ id: nextId++, title: 'Common Issues', level: 2, words: 300, parentId: trId })
+      }
+      setGenerating(false)
+      setProposedToc(items)
+    }, 1400)
+  }
+
+  // Add section modal
+  const [addModalOpen, setAddModalOpen] = useState(false)
+  const [addTitle, setAddTitle] = useState('')
+  const [addType, setAddType] = useState<'top' | 'sub'>('top')
+  const [addParent, setAddParent] = useState<number | null>(null)
+  const [addDesc, setAddDesc] = useState('')
+
+  // Regenerate modal
+  const [regenModal, setRegenModal] = useState<'confirm' | 'compare' | null>(null)
+  const [regenLoading, setRegenLoading] = useState(false)
+
+  // AI action panel (contextual)
+  const [aiPanel, setAiPanel] = useState<number | null>(null)
+  const [aiPanelAction, setAiPanelAction] = useState<string | null>(null)
+  const [aiPanelResult, setAiPanelResult] = useState<string | null>(null)
+
+  // Source support modal
+  const [supportModal, setSupportModal] = useState<number | null>(null)
+
+  // Gap action modal
+  const [gapModal, setGapModal] = useState<number | null>(null)
+
+  // Generation options
+  const [genOptions, setGenOptions] = useState({
+    'Writing Style': 'Technical / Professional',
+    'Reading Level': 'Intermediate',
+    'Tone': 'Direct and Clear',
+    'Format': 'Structured with Steps',
+  })
+  const [openOption, setOpenOption] = useState<string | null>(null)
+
+  // Approve confirm
+  const [approveModal, setApproveModal] = useState(false)
+
+  const totalWords = toc.reduce((s, x) => s + x.words, 0)
+  const topLevelItems = toc.filter(t => t.level === 1)
+  const hasGaps = toc.some(t => t.hasGap)
+
+  const startEdit = (item: TocItem) => {
+    setEditing(item.id)
+    setEditValue(item.title)
+    setAiPanel(null)
+  }
+
+  const commitEdit = (id: number) => {
+    if (editValue.trim()) setToc(t => t.map(x => x.id === id ? { ...x, title: editValue.trim() } : x))
+    setEditing(null)
+  }
+
+  const removeItem = (id: number) => {
+    setToc(prev => {
+      const toRemove = new Set<number>([id])
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const item of prev) {
+          if (item.parentId !== undefined && toRemove.has(item.parentId) && !toRemove.has(item.id)) {
+            toRemove.add(item.id); changed = true
+          }
+        }
+      }
+      return prev.filter(x => !toRemove.has(x.id))
+    })
+    if (selected === id) setSelected(null)
+    if (aiPanel === id) setAiPanel(null)
+  }
+
+  const addSection = () => {
+    if (!addTitle.trim()) return
+    const newId = Math.max(...toc.map(t => t.id)) + 1
+    const parentItem = addParent !== null ? toc.find(t => t.id === addParent) : null
+    const newLevel = (parentItem ? Math.min(parentItem.level + 1, 4) : 1) as 1 | 2 | 3 | 4
+    const newItem: TocItem = {
+      id: newId,
+      title: addTitle.trim(),
+      level: newLevel,
+      words: Math.floor(Math.random() * 200 + 200),
+      parentId: addParent ?? undefined,
+      isNew: true,
+    }
+    setToc(prev => {
+      if (addParent === null) return [...prev, newItem]
+      // insert after last descendant of parent
+      const parentIdxRaw = [...prev].reverse().findIndex((x: TocItem) => x.id === addParent || x.parentId === addParent)
+      const parentIdx = parentIdxRaw === -1 ? prev.length - 1 : prev.length - 1 - parentIdxRaw
+      const newArr = [...prev]
+      newArr.splice(parentIdx + 1, 0, newItem)
+      return newArr
+    })
+    setNewlyAdded(newId)
+    setTimeout(() => setNewlyAdded(null), 1800)
+    setAddModalOpen(false)
+    setAddTitle('')
+    setAddDesc('')
+    setAddType('top')
+    setAddParent(null)
+  }
+
+  const [justMoved, setJustMoved] = useState<number | null>(null)
+  const [dragHint, setDragHint] = useState<'promote' | 'demote' | 'reorder' | null>(null)
+  const dragStartX = useRef<number>(0)
+
+  const flash = (id: number) => {
+    setJustMoved(id)
+    setTimeout(() => setJustMoved(null), 900)
+  }
+
+  const promoteItem = (id: number) => {
+    setToc(prev => {
+      const idx = prev.findIndex(x => x.id === id)
+      if (idx === -1) return prev
+      const item = prev[idx]
+      if (item.level === 1) return prev
+      const newLevel = (item.level - 1) as 1 | 2 | 3 | 4
+      // find nearest preceding item at newLevel - 1 to serve as new parent
+      let newParent: number | undefined
+      if (newLevel > 1) {
+        for (let i = idx - 1; i >= 0; i--) {
+          if (prev[i].level === newLevel - 1) { newParent = prev[i].id; break }
+        }
+      }
+      return prev.map((x, i) => i === idx ? { ...x, level: newLevel, parentId: newParent } : x)
+    })
+    flash(id)
+  }
+
+  const demoteItem = (id: number) => {
+    setToc(prev => {
+      const idx = prev.findIndex(x => x.id === id)
+      if (idx === -1) return prev
+      const item = prev[idx]
+      if (item.level >= 4) return prev
+      const newLevel = (item.level + 1) as 2 | 3 | 4
+      // find nearest preceding item at current level (becomes sibling-parent)
+      let newParent: number | undefined
+      for (let i = idx - 1; i >= 0; i--) {
+        if (prev[i].level === item.level) { newParent = prev[i].id; break }
+      }
+      if (newParent === undefined) return prev
+      return prev.map((x, i) => i === idx ? { ...x, level: newLevel, parentId: newParent } : x)
+    })
+    flash(id)
+  }
+
+  const canPromote = (id: number) => {
+    const item = toc.find(x => x.id === id)
+    return item ? item.level > 1 : false
+  }
+
+  const canDemote = (id: number) => {
+    const item = toc.find(x => x.id === id)
+    if (!item || item.level >= 4) return false
+    const idx = toc.findIndex(x => x.id === id)
+    // needs a preceding sibling at the same level to become the parent
+    return toc.slice(0, idx).some(x => x.level === item.level && x.id !== id)
+  }
+
+  const handleDragStart = (id: number, e: React.DragEvent) => {
+    setDragId(id)
+    dragStartX.current = e.clientX
+    setDragHint('reorder')
+  }
+  const handleDragEnd = () => {
+    if (dragId !== null && dragOver !== null && dragId !== dragOver) {
+      if (dragHint === 'promote') {
+        promoteItem(dragId)
+      } else if (dragHint === 'demote') {
+        demoteItem(dragId)
+      } else {
+        setToc(prev => {
+          const arr = [...prev]
+          const fromIdx = arr.findIndex(x => x.id === dragId)
+          const toIdx = arr.findIndex(x => x.id === dragOver)
+          const [item] = arr.splice(fromIdx, 1)
+          arr.splice(toIdx, 0, item)
+          return arr
+        })
+        if (dragId !== null) flash(dragId)
+      }
+    }
+    setDragId(null)
+    setDragOverId(null)
+    setDragHint(null)
+  }
+
+  const handleDragMove = (e: React.DragEvent, id: number) => {
+    if (dragId !== id) return
+    const dx = e.clientX - dragStartX.current
+    if (dx < -40 && canPromote(id)) setDragHint('promote')
+    else if (dx > 40 && canDemote(id)) setDragHint('demote')
+    else setDragHint('reorder')
+  }
+
+  const runAiAction = (action: string, itemId: number) => {
+    setAiPanelAction(action)
+    setAiPanelResult(null)
+    const item = toc.find(t => t.id === itemId)
+    const results: Record<string, string> = {
+      'Regenerate this section': `Regenerated: "${item?.title}" — Updated scope and structure based on available source evidence. Ready to replace current version.`,
+      'Suggest subsections': SUGGEST_SUBSECTIONS[itemId]?.map(s => `• ${s}`).join('\n') ?? '• Introduction\n• Key concepts\n• Step-by-step instructions\n• Notes and warnings',
+      'Find related topics': `Related topics from source analysis:\n• ${(SECTION_SUPPORT[itemId]?.concepts ?? ['User Authentication', 'Project Dashboard']).join('\n• ')}`,
+      'Review source support': `Source support summary:\n${(SECTION_SUPPORT[itemId]?.sources ?? []).map(s => `• ${s}`).join('\n') || '• No direct sources found for this section.'}`,
+    }
+    setTimeout(() => setAiPanelResult(results[action] ?? `✓ ${action} complete.`), 1000)
+  }
+
+  const startRegen = () => {
+    setRegenModal('confirm')
+  }
+
+  const confirmRegen = () => {
+    setRegenLoading(true)
+    setTimeout(() => {
+      setRegenLoading(false)
+      setRegenModal('compare')
+    }, 2000)
+  }
+
+  const applyAltToc = () => {
+    setToc(ALT_TOC)
+    setRegenModal(null)
+    setSelected(null)
+    setAiPanel(null)
+  }
+
+  const handleApprove = () => {
+    // Mark TOC as human-accepted
+    onTocAccepted?.(toc, analysisRevision ?? 0)
+    if (hasGaps) {
+      setApproveModal(true)
+    } else {
+      onNav('studio')
+    }
+  }
+
+  const supportInfo = supportModal !== null ? SECTION_SUPPORT[supportModal] : null
+
+  // ── EMPTY STATE: No analysis run yet ────────────────────────────────────────
+  if (!hasToc && !proposedToc) {
+    return (
+      <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
+        <div className="mb-8">
+          <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Table of Contents</h1>
+          <p className="text-[14px] text-[#6B6B7E]">Generate a proposed structure from your Source Analysis.</p>
+        </div>
+        {noAnalysis && (
+          <div className="bg-white border border-[#E2DED7] rounded-2xl p-10 text-center">
+            <div className="w-12 h-12 rounded-full bg-[#F4F2EE] flex items-center justify-center mx-auto mb-4">
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M4 18V6a2 2 0 012-2h10a2 2 0 012 2v12" stroke="#9898AB" strokeWidth="1.5" strokeLinecap="round"/><path d="M8 10h6M8 13h4" stroke="#9898AB" strokeWidth="1.3" strokeLinecap="round"/></svg>
+            </div>
+            <p className="text-[15px] font-semibold text-[#111218] mb-2">No TOC has been generated yet</p>
+            <p className="text-[13px] text-[#6B6B7E] mb-5">Run Source Analysis before generating a proposed TOC.</p>
+            <button onClick={() => onNav('analysis')} className="inline-flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-semibold px-5 py-2.5 rounded-lg transition-colors">
+              Go to Analysis
+            </button>
+          </div>
+        )}
+        {analysisIsStale && !noAnalysis && (
+          <div className="mb-5 flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3">
+            <div className="w-2 h-2 rounded-full bg-[#F59E0B] animate-pulse flex-shrink-0" />
+            <p className="text-[12px] text-[#92400E] flex-1">Source Analysis is out of date — sources changed since the last analysis run.</p>
+            <button onClick={() => onNav('analysis')} className="text-[11px] font-semibold text-[#92400E] underline">Re-analyze Sources</button>
+          </div>
+        )}
+        {!noAnalysis && !analysisIsStale && (
+          <div className="bg-white border border-[#E2DED7] rounded-2xl p-10 text-center">
+            <div className="w-12 h-12 rounded-full bg-[#EEEEFF] flex items-center justify-center mx-auto mb-4">
+              <span className="text-[#5B5BD6] text-[20px]">✦</span>
+            </div>
+            <p className="text-[15px] font-semibold text-[#111218] mb-1.5">No TOC has been generated yet</p>
+            <p className="text-[13px] text-[#6B6B7E] mb-1">Use the latest Source Analysis to propose a structure.</p>
+            {analysisResult && (
+              <p className="text-[12px] text-[#9898AB] mb-6">{analysisResult.concepts.length} concepts detected · {analysisResult.gaps.length} gaps identified</p>
+            )}
+            <button
+              onClick={generateFromAnalysis}
+              disabled={generating}
+              className="inline-flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-60 text-white text-[13px] font-semibold px-5 py-2.5 rounded-lg transition-colors"
+            >
+              {generating ? (
+                <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating…</>
+              ) : (
+                <><span>✦</span> Generate Proposed TOC</>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── PROPOSED TOC review (before acceptance) ───────────────────────────────
+  if (proposedToc && !hasToc) {
+    const acceptProposal = () => {
+      const resolved = proposedToc
+      if (onTocChange) onTocChange(resolved)
+      else setLocalToc(resolved)
+      onTocAccepted?.(resolved, analysisRevision ?? 0)
+      setProposedToc(null)
+    }
+    return (
+      <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
+        <div className="flex items-start justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Proposed TOC</h1>
+            <p className="text-[13px] text-[#6B6B7E]">Generated from Source Analysis · {proposedToc.length} sections · Review and edit before accepting.</p>
+          </div>
+          <div className="flex items-center gap-2 bg-[#F3F0FF] text-[#7C3AED] text-[12px] font-medium px-3 py-1.5 rounded-full">
+            <span>✦</span> AI Proposed
+          </div>
+        </div>
+        <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden mb-4">
+          <div className="px-5 py-3 border-b border-[#E2DED7] flex items-center justify-between">
+            <span className="text-[13px] font-semibold text-[#111218]">Proposed Structure</span>
+            <span className="text-[11px] text-[#9898AB]">{proposedToc.length} items</span>
+          </div>
+          <div className="p-3 space-y-0.5 max-h-[60vh] overflow-y-auto">
+            {proposedToc.map(item => (
+              <div key={item.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-[#F9F8F6] group" style={{ paddingLeft: `${(item.level - 1) * 20 + 12}px` }}>
+                <span className="text-[12px] text-[#9898AB] font-mono w-5 flex-shrink-0">H{item.level}</span>
+                <span className="text-[13px] text-[#111218] flex-1">{item.title}</span>
+                {(item.analysisConceptIds ?? []).length > 0 && (
+                  <span className="text-[10px] text-[#5B5BD6] bg-[#EEEEFF] px-1.5 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">from analysis</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <button onClick={() => setProposedToc(null)} className="text-[13px] text-[#6B6B7E] hover:text-[#111218] transition-colors">← Discard</button>
+          <div className="flex items-center gap-2">
+            <button onClick={acceptProposal} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-semibold px-5 py-2 rounded-lg transition-colors">
+              Accept & Continue →
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in" onClick={() => { setSelected(null); setAiPanel(null); setOpenOption(null) }}>
+      {/* Analysis-changed banner */}
+      {tocAnalysisStale && (
+        <div className="mb-5 flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3">
+          <div className="w-2 h-2 rounded-full bg-[#F59E0B] animate-pulse flex-shrink-0" />
+          <p className="text-[12px] text-[#92400E] flex-1">
+            Analysis has changed since this TOC was generated.{tocHumanModified ? ' Your edits are protected.' : ''}
+          </p>
+          <button onClick={() => onNav('analysis')} className="text-[11px] font-semibold text-[#92400E] border border-[#F59E0B] px-2.5 py-1 rounded-md hover:bg-[#FEF3C7]">Review Changes</button>
+          <button onClick={() => setCompareModal(true)} className="text-[11px] font-semibold text-[#92400E] border border-[#F59E0B] px-2.5 py-1 rounded-md hover:bg-[#FEF3C7]">Regenerate Proposal</button>
+        </div>
+      )}
+      {/* Compare / regenerate modal */}
+      {compareModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center" onClick={() => setCompareModal(false)}>
+          <div className="bg-white rounded-2xl border border-[#E2DED7] shadow-xl p-6 w-[400px]" onClick={e => e.stopPropagation()}>
+            <p className="text-[14px] font-semibold text-[#111218] mb-1">Regenerate TOC Proposal?</p>
+            <p className="text-[12px] text-[#6B6B7E] mb-5">A new proposal will be generated from the current Analysis. Your existing TOC remains unchanged until you accept the new proposal.</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={() => { setCompareModal(false); generateFromAnalysis() }} className="w-full py-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-semibold rounded-lg transition-colors">Generate New Proposal</button>
+              <button onClick={() => setCompareModal(false)} className="w-full py-2 border border-[#E2DED7] text-[13px] text-[#6B6B7E] hover:bg-[#F9F8F6] rounded-lg transition-colors">Keep Current TOC</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Header */}
+      <div className="flex items-start justify-between mb-7">
+        <div>
+          <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Proposed TOC</h1>
+          <p className="text-[14px] text-[#6B6B7E]">
+            AI has proposed a structure based on your sources. Review and approve before generation.
+            {isDemoMode && <span className="ml-2 text-[12px] text-[#8B5CF6] font-medium">· Based on demo source material</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 bg-[#F3F0FF] text-[#7C3AED] text-[12px] font-medium px-3 py-1.5 rounded-full flex-shrink-0">
+          <span className="text-[#8B5CF6]">✦</span>
+          AI Proposed
+        </div>
+      </div>
+
+      <div className="grid grid-cols-5 gap-5">
+        {/* TOC Editor */}
+        <div className="col-span-3 bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-[#E2DED7] flex items-center justify-between">
+            <span className="text-[13px] font-semibold text-[#111218]">Table of Contents</span>
+            <span className="text-[11px] text-[#9898AB]">{toc.length} sections · ~{Math.round(totalWords / 100) * 100} words</span>
+          </div>
+          <div className="p-2">
+            {toc.map(item => {
+              const isSelected = selected === item.id
+              const isEditing = editing === item.id
+              const isAiOpen = aiPanel === item.id
+              const isNewHighlight = newlyAdded === item.id
+              const isMovedHighlight = justMoved === item.id
+              const isDragging = dragId === item.id
+              const isDragTarget = dragOver === item.id && dragId !== item.id
+              const support = SECTION_SUPPORT[item.id]
+              const canProm = canPromote(item.id)
+              const canDem = canDemote(item.id)
+              const showHierarchyHint = isDragging && dragHint !== 'reorder'
+
+              return (
+                <div key={item.id}>
+                  {/* Drag hierarchy hint bar */}
+                  {isDragging && showHierarchyHint && (
+                    <div className={`mx-3 mb-1 flex items-center gap-1.5 text-[10px] font-semibold px-2 py-1 rounded-md fade-in ${dragHint === 'promote' ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#EEEEFF] text-[#5B5BD6]'}`}>
+                      {dragHint === 'promote' ? '↑ Release to promote' : '→ Release to demote'}
+                    </div>
+                  )}
+                  <div
+                    draggable
+                    onDragStart={e => handleDragStart(item.id, e)}
+                    onDrag={e => handleDragMove(e, item.id)}
+                    onDragEnd={handleDragEnd}
+                    onDragOver={e => { e.preventDefault(); setDragOverId(item.id) }}
+                    onClick={e => { e.stopPropagation(); setSelected(isSelected ? null : item.id); setAiPanel(null) }}
+                    className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-all select-none
+                      ${item.level === 2 ? 'ml-5' : item.level === 3 ? 'ml-10' : item.level === 4 ? 'ml-[60px]' : ''}
+                      ${isDragging ? 'opacity-40' : ''}
+                      ${isDragTarget ? 'border-t-2 border-[#5B5BD6]' : ''}
+                      ${isMovedHighlight ? 'bg-[#DCFCE7] ring-1 ring-[#16A34A]' : isNewHighlight ? 'bg-[#EEEEFF] ring-1 ring-[#5B5BD6]' : isSelected ? 'bg-[#F4F2EE]' : 'hover:bg-[#F9F8F6]'}
+                    `}
+                  >
+                    {/* Drag handle */}
+                    <div className="text-[#C8C6C0] opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-[11px] flex-shrink-0">⠿</div>
+
+                    {/* Level indicator */}
+                    {item.level === 1
+                      ? <div className="w-2 h-2 rounded-sm bg-[#5B5BD6] flex-shrink-0" />
+                      : item.level === 2
+                      ? <div className="w-2 h-2 rounded-sm border border-[#9898AB] flex-shrink-0" />
+                      : item.level === 3
+                      ? <div className="w-1.5 h-1.5 rounded-full border border-[#C8C6C0] flex-shrink-0" />
+                      : <div className="w-1.5 h-1.5 rounded-full bg-[#E2DED7] flex-shrink-0" />
+                    }
+
+                    {/* Title */}
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        value={editValue}
+                        onChange={e => setEditValue(e.target.value)}
+                        onBlur={() => commitEdit(item.id)}
+                        onKeyDown={e => { if (e.key === 'Enter') commitEdit(item.id); if (e.key === 'Escape') setEditing(null) }}
+                        onClick={e => e.stopPropagation()}
+                        className="flex-1 text-[13px] font-medium bg-[#EEEEFF] border border-[#5B5BD6] rounded px-1.5 py-0.5 outline-none"
+                      />
+                    ) : (
+                      <span className={`flex-1 ${item.level === 1 ? 'text-[13px] font-semibold text-[#111218]' : item.level === 2 ? 'text-[13px] font-medium text-[#3D3D4E]' : item.level === 3 ? 'text-[12px] font-medium text-[#6B6B7E]' : 'text-[12px] font-normal text-[#9898AB]'}`}>
+                        {item.title}
+                        {item.isNew && <span className="ml-2 text-[9px] font-semibold text-[#5B5BD6] bg-[#EEEEFF] px-1.5 py-0.5 rounded-full">new</span>}
+                      </span>
+                    )}
+
+                    {/* Gap marker */}
+                    {item.hasGap && (
+                      <button
+                        onClick={e => { e.stopPropagation(); setGapModal(item.id) }}
+                        title="Incomplete source coverage"
+                        className="w-4 h-4 rounded-full bg-[#FEF3C7] flex items-center justify-center flex-shrink-0 hover:bg-[#FDE68A] transition-colors"
+                      >
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 1L7 7H1L4 1z" stroke="#D97706" strokeWidth="0.9" strokeLinejoin="round"/><path d="M4 3.5v1.5M4 5.8v.2" stroke="#D97706" strokeWidth="0.9" strokeLinecap="round"/></svg>
+                      </button>
+                    )}
+
+                    {/* Source support indicator */}
+                    {support && !item.hasGap && (
+                      <button
+                        onClick={e => { e.stopPropagation(); setSupportModal(item.id) }}
+                        title={`Source support: ${support.strength}`}
+                        className="w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                        style={{ background: support.strength === 'Strong' ? '#16A34A' : support.strength === 'Partial' ? '#D97706' : '#C8C6C0' }}
+                      />
+                    )}
+
+                    {/* Word estimate */}
+                    <span className="text-[11px] text-[#C8C6C0] flex-shrink-0 tabular-nums">~{item.words}</span>
+
+                    {/* Inline actions */}
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                      {/* Promote */}
+                      <button
+                        onClick={e => { e.stopPropagation(); if (canProm) promoteItem(item.id) }}
+                        disabled={!canProm}
+                        title="Promote one level"
+                        aria-label="Promote one level"
+                        className={`w-5 h-5 rounded flex items-center justify-center transition-colors ${canProm ? 'text-[#9898AB] hover:bg-[#DCFCE7] hover:text-[#16A34A]' : 'text-[#E2DED7] cursor-not-allowed'}`}
+                      >
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 7V2M2 5l3-3 3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </button>
+                      {/* Demote */}
+                      <button
+                        onClick={e => { e.stopPropagation(); if (canDem) demoteItem(item.id) }}
+                        disabled={!canDem}
+                        title="Demote one level"
+                        aria-label="Demote one level"
+                        className={`w-5 h-5 rounded flex items-center justify-center transition-colors ${canDem ? 'text-[#9898AB] hover:bg-[#EEEEFF] hover:text-[#5B5BD6]' : 'text-[#E2DED7] cursor-not-allowed'}`}
+                      >
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 3v5M2 5l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/><path d="M3 8h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                      </button>
+                      <div className="w-px h-3 bg-[#E2DED7] mx-0.5 flex-shrink-0" />
+                      <button
+                        onClick={e => { e.stopPropagation(); setAiPanel(isAiOpen ? null : item.id); setAiPanelAction(null); setAiPanelResult(null) }}
+                        title="AI actions"
+                        className="w-5 h-5 rounded hover:bg-[#F3F0FF] flex items-center justify-center text-[#9898AB] hover:text-[#8B5CF6] transition-colors"
+                      >
+                        <span className="text-[10px]">✦</span>
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); startEdit(item) }}
+                        title="Rename"
+                        className="w-5 h-5 rounded hover:bg-[#EEEEFF] flex items-center justify-center text-[#9898AB] hover:text-[#5B5BD6] transition-colors"
+                      >
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6.5 1.5l2 2L3 9H1V7l5.5-5.5z" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/></svg>
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); removeItem(item.id) }}
+                        title="Delete"
+                        className="w-5 h-5 rounded hover:bg-[#FEE2E2] flex items-center justify-center text-[#9898AB] hover:text-[#DC2626] transition-colors"
+                      >
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 1l6 6M7 1L1 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* AI action panel */}
+                  {isAiOpen && (
+                    <div className="mx-3 mb-1 bg-[#F9F7FF] border border-[#E5E0FF] rounded-xl p-3 fade-in" onClick={e => e.stopPropagation()}>
+                      <p className="text-[10px] font-semibold text-[#8B5CF6] uppercase tracking-wider mb-2">AI Actions — {item.title}</p>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {(['Regenerate this section', 'Suggest subsections', 'Find related topics', 'Review source support'] as const).map(action => (
+                          <button
+                            key={action}
+                            onClick={() => runAiAction(action, item.id)}
+                            className={`text-[11px] font-medium px-2.5 py-1 rounded-lg border transition-colors ${
+                              aiPanelAction === action
+                                ? 'bg-[#8B5CF6] text-white border-[#8B5CF6]'
+                                : 'border-[#DDD6FE] text-[#5B21B6] hover:bg-[#EDE9FE]'
+                            }`}
+                          >
+                            {action}
+                          </button>
+                        ))}
+                        <div className="w-full flex flex-wrap gap-1.5 pt-1 border-t border-[#EDE9FE]">
+                          <button
+                            onClick={() => { startEdit(item) }}
+                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg border border-[#E2DED7] text-[#6B6B7E] hover:bg-[#F4F2EE] transition-colors"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            onClick={() => { promoteItem(item.id); setAiPanel(null) }}
+                            disabled={!canProm}
+                            title="Promote one level"
+                            className={`text-[11px] font-medium px-2.5 py-1 rounded-lg border transition-colors ${canProm ? 'border-[#BBF7D0] text-[#15803D] hover:bg-[#DCFCE7]' : 'border-[#E2DED7] text-[#C8C6C0] cursor-not-allowed'}`}
+                          >
+                            ↑ Promote
+                          </button>
+                          <button
+                            onClick={() => { demoteItem(item.id); setAiPanel(null) }}
+                            disabled={!canDem}
+                            title="Demote one level"
+                            className={`text-[11px] font-medium px-2.5 py-1 rounded-lg border transition-colors ${canDem ? 'border-[#BFDBFE] text-[#1D4ED8] hover:bg-[#DBEAFE]' : 'border-[#E2DED7] text-[#C8C6C0] cursor-not-allowed'}`}
+                          >
+                            → Demote
+                          </button>
+                          <button
+                            onClick={() => { setAddType('sub'); setAddParent(item.level === 1 ? item.id : (item.parentId ?? null)); setAddModalOpen(true); setAiPanel(null) }}
+                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg border border-[#E2DED7] text-[#6B6B7E] hover:bg-[#F4F2EE] transition-colors"
+                          >
+                            Add subsection
+                          </button>
+                          <button
+                            onClick={() => { removeItem(item.id); setAiPanel(null) }}
+                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg border border-[#FEE2E2] text-[#DC2626] hover:bg-[#FEE2E2] transition-colors"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                      {aiPanelAction && !aiPanelResult && (
+                        <div className="flex items-center gap-1.5 text-[11px] text-[#8B5CF6]">
+                          <div className="w-3 h-3 border-[1.5px] border-[#8B5CF6] border-t-transparent rounded-full animate-spin" />
+                          Working…
+                        </div>
+                      )}
+                      {aiPanelResult && (
+                        <div className="bg-white border border-[#DDD6FE] rounded-lg px-3 py-2 fade-in">
+                          <pre className="text-[12px] text-[#111218] whitespace-pre-wrap font-sans leading-relaxed">{aiPanelResult}</pre>
+                          <p className="text-[10px] text-[#9898AB] mt-1 italic">Prototype response</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {/* Add section */}
+            <button
+              onClick={e => { e.stopPropagation(); setAddModalOpen(true) }}
+              className="w-full mt-1 flex items-center gap-2 px-3 py-2 text-[12px] text-[#9898AB] hover:text-[#5B5BD6] hover:bg-[#F4F2EE] rounded-lg transition-colors"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              Add section
+            </button>
+          </div>
+        </div>
+
+        {/* Right panel */}
+        <div className="col-span-2 space-y-4" onClick={e => e.stopPropagation()}>
+          {/* Generation Options */}
+          <div className="bg-white border border-[#E2DED7] rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[12px] font-semibold text-[#111218]">Generation Options</h3>
+              {isDemoMode && (
+                <span className="text-[9px] font-semibold text-[#8B5CF6] bg-[#F3F0FF] px-1.5 py-0.5 rounded-full">Using organization standards</span>
+              )}
+            </div>
+            {(Object.keys(genOptions) as (keyof typeof genOptions)[]).map(key => (
+              <div key={key} className="relative flex items-center justify-between py-2 border-b border-[#F4F2EE] last:border-0">
+                <span className="text-[12px] text-[#6B6B7E]">{key}</span>
+                <button
+                  onClick={() => setOpenOption(openOption === key ? null : key)}
+                  className="flex items-center gap-1 text-[12px] font-medium text-[#111218] hover:text-[#5B5BD6] transition-colors"
+                >
+                  {genOptions[key]}
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                {openOption === key && (
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-[#E2DED7] rounded-xl shadow-lg z-20 min-w-[180px] py-1 fade-in">
+                    {GEN_OPTION_CHOICES[key].map(choice => (
+                      <button
+                        key={choice}
+                        onClick={() => { setGenOptions(o => ({ ...o, [key]: choice })); setOpenOption(null) }}
+                        className={`w-full text-left px-3 py-2 text-[12px] transition-colors ${choice === genOptions[key] ? 'bg-[#EEEEFF] text-[#5B5BD6] font-medium' : 'text-[#111218] hover:bg-[#F9F8F6]'}`}
+                      >
+                        {choice}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Summary */}
+          <div className="bg-white border border-[#E2DED7] rounded-xl p-4 space-y-2">
+            <div className="flex items-center justify-between text-[12px]">
+              <span className="text-[#6B6B7E]">Sections</span>
+              <span className="font-medium text-[#111218]">{[1,2,3,4].filter(l => toc.some(t => t.level === l)).map(l => `${toc.filter(t => t.level === l).length} L${l}`).join(' · ')}</span>
+            </div>
+            <div className="flex items-center justify-between text-[12px]">
+              <span className="text-[#6B6B7E]">Est. words</span>
+              <span className="font-medium text-[#111218]">~{totalWords.toLocaleString()} words</span>
+            </div>
+            {hasGaps && (
+              <div className="flex items-center gap-2 pt-1">
+                <div className="w-1.5 h-1.5 rounded-full bg-[#D97706] flex-shrink-0" />
+                <span className="text-[11px] text-[#B45309]">1 section has incomplete source coverage</span>
+              </div>
+            )}
+          </div>
+
+          {/* Human approval notice */}
+          <div className="bg-[#F3F0FF] border border-[#DDD6FE] rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[#8B5CF6]">✦</span>
+              <span className="text-[12px] font-semibold text-[#4C1D95]">Human approval required</span>
+            </div>
+            <p className="text-[12px] text-[#5B21B6] leading-relaxed">
+              AI proposes. You decide. Nothing generates until you approve.
+            </p>
+          </div>
+
+          {/* CTA Buttons */}
+          <div className="space-y-2">
+            <button
+              onClick={handleApprove}
+              disabled={toc.length === 0}
+              className={`w-full flex items-center justify-center gap-2 text-[13px] font-medium py-2.5 rounded-lg transition-colors ${toc.length > 0 ? 'bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white' : 'bg-[#E2DED7] text-[#9898AB] cursor-not-allowed'}`}
+            >
+              Approve TOC &amp; Generate
+            </button>
+            <button
+              onClick={startRegen}
+              className="w-full flex items-center justify-center gap-2 border border-[#E2DED7] hover:bg-[#F9F8F6] text-[#6B6B7E] text-[13px] font-medium py-2 rounded-lg transition-colors"
+            >
+              Regenerate TOC
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Add Section Modal ── */}
+      {addModalOpen && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setAddModalOpen(false)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-[14px] font-semibold text-[#111218] mb-4">Add Section</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-[#9898AB] uppercase tracking-wide mb-1.5">Section Title</label>
+                <input
+                  autoFocus
+                  value={addTitle}
+                  onChange={e => setAddTitle(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addSection() }}
+                  placeholder="e.g. Advanced Configuration"
+                  className="w-full text-[13px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] focus:border-[#5B5BD6] rounded-lg px-3 py-2 outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-[#9898AB] uppercase tracking-wide mb-1.5">Type</label>
+                <div className="flex items-center gap-2 bg-[#F4F2EE] rounded-lg p-1">
+                  {(['top', 'sub'] as const).map(t => (
+                    <button
+                      key={t}
+                      onClick={() => setAddType(t)}
+                      className={`flex-1 py-1.5 rounded-md text-[12px] font-medium transition-all ${addType === t ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB]'}`}
+                    >
+                      {t === 'top' ? 'Top-level section' : 'Subsection'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {addType === 'sub' && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#9898AB] uppercase tracking-wide mb-1.5">Parent Section</label>
+                  <select
+                    value={addParent ?? ''}
+                    onChange={e => setAddParent(Number(e.target.value))}
+                    className="w-full text-[13px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] focus:border-[#5B5BD6] rounded-lg px-3 py-2 outline-none transition-colors"
+                  >
+                    <option value="">Choose parent…</option>
+                    {topLevelItems.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="block text-[11px] font-semibold text-[#9898AB] uppercase tracking-wide mb-1.5">Purpose <span className="font-normal normal-case">(optional)</span></label>
+                <input
+                  value={addDesc}
+                  onChange={e => setAddDesc(e.target.value)}
+                  placeholder="Brief description of this section's scope"
+                  className="w-full text-[13px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] focus:border-[#5B5BD6] rounded-lg px-3 py-2 outline-none transition-colors"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setAddModalOpen(false)} className="flex-1 py-2 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Cancel</button>
+              <button
+                onClick={addSection}
+                disabled={!addTitle.trim() || (addType === 'sub' && !addParent)}
+                className={`flex-1 py-2 text-[12px] font-medium rounded-lg transition-colors ${addTitle.trim() && (addType !== 'sub' || addParent) ? 'bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white' : 'bg-[#E2DED7] text-[#9898AB] cursor-not-allowed'}`}
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Regenerate Confirm Modal ── */}
+      {regenModal === 'confirm' && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setRegenModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-[15px] font-semibold text-[#111218] mb-2">Regenerate proposed structure?</h3>
+            <p className="text-[13px] text-[#6B6B7E] leading-relaxed mb-5">
+              AI will create a new proposal using the available sources, standards, and current project settings. Your current TOC will remain available until you accept the new proposal.
+            </p>
+            {regenLoading ? (
+              <div className="flex items-center gap-3 py-4 justify-center">
+                <div className="w-5 h-5 border-2 border-[#5B5BD6] border-t-transparent rounded-full animate-spin" />
+                <span className="text-[13px] text-[#6B6B7E]">Generating alternative TOC…</span>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <button onClick={() => setRegenModal(null)} className="flex-1 py-2.5 text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Cancel</button>
+                <button onClick={confirmRegen} className="flex-1 py-2.5 text-[13px] font-medium bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white rounded-lg transition-colors">Regenerate</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Regenerate Compare Modal ── */}
+      {regenModal === 'compare' && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setRegenModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-3xl w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-[#E2DED7] flex-shrink-0">
+              <h3 className="text-[14px] font-semibold text-[#111218]">TOC Comparison</h3>
+              <p className="text-[12px] text-[#6B6B7E] mt-0.5">Review the new proposal before applying. Your current TOC is preserved until you choose.</p>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              <div className="grid grid-cols-2 divide-x divide-[#E2DED7]">
+                <div className="p-5">
+                  <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-3">Current TOC</p>
+                  <div className="space-y-1">
+                    {toc.map(t => (
+                      <div key={t.id} className={`text-[12px] py-1 ${t.level === 2 ? 'ml-4 text-[#6B6B7E]' : 'font-medium text-[#111218]'}`}>{t.title}</div>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-5">
+                  <p className="text-[11px] font-semibold text-[#8B5CF6] uppercase tracking-wider mb-3 flex items-center gap-1.5"><span>✦</span> New Proposal</p>
+                  <div className="space-y-1">
+                    {ALT_TOC.map(t => (
+                      <div key={t.id} className={`text-[12px] py-1 ${t.level === 2 ? 'ml-4 text-[#6B6B7E]' : 'font-medium text-[#111218]'} ${t.hasGap ? 'text-[#D97706]' : ''}`}>
+                        {t.title}
+                        {t.hasGap && <span className="ml-1.5 text-[9px] bg-[#FEF3C7] text-[#D97706] px-1 py-0.5 rounded">gap</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-[#E2DED7] flex items-center gap-2 flex-shrink-0">
+              <button onClick={() => setRegenModal(null)} className="px-4 py-2 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Keep Current</button>
+              <button className="px-4 py-2 text-[12px] font-medium text-[#9898AB] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Review Differences</button>
+              <button onClick={applyAltToc} className="ml-auto px-5 py-2 text-[12px] font-medium bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white rounded-lg transition-colors">Use New Proposal</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Source Support Modal ── */}
+      {supportModal !== null && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setSupportModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[14px] font-semibold text-[#111218]">
+                Source Support — {toc.find(t => t.id === supportModal)?.title}
+              </h3>
+              <button onClick={() => setSupportModal(null)} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+            {supportInfo ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wide">Evidence Strength</span>
+                  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${supportInfo.strength === 'Strong' ? 'bg-[#DCFCE7] text-[#15803D]' : supportInfo.strength === 'Partial' ? 'bg-[#FEF3C7] text-[#B45309]' : 'bg-[#F4F2EE] text-[#6B6B7E]'}`}>
+                    {supportInfo.strength}
+                  </span>
+                </div>
+                {isDemoMode && supportInfo.sources.length > 0 ? (
+                  <div>
+                    <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wide mb-2">Supporting Sources</p>
+                    <div className="space-y-1">
+                      {supportInfo.sources.map(s => (
+                        <div key={s} className="flex items-center gap-2">
+                          <div className="w-3.5 h-3.5 rounded bg-[#8B5CF6] flex items-center justify-center flex-shrink-0"><span className="text-white text-[7px] font-bold">S</span></div>
+                          <span className="text-[12px] text-[#111218]">{s}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : !isDemoMode ? (
+                  <div className="bg-[#FEF3C7] border border-[#FDE68A] rounded-lg px-3 py-2">
+                    <p className="text-[12px] text-[#92400E]">Detailed source evidence is available in the production analysis engine.</p>
+                  </div>
+                ) : null}
+                {isDemoMode && supportInfo.concepts.length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wide mb-2">Related Concepts</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {supportInfo.concepts.map(c => <span key={c} className="text-[11px] font-medium text-[#5B5BD6] bg-[#EEEEFF] px-2 py-0.5 rounded-full">{c}</span>)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-[13px] text-[#6B6B7E]">No source evidence data for this section.</p>
+            )}
+            <button onClick={() => setSupportModal(null)} className="mt-5 w-full py-2 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Gap Action Modal ── */}
+      {gapModal !== null && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setGapModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-[#FEF3C7] flex items-center justify-center flex-shrink-0 mt-0.5">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L12.5 12H1.5L7 1.5z" stroke="#D97706" strokeWidth="1.2" strokeLinejoin="round"/><path d="M7 5.5v3M7 10v.5" stroke="#D97706" strokeWidth="1.2" strokeLinecap="round"/></svg>
+              </div>
+              <div>
+                <h3 className="text-[14px] font-semibold text-[#111218]">{toc.find(t => t.id === gapModal)?.title}</h3>
+                <p className="text-[12px] text-[#B45309] mt-0.5">Source information is incomplete for this topic.</p>
+              </div>
+            </div>
+            <p className="text-[12px] text-[#6B6B7E] leading-relaxed mb-4">
+              No source documents containing SSO/SAML configuration steps were found. You can add a source, keep the section as a placeholder, or remove it from the structure.
+            </p>
+            <div className="space-y-2">
+              <button className="w-full text-left px-3 py-2.5 text-[12px] font-medium text-[#5B5BD6] border border-[#5B5BD6] rounded-lg hover:bg-[#EEEEFF] transition-colors">Add Source</button>
+              <button onClick={() => { setToc(t => t.map(x => x.id === gapModal ? { ...x, hasGap: false } : x)); setGapModal(null) }} className="w-full text-left px-3 py-2.5 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Keep as placeholder</button>
+              <button onClick={() => { removeItem(gapModal); setGapModal(null) }} className="w-full text-left px-3 py-2.5 text-[12px] font-medium text-[#DC2626] border border-[#FEE2E2] rounded-lg hover:bg-[#FEE2E2] transition-colors">Remove from structure</button>
+              <button onClick={() => { setToc(t => t.map(x => x.id === gapModal ? { ...x, hasGap: false } : x)); setGapModal(null) }} className="w-full text-left px-3 py-2.5 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Mark Not Applicable</button>
+            </div>
+            <button onClick={() => setGapModal(null)} className="mt-3 w-full py-2 text-[12px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Approve Confirm Modal ── */}
+      {approveModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setApproveModal(false)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-[14px] font-semibold text-[#111218] mb-2">Incomplete source coverage</h3>
+            <p className="text-[13px] text-[#6B6B7E] leading-relaxed mb-5">
+              Some topics still have incomplete source coverage. You can continue and review them during authoring.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setApproveModal(false)} className="flex-1 py-2.5 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Return to TOC</button>
+              <button onClick={() => { setApproveModal(false); onNav('studio') }} className="flex-1 py-2.5 text-[12px] font-medium bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white rounded-lg transition-colors">Continue &amp; Generate</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Studio: Editable Outline / TOC Panel ─────────────────────────────────────
+function OutlineTocPanel({
+  toc, setToc, activeSection, onSelectSection, onOpenTopic, width, onCollapse,
+}: {
+  toc: TocItem[]
+  setToc: React.Dispatch<React.SetStateAction<TocItem[]>>
+  activeSection: number
+  onSelectSection: (id: number) => void
+  onOpenTopic: (id: number, title: string) => void
+  width: number
+  onCollapse: () => void
+}) {
+  const [tocSelected, setTocSelected] = useState<number | null>(null)
+  const [editing, setEditing] = useState<number | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+  const [justMoved, setJustMoved] = useState<number | null>(null)
+  const [crossRefHint, setCrossRefHint] = useState<number | null>(null)
+  const [supportModal, setSupportModal] = useState<number | null>(null)
+  const [addModalOpen, setAddModalOpen] = useState(false)
+  const [addTitle, setAddTitle] = useState('')
+  const [addParentId, setAddParentId] = useState<number | null>(null)
+  const [moveModal, setMoveModal] = useState<number | null>(null)
+  const [moveTarget, setMoveTarget] = useState<number | null>(null)
+  const [dragId, setDragId] = useState<number | null>(null)
+  const [dragOver, setDragOver] = useState<number | null>(null)
+
+  const flash = (id: number) => { setJustMoved(id); setTimeout(() => setJustMoved(null), 900) }
+  const showCrossRef = () => {
+    const count = Math.floor(Math.random() * 3) + 1
+    setCrossRefHint(count)
+    setTimeout(() => setCrossRefHint(null), 3500)
+  }
+
+  const removeItem = (id: number) => {
+    setToc(prev => {
+      const toRemove = new Set<number>([id])
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const item of prev) {
+          if (item.parentId !== undefined && toRemove.has(item.parentId) && !toRemove.has(item.id)) { toRemove.add(item.id); changed = true }
+        }
+      }
+      return prev.filter(x => !toRemove.has(x.id))
+    })
+    if (tocSelected === id) setTocSelected(null)
+  }
+
+  const commitEdit = (id: number) => {
+    if (editValue.trim()) setToc(t => t.map(x => x.id === id ? { ...x, title: editValue.trim() } : x))
+    setEditing(null)
+  }
+
+  const promoteItem = (id: number) => {
+    setToc(prev => {
+      const idx = prev.findIndex(x => x.id === id)
+      if (idx === -1) return prev
+      const item = prev[idx]
+      if (item.level === 1) return prev
+      const newLevel = (item.level - 1) as 1 | 2 | 3 | 4
+      let newParent: number | undefined
+      if (newLevel > 1) { for (let i = idx - 1; i >= 0; i--) { if (prev[i].level === newLevel - 1) { newParent = prev[i].id; break } } }
+      return prev.map((x, i) => i === idx ? { ...x, level: newLevel, parentId: newParent } : x)
+    })
+    flash(id); showCrossRef()
+  }
+
+  const demoteItem = (id: number) => {
+    setToc(prev => {
+      const idx = prev.findIndex(x => x.id === id)
+      if (idx === -1) return prev
+      const item = prev[idx]
+      if (item.level >= 4) return prev
+      const newLevel = (item.level + 1) as 2 | 3 | 4
+      let newParent: number | undefined
+      for (let i = idx - 1; i >= 0; i--) { if (prev[i].level === item.level) { newParent = prev[i].id; break } }
+      if (newParent === undefined) return prev
+      return prev.map((x, i) => i === idx ? { ...x, level: newLevel, parentId: newParent } : x)
+    })
+    flash(id); showCrossRef()
+  }
+
+  const canPromote = (id: number) => { const item = toc.find(x => x.id === id); return item ? item.level > 1 : false }
+  const canDemote = (id: number) => {
+    const item = toc.find(x => x.id === id)
+    if (!item || item.level >= 4) return false
+    const idx = toc.findIndex(x => x.id === id)
+    return toc.slice(0, idx).some(x => x.level === item.level && x.id !== id)
+  }
+
+  const addSection = () => {
+    if (!addTitle.trim()) return
+    const newId = Math.max(...toc.map(t => t.id)) + 1
+    const parentItem = addParentId !== null ? toc.find(t => t.id === addParentId) : null
+    const newLevel = (parentItem ? Math.min(parentItem.level + 1, 4) : 1) as 1 | 2 | 3 | 4
+    const newItem: TocItem = { id: newId, title: addTitle.trim(), level: newLevel, words: 300, parentId: addParentId ?? undefined, isNew: true }
+    setToc(prev => {
+      if (addParentId === null) return [...prev, newItem]
+      const revIdx = [...prev].reverse().findIndex(x => x.id === addParentId || x.parentId === addParentId)
+      const insertAt = revIdx === -1 ? prev.length : prev.length - revIdx
+      const arr = [...prev]; arr.splice(insertAt, 0, newItem); return arr
+    })
+    setAddModalOpen(false); setAddTitle(''); setAddParentId(null)
+  }
+
+  const applyMove = () => {
+    if (moveModal === null) return
+    const parentItem = moveTarget !== null ? toc.find(x => x.id === moveTarget) : null
+    const newLevel = (parentItem ? Math.min(parentItem.level + 1, 4) : 1) as 1 | 2 | 3 | 4
+    setToc(prev => prev.map(x => x.id === moveModal ? { ...x, level: newLevel, parentId: moveTarget ?? undefined } : x))
+    setMoveModal(null); setMoveTarget(null); flash(moveModal); showCrossRef()
+  }
+
+  const handleDragEnd = () => {
+    if (dragId !== null && dragOver !== null && dragId !== dragOver) {
+      setToc(prev => {
+        const arr = [...prev]
+        const fromIdx = arr.findIndex(x => x.id === dragId)
+        const toIdx = arr.findIndex(x => x.id === dragOver)
+        if (fromIdx === -1 || toIdx === -1) return prev
+        const [item] = arr.splice(fromIdx, 1)
+        arr.splice(toIdx, 0, item)
+        return arr
+      })
+      flash(dragId)
+    }
+    setDragId(null); setDragOver(null)
+  }
+
+  const toggleCollapse = (id: number) => {
+    setCollapsed(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+  }
+
+  const visibleItems = toc.filter(item => {
+    let pid: number | undefined = item.parentId
+    while (pid !== undefined) {
+      if (collapsed.has(pid)) return false
+      pid = toc.find(x => x.id === pid)?.parentId
+    }
+    return true
+  })
+
+  const hasChildren = (id: number) => toc.some(x => x.parentId === id)
+
+  const ownDescendants = (id: number): Set<number> => {
+    const s = new Set<number>([id]); let changed = true
+    while (changed) { changed = false; for (const item of toc) { if (item.parentId !== undefined && s.has(item.parentId) && !s.has(item.id)) { s.add(item.id); changed = true } } }
+    return s
+  }
+  const moveTargetOptions = moveModal !== null ? toc.filter(x => !ownDescendants(moveModal).has(x.id) && x.level < 4) : []
+
+  const supportInfo = supportModal !== null ? SECTION_SUPPORT[supportModal] : null
+  const unresolvedGaps = toc.filter(t => t.hasGap).length
+
+  const renderTree = () => (
+    <div className="p-1">
+      {visibleItems.map(item => {
+        const isActive = activeSection === item.id
+        const isEditing = editing === item.id
+        const isFlashing = justMoved === item.id
+        const isDragTarget = dragOver === item.id && dragId !== item.id
+        const hasKids = hasChildren(item.id)
+        const isCollapsed = collapsed.has(item.id)
+        const canProm = canPromote(item.id)
+        const canDem = canDemote(item.id)
+        const support = SECTION_SUPPORT[item.id]
+        const indentCls = item.level === 2 ? 'pl-4' : item.level === 3 ? 'pl-7' : item.level === 4 ? 'pl-10' : ''
+
+        return (
+          <div
+            key={item.id}
+            draggable
+            onDragStart={e => { e.stopPropagation(); setDragId(item.id) }}
+            onDragEnd={handleDragEnd}
+            onDragOver={e => { e.preventDefault(); setDragOver(item.id) }}
+            onClick={e => { e.stopPropagation(); onSelectSection(item.id); setTocSelected(item.id) }}
+            onDoubleClick={e => { e.stopPropagation(); onOpenTopic(item.id, item.title) }}
+            title={`${item.title} — double-click to open`}
+            className={`group relative flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer transition-all select-none ${indentCls}
+              ${isDragTarget ? 'border-t-2 border-[#5B5BD6]' : ''}
+              ${isFlashing ? 'bg-[#DCFCE7]' : isActive ? 'bg-[#EEEEFF]' : 'hover:bg-[#F9F8F6]'}
+            `}
+          >
+            {/* Drag grip */}
+            <div className="text-[#D8D4CE] opacity-0 group-hover:opacity-100 cursor-grab flex-shrink-0 text-[10px] leading-none">⠿</div>
+
+            {/* Collapse toggle */}
+            <div className="w-3 flex-shrink-0 flex items-center justify-center">
+              {hasKids ? (
+                <button onClick={e => { e.stopPropagation(); toggleCollapse(item.id) }} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.15s' }}>
+                    <path d="M1 3l3 3 3-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+              ) : <div className="w-3" />}
+            </div>
+
+            {/* Level dot */}
+            {item.level === 1 ? <div className="w-1.5 h-1.5 rounded-sm bg-[#5B5BD6] flex-shrink-0" />
+              : item.level === 2 ? <div className="w-1.5 h-1.5 rounded-sm border border-[#9898AB] flex-shrink-0" />
+              : item.level === 3 ? <div className="w-1 h-1 rounded-full border border-[#C8C6C0] flex-shrink-0" />
+              : <div className="w-1 h-1 rounded-full bg-[#E2DED7] flex-shrink-0" />
+            }
+
+            {/* Title */}
+            {isEditing ? (
+              <input autoFocus value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                onBlur={() => commitEdit(item.id)}
+                onKeyDown={e => { if (e.key === 'Enter') commitEdit(item.id); if (e.key === 'Escape') setEditing(null) }}
+                onClick={e => e.stopPropagation()}
+                className="flex-1 text-[11px] font-medium bg-[#EEEEFF] border border-[#5B5BD6] rounded px-1 py-0.5 outline-none min-w-0"
+              />
+            ) : (
+              <span className={`flex-1 truncate ${
+                item.level === 1 ? `text-[11px] font-semibold ${isActive ? 'text-[#5B5BD6]' : 'text-[#111218]'}`
+                : item.level === 2 ? `text-[11px] font-medium ${isActive ? 'text-[#5B5BD6]' : 'text-[#3D3D4E]'}`
+                : `text-[10px] ${isActive ? 'text-[#5B5BD6]' : 'text-[#6B6B7E]'}`
+              }`}>
+                {item.title}
+                {item.isNew && <span className="ml-1 text-[8px] font-semibold text-[#5B5BD6] bg-[#EEEEFF] px-1 py-px rounded-full">new</span>}
+                {isCollapsed && hasKids && <span className="ml-1 text-[9px] text-[#C8C6C0]">({toc.filter(x => x.parentId === item.id).length})</span>}
+              </span>
+            )}
+
+            {/* Source status */}
+            {item.hasGap ? (
+              <button onClick={e => { e.stopPropagation(); setSupportModal(item.id) }}
+                title="Unresolved source gap" className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-[#FEF3C7] flex items-center justify-center hover:bg-[#FDE68A] transition-colors">
+                <svg width="6" height="6" viewBox="0 0 6 6" fill="none"><path d="M3 0.5L5.5 5.5H0.5L3 0.5z" stroke="#D97706" strokeWidth="0.8" strokeLinejoin="round"/></svg>
+              </button>
+            ) : support && support.strength !== 'Strong' ? (
+              <button onClick={e => { e.stopPropagation(); setSupportModal(item.id) }}
+                title={`Source support: ${support.strength}`}
+                className="flex-shrink-0 w-1.5 h-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ background: support.strength === 'Partial' ? '#D97706' : '#C8C6C0' }} />
+            ) : null}
+
+            {/* Contextual actions on hover */}
+            {!isEditing && (
+              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-0.5">
+                <button onClick={e => { e.stopPropagation(); if (canProm) promoteItem(item.id) }}
+                  disabled={!canProm} title="Promote"
+                  className={`w-4 h-4 rounded flex items-center justify-center transition-colors ${canProm ? 'text-[#C8C6C0] hover:text-[#16A34A] hover:bg-[#DCFCE7]' : 'text-[#E2DED7] cursor-not-allowed'}`}>
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 6V2M2 4l2-2 2 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                <button onClick={e => { e.stopPropagation(); if (canDem) demoteItem(item.id) }}
+                  disabled={!canDem} title={item.level >= 4 ? 'Max depth' : 'Demote'}
+                  className={`w-4 h-4 rounded flex items-center justify-center transition-colors ${canDem ? 'text-[#C8C6C0] hover:text-[#5B5BD6] hover:bg-[#EEEEFF]' : 'text-[#E2DED7] cursor-not-allowed'}`}>
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 2v4M2 4l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                <button onClick={e => { e.stopPropagation(); setEditing(item.id); setEditValue(item.title) }}
+                  title="Rename"
+                  className="w-4 h-4 rounded text-[#C8C6C0] hover:text-[#5B5BD6] hover:bg-[#EEEEFF] flex items-center justify-center transition-colors">
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M5 1.5l1.5 1.5L2.5 7H1V5.5L5 1.5z" stroke="currentColor" strokeWidth="0.9" strokeLinejoin="round"/></svg>
+                </button>
+                {item.level < 4 && (
+                  <button onClick={e => { e.stopPropagation(); setAddParentId(item.id); setAddTitle(''); setAddModalOpen(true) }}
+                    title="Add child topic"
+                    className="w-4 h-4 rounded text-[#C8C6C0] hover:text-[#8B5CF6] hover:bg-[#F3F0FF] flex items-center justify-center transition-colors">
+                    <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 1v6M1 4h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                  </button>
+                )}
+                <button onClick={e => { e.stopPropagation(); setMoveModal(item.id); setMoveTarget(item.parentId ?? null) }}
+                  title="Move to…"
+                  className="w-4 h-4 rounded text-[#C8C6C0] hover:text-[#6B6B7E] hover:bg-[#F4F2EE] flex items-center justify-center transition-colors">
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4h6M5 2l2 2-2 2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                <button onClick={e => { e.stopPropagation(); removeItem(item.id) }}
+                  title="Delete"
+                  className="w-4 h-4 rounded text-[#C8C6C0] hover:text-[#DC2626] hover:bg-[#FEE2E2] flex items-center justify-center transition-colors">
+                  <svg width="6" height="6" viewBox="0 0 6 6" fill="none"><path d="M1 1l4 4M5 1L1 5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+      {/* Add top-level */}
+      <button onClick={() => { setAddParentId(null); setAddTitle(''); setAddModalOpen(true) }}
+        className="w-full flex items-center gap-1.5 text-[#C8C6C0] hover:text-[#5B5BD6] hover:bg-[#F4F2EE] rounded-md transition-colors mt-1 px-2 py-1 text-[10px]">
+        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 1v6M1 4h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+        Add topic
+      </button>
+    </div>
+  )
+
+  return (
+    <>
+      {/* ── Sidebar panel ── */}
+      <aside
+        className="flex-shrink-0 bg-white flex flex-col overflow-hidden"
+        style={{ width }}
+      >
+        {/* Header */}
+        <div className="px-3 py-2.5 border-b border-[#E2DED7] flex items-center gap-1.5">
+          <span className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wider flex-1">Outline</span>
+          {crossRefHint !== null && (
+            <div className="flex items-center gap-1 text-[9px] text-[#D97706] fade-in">
+              <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 0.5L7.5 7.5H0.5z" stroke="currentColor" strokeWidth="0.9" strokeLinejoin="round"/></svg>
+              {crossRefHint} refs
+            </div>
+          )}
+          <button onClick={() => { setAddParentId(null); setAddTitle(''); setAddModalOpen(true) }}
+            title="Add topic"
+            className="w-5 h-5 rounded hover:bg-[#EEEEFF] flex items-center justify-center text-[#C8C6C0] hover:text-[#5B5BD6] transition-colors">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+          </button>
+          <button onClick={onCollapse}
+            title="Hide outline"
+            className="w-5 h-5 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#C8C6C0] hover:text-[#6B6B7E] transition-colors">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5h6M2 3h6M2 7h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+          </button>
+        </div>
+        {/* Tree */}
+        <div className="flex-1 overflow-y-auto py-1 overflow-x-hidden" onClick={() => setTocSelected(null)}>
+          {renderTree()}
+        </div>
+      </aside>
+
+      {/* ── Shared Modals ── */}
+      {addModalOpen && (
+        <div className="fixed inset-0 bg-black/25 z-[60] flex items-center justify-center p-4 fade-in" onClick={() => setAddModalOpen(false)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-[14px] font-semibold text-[#111218] mb-1">
+              {addParentId !== null ? `Add child topic` : 'Add top-level topic'}
+            </h3>
+            {addParentId !== null && (
+              <p className="text-[11px] text-[#9898AB] mb-3">
+                Parent: <span className="font-medium text-[#6B6B7E]">{toc.find(t=>t.id===addParentId)?.title}</span>
+                <span className="ml-2 text-[#8B5CF6]">→ Level {Math.min((toc.find(t=>t.id===addParentId)?.level ?? 0) + 1, 4)}</span>
+              </p>
+            )}
+            <input autoFocus value={addTitle} onChange={e => setAddTitle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') addSection() }}
+              placeholder="Topic title"
+              className="w-full text-[13px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] focus:border-[#5B5BD6] rounded-lg px-3 py-2 outline-none transition-colors mb-4"
+            />
+            <div className="flex gap-2">
+              <button onClick={() => setAddModalOpen(false)} className="flex-1 py-2 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Cancel</button>
+              <button onClick={addSection} disabled={!addTitle.trim()}
+                className={`flex-1 py-2 text-[12px] font-medium rounded-lg transition-colors ${addTitle.trim() ? 'bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white' : 'bg-[#E2DED7] text-[#9898AB] cursor-not-allowed'}`}>
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {moveModal !== null && (
+        <div className="fixed inset-0 bg-black/25 z-[60] flex items-center justify-center p-4 fade-in" onClick={() => setMoveModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-[14px] font-semibold text-[#111218] mb-1">Move topic</h3>
+            <p className="text-[12px] text-[#6B6B7E] mb-4">Choose a new parent, or place at the top level.</p>
+            <div className="space-y-0.5 max-h-60 overflow-y-auto mb-4">
+              <button onClick={() => setMoveTarget(null)}
+                className={`w-full text-left px-3 py-2 rounded-lg text-[12px] transition-colors ${moveTarget === null ? 'bg-[#EEEEFF] text-[#5B5BD6] font-medium' : 'hover:bg-[#F9F8F6] text-[#111218]'}`}>
+                Top level
+              </button>
+              {moveTargetOptions.map(t => (
+                <button key={t.id} onClick={() => setMoveTarget(t.id)}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-[12px] transition-colors
+                    ${t.level === 2 ? 'pl-6' : t.level === 3 ? 'pl-9' : ''}
+                    ${moveTarget === t.id ? 'bg-[#EEEEFF] text-[#5B5BD6] font-medium' : 'hover:bg-[#F9F8F6] text-[#111218]'}`}>
+                  {t.title}
+                  <span className="ml-2 text-[10px] text-[#9898AB]">child → L{Math.min(t.level+1,4)}</span>
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setMoveModal(null)} className="flex-1 py-2 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Cancel</button>
+              <button onClick={applyMove} className="flex-1 py-2 text-[12px] font-medium bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white rounded-lg transition-colors">Move</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {supportModal !== null && (
+        <div className="fixed inset-0 bg-black/25 z-[60] flex items-center justify-center p-4 fade-in" onClick={() => setSupportModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[13px] font-semibold text-[#111218]">Source Support</h3>
+              <button onClick={() => setSupportModal(null)} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2L2 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+            <p className="text-[12px] font-medium text-[#111218] mb-3">{toc.find(t=>t.id===supportModal)?.title}</p>
+            {supportInfo ? (
+              <>
+                <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold mb-3 ${
+                  supportInfo.strength === 'Strong' ? 'bg-[#DCFCE7] text-[#15803D]' : supportInfo.strength === 'Partial' ? 'bg-[#FEF3C7] text-[#B45309]' : 'bg-[#F4F2EE] text-[#9898AB]'
+                }`}>{supportInfo.strength} support</div>
+                {supportInfo.sources.length > 0 && (
+                  <div className="space-y-1">
+                    {supportInfo.sources.map(s => (
+                      <div key={s} className="flex items-center gap-2 text-[11px] text-[#6B6B7E]">
+                        <div className="w-1.5 h-1.5 rounded-full bg-[#16A34A] flex-shrink-0" />{s}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-[12px] text-[#D97706]">Unresolved source gap — no supporting documents found.</p>
+            )}
+            <button onClick={() => setSupportModal(null)} className="w-full mt-4 py-2 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Close</button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ── Screen: Studio ────────────────────────────────────────────────────────────
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
+  const [mode, setMode] = useState<StudioMode>('author')
+  const [outlineOpen, setOutlineOpen] = useState(true)
+  const [tocWidth, setTocWidth] = useState(260)
+  const [activeSection, setActiveSection] = useState(1)
+  const [activeTopicId, setActiveTopicId] = useState<number | null>(null)
+
+  // Open a topic in the canvas (on double-click)
+  const openTopic = (topicId: number, topicTitle: string) => {
+    // Save current topic's blocks into central state
+    if (activeTopicId !== null && onTopicContentChange) {
+      onTopicContentChange({ ...(topicContent ?? {}), [String(activeTopicId)]: docBlocks })
+    }
+    // Load or create blocks for the new topic — flag as hydration so sync effect is skipped for this load
+    isHydratingTopicRef.current = true
+    const existing = (topicContent ?? {})[String(topicId)]
+    if (existing) {
+      setDocBlocks(existing)
+    } else {
+      setDocBlocks([{ id: `${topicId}-h1`, type: 'h1', content: topicTitle }])
+    }
+    // Clear hydration flag after React flushes the setState
+    setTimeout(() => { isHydratingTopicRef.current = false }, 0)
+    setActiveTopicId(topicId)
+    setActiveSection(topicId)
+    setFocusedBlockId(null)
+    setTitleSuggestions([])
+    setTopicAiContent(null)
+    setTopicAiWarning(null)
+    setTopicMode('choose')
+    setTopicExtraSources([])
+  }
+
+  // Suggest titles based on the style of existing topic titles
+  const suggestTitles = (raw: string) => {
+    if (titleSugTimerRef.current) clearTimeout(titleSugTimerRef.current)
+    if (raw.trim().length < 3) { setTitleSuggestions([]); return }
+    titleSugTimerRef.current = setTimeout(() => {
+      setTitleSugLoading(true)
+      setTimeout(() => {
+        const existing = studioToc.filter(t => t.id !== activeTopicId).map(t => t.title)
+        // Detect style: sentence-case, title-case, numbered, verb-first
+        const numbered = existing.filter(t => /^\d+\./.test(t)).length > existing.length / 2
+        const verbFirst = ['Configure', 'Install', 'Create', 'Manage', 'Set Up', 'Use', 'Enable', 'Review', 'Edit', 'Add', 'Remove']
+        const keyword = raw.trim().replace(/^\d+[\.\s]+/, '').replace(/^(how to |about |the |a |an )/i, '')
+        const capitalized = keyword.charAt(0).toUpperCase() + keyword.slice(1).toLowerCase()
+        const suggestions: string[] = []
+        if (numbered) {
+          const nextNum = (existing.filter(t => /^\d+\./.test(t)).length + 1)
+          suggestions.push(`${nextNum}. ${capitalized}`)
+          suggestions.push(`${nextNum}. ${capitalized} Overview`)
+          suggestions.push(`${nextNum}. Getting Started with ${capitalized}`)
+        } else {
+          const verb = verbFirst.find(v => capitalized.toLowerCase().startsWith(v.toLowerCase())) ?? 'Configure'
+          suggestions.push(capitalized)
+          suggestions.push(`${capitalized} Overview`)
+          suggestions.push(`${verb} ${capitalized}`)
+        }
+        setTitleSuggestions([...new Set(suggestions)].slice(0, 3))
+        setTitleSugLoading(false)
+      }, 800)
+    }, 400)
+  }
+
+  // Generate content from sources for the active new topic
+  const generateTopicContent = (title: string) => {
+    setContentSugLoading(true)
+    setTopicAiContent(null)
+    setTopicAiWarning(null)
+    setTimeout(() => {
+      if (!isDemoMode) {
+        setTopicAiContent(null)
+        setTopicAiWarning('Source-based content generation is not yet available for this project. Write this topic manually or connect a source analysis pipeline.')
+        setContentSugLoading(false)
+        return
+      }
+      // Demo-only: Nexus synthetic source map
+      const t = title.toLowerCase()
+      const sourceMap: Record<string, string> = {
+        'install': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§2)**: Navigate to nexus.example.com and sign in with your organization credentials. Accept the workspace invitation, then complete the setup wizard.',
+        'dashboard': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§4)** and **UX_Research_Findings_Q3.docx (p.8)**: The dashboard provides a real-time view of active projects, pending tasks, and team notifications. 83% of tested users preferred the compact card view.',
+        'authentication': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§7)**: SSO is supported via SAML 2.0 and OAuth 2.0. Administrators configure identity providers in Security settings.',
+        'notification': 'Based on **Support_Ticket_Analysis_Oct.pdf**: Notifications are delivered in-app and by email. Mute specific projects or channels in Profile → Notifications.',
+        'api': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§14)**: REST API uses OAuth 2.0. Base URL: https://api.nexus.example.com/v1. Rate limit: 1000 req/min.',
+        'team': 'Based on **UX_Research_Findings_Q3.docx (p.12)**: Invite members by email and assign Owner, Editor, or Viewer roles. Real-time collaboration is supported.',
+        'troubleshoot': 'Based on **Support_Ticket_Analysis_Oct.pdf**: Clear browser cache and cookies. Verify SSO configuration. Contact support@nexus.example.com for escalations.',
+      }
+      const match = Object.entries(sourceMap).find(([key]) => t.includes(key))
+      if (match) {
+        setTopicAiContent(match[1])
+        setTopicAiWarning(null)
+      } else {
+        setTopicAiContent(null)
+        setTopicAiWarning(`No content found in source files for "${title}". Consider adding a relevant source document or writing this topic manually.`)
+      }
+      setContentSugLoading(false)
+    }, 1400)
+  }
+
+  const TOC_DEFAULT_WIDTH = 260
+  const TOC_MIN_WIDTH = 220
+  const TOC_MAX_WIDTH = 520
+  const separatorRef = useRef<HTMLDivElement>(null)
+  const isDraggingRef = useRef(false)
+  const dragStartXRef = useRef(0)
+  const dragStartWidthRef = useRef(0)
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault()
+    isDraggingRef.current = true
+    dragStartXRef.current = e.clientX
+    dragStartWidthRef.current = tocWidth
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const onMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return
+      const delta = ev.clientX - dragStartXRef.current
+      const next = Math.min(TOC_MAX_WIDTH, Math.max(TOC_MIN_WIDTH, dragStartWidthRef.current + delta))
+      setTocWidth(next)
+    }
+    const onUp = () => {
+      isDraggingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const resetWidth = () => setTocWidth(TOC_DEFAULT_WIDTH)
+  const [aiPopover, setAiPopover] = useState<{ visible: boolean; x: number; y: number; text: string } | null>(null)
+  const [aiAction, setAiAction] = useState<string | null>(null)
+  const [aiResult, setAiResult] = useState<string | null>(null)
+  const [sourceRef, setSourceRef] = useState(false)
+  // New-topic AI assistance
+  const [titleSuggestions, setTitleSuggestions] = useState<string[]>([])
+  const [titleSugLoading, setTitleSugLoading] = useState(false)
+  const [contentSugLoading, setContentSugLoading] = useState(false)
+  const [topicAiContent, setTopicAiContent] = useState<string | null>(null)
+  const [topicAiWarning, setTopicAiWarning] = useState<string | null>(null)
+  const titleSugTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Guided mode for empty new topics: 'choose' | 'write' | 'ai' | 'sources'
+  const [topicMode, setTopicMode] = useState<'choose' | 'write' | 'ai' | 'sources'>('choose')
+  const [topicExtraSources, setTopicExtraSources] = useState<string[]>([]) // extra source names added in-topic
+  const topicSourceFileRef = useRef<HTMLInputElement>(null)
+  const canvasRef = useRef<HTMLDivElement>(null)
+
+  // --- Authoring state ---
+  const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved')
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [showInsertMenu, setShowInsertMenu] = useState(false)
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
+  const [showConditions, setShowConditions] = useState(false)
+  const [showManageConditions, setShowManageConditions] = useState(false)
+  const [tablePickerOpen, setTablePickerOpen] = useState(false)
+  const [tablePickerHover, setTablePickerHover] = useState<[number, number]>([0, 0])
+  const [conditionsBlockId, setConditionsBlockId] = useState<string | null>(null)
+  const [selectedCalloutId, setSelectedCalloutId] = useState<string | null>(null)
+  const [inTableBlockId, setInTableBlockId] = useState<string | null>(null)
+  const [linkModalOpen, setLinkModalOpen] = useState(false)
+  const [linkUrl, setLinkUrl] = useState('')
+  const [showFind, setShowFind] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [replaceQuery, setReplaceQuery] = useState('')
+  const [findScope, setFindScope] = useState<'topic' | 'project'>('topic')
+  const [findMatchIndex, setFindMatchIndex] = useState(0)
+  const [showVarsModal, setShowVarsModal] = useState(false)
+  const [showSnippetsModal, setShowSnippetsModal] = useState(false)
+  const [showCommentPanel, setShowCommentPanel] = useState(false)
+  const [newCommentText, setNewCommentText] = useState('')
+  const [commentAnchor, setCommentAnchor] = useState('')
+  const insertMenuRef = useRef<HTMLDivElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+
+  // Multi-block selection
+  const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set())
+  const [snippetFromBlocksModal, setSnippetFromBlocksModal] = useState(false)
+  const [snippetName, setSnippetName] = useState('')
+
+  // Text → Variable
+  const [textVarModal, setTextVarModal] = useState<{ text: string; blockId: string } | null>(null)
+  const [textVarName, setTextVarName] = useState('')
+  const [textVarReplaceAll, setTextVarReplaceAll] = useState(true)
+
+  // Block type conversion
+  const [convertMenuBlockId, setConvertMenuBlockId] = useState<string | null>(null)
+  const [pendingMediaBlockId, setPendingMediaBlockId] = useState<string | null>(null)
+  const savedRangeRef = useRef<Range | null>(null)
+  const findInputRef = useRef<HTMLInputElement>(null)
+
+  const docVariables = variables ?? []
+  const setDocVariables = (updater: Variable[] | ((prev: Variable[]) => Variable[])) => {
+    if (!onVariablesChange) return
+    const next = typeof updater === 'function' ? updater(docVariables) : updater
+    onVariablesChange(next)
+  }
+  const [editingVar, setEditingVar] = useState<string | null>(null)
+
+  // ── Inline variable autocomplete ───────────────────────────────────────────
+  type VarPopover = { x: number; y: number; query: string; matches: Variable[] }
+  const [varPopover, setVarPopover] = useState<VarPopover | null>(null)
+  const [varPopoverIdx, setVarPopoverIdx] = useState(0)
+  const varPopoverRef = useRef<HTMLDivElement>(null)
+
+  const checkVarAutocomplete = () => {
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0) { setVarPopover(null); return }
+    const range = sel.getRangeAt(0)
+    const node = range.startContainer
+    if (node.nodeType !== Node.TEXT_NODE) { setVarPopover(null); return }
+    const text = (node.textContent ?? '').slice(0, range.startOffset)
+    // Find last word (from last space/start)
+    const word = text.split(/[\s\n]/).pop() ?? ''
+    if (word.length < 3) { setVarPopover(null); return }
+    const matches = docVariables.filter(v => v.value.toLowerCase().startsWith(word.toLowerCase()))
+    if (matches.length === 0) { setVarPopover(null); return }
+    const rect = range.getBoundingClientRect()
+    setVarPopover({ x: rect.left, y: rect.bottom + 4, query: word, matches })
+    setVarPopoverIdx(0)
+  }
+
+  const insertVariable = (v: Variable) => {
+    if (!varPopover) return
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0) return
+    const range = sel.getRangeAt(0)
+    const node = range.startContainer
+    if (node.nodeType !== Node.TEXT_NODE) return
+    // Delete the prefix word that was typed
+    const newRange = range.cloneRange()
+    newRange.setStart(node, range.startOffset - varPopover.query.length)
+    newRange.setEnd(node, range.startOffset)
+    newRange.deleteContents()
+    const token = document.createTextNode(v.value)
+    newRange.insertNode(token)
+    newRange.setStartAfter(token)
+    newRange.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(newRange)
+    setVarPopover(null)
+    triggerSave()
+  }
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (varPopoverRef.current && !varPopoverRef.current.contains(e.target as Node)) setVarPopover(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [])
+
+  // Returns true if the keydown was consumed by the autocomplete
+  const handleVarPopoverKey = (e: React.KeyboardEvent): boolean => {
+    if (!varPopover || varPopover.matches.length === 0) return false
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setVarPopoverIdx(i => (i + 1) % varPopover.matches.length)
+      return true
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setVarPopoverIdx(i => (i - 1 + varPopover.matches.length) % varPopover.matches.length)
+      return true
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      insertVariable(varPopover.matches[varPopoverIdx])
+      return true
+    }
+    if (e.key === 'Escape') {
+      setVarPopover(null)
+      return true
+    }
+    return false
+  }
+
+  // Snippets, conditions, comments from central App state
+  const localSnippets = snippets ?? (isDemoMode ? [
+    { id: 's1', name: 'Standard Login Prerequisite', content: 'You must be logged in to Nexus Platform to perform this task.' },
+    { id: 's2', name: 'Support Contact Note', content: 'For additional assistance, contact Nexus Support at support@nexus.example.com.' },
+    { id: 's3', name: 'Legal Disclaimer', content: 'This documentation is for authorized users only. Unauthorized use is prohibited.' },
+  ] : [])
+  const setSnippets = (updater: Snippet[] | ((prev: Snippet[]) => Snippet[])) => {
+    const next = typeof updater === 'function' ? updater(localSnippets) : updater
+    onSnippetsChange?.(next)
+  }
+  const customConditions = conditionGroups ?? []
+  const setCustomConditions = (updater: ConditionGroup[] | ((prev: ConditionGroup[]) => ConditionGroup[])) => {
+    const next = typeof updater === 'function' ? updater(customConditions) : updater
+    onConditionGroupsChange?.(next)
+  }
+  const [newGroupName, setNewGroupName] = useState('')
+  const [newTagInputs, setNewTagInputs] = useState<Record<string, string>>({})
+  const localDocComments = docComments ?? []
+  const setDocComments = (updater: DocComment[] | ((prev: DocComment[]) => DocComment[])) => {
+    const next = typeof updater === 'function' ? updater(localDocComments) : updater
+    onDocCommentsChange?.(next)
+  }
+  const [selectedCommentBlockId, setSelectedCommentBlockId] = useState<string | null>(null)
+  const [pendingListFocusId, setPendingListFocusId] = useState<string | null>(null)
+  const listItemRefs = useRef<Record<string, HTMLElement | null>>({})
+  const [showAlignMenu, setShowAlignMenu] = useState(false)
+  const [showRefsMenu, setShowRefsMenu] = useState(false)
+  const [showAiMenu, setShowAiMenu] = useState(false)
+  const [showCrossRefModal, setShowCrossRefModal] = useState(false)
+  const [showDocStats, setShowDocStats] = useState(false)
+  const [showLangDir, setShowLangDir] = useState(false)
+  const [docDir, setDocDir] = useState<'ltr' | 'rtl' | 'auto'>('ltr')
+  const [docLang, setDocLang] = useState('English (US)')
+  const [showSpecialChars, setShowSpecialChars] = useState(false)
+  const [showCaseMenu, setShowCaseMenu] = useState(false)
+
+  const INITIAL_DOC_BLOCKS: DocBlock[] = isDemoMode ? [
+    { id: 'b1', type: 'h2', content: '1. Introduction' },
+    { id: 'b2', type: 'para', content: 'The Nexus Platform is an enterprise-grade project management and collaboration solution designed for distributed teams working on complex, multi-stakeholder initiatives.' },
+    { id: 'b3', type: 'para', content: 'This guide covers everything you need to know to use Nexus effectively — from initial setup through advanced project configuration and team coordination.' },
+    { id: 'b4', type: 'h2', content: '2. Getting Started' },
+    { id: 'b5', type: 'h3', content: '2.1 System Requirements' },
+    { id: 'b6', type: 'para', content: 'Before installing Nexus Platform, verify that your environment meets the following minimum requirements.' },
+    { id: 'b7', type: 'table', content: 'Requirements', tableData: {
+      hasHeader: true,
+      rows: [
+        ['Component', 'Requirement'],
+        ['Operating System', 'Windows 10/11, macOS 12+, Ubuntu 20.04+'],
+        ['Browser', 'Chrome 108+, Firefox 110+, or Edge 108+'],
+        ['Memory', '8 GB RAM minimum (16 GB recommended)'],
+        ['Network', '10 Mbps stable internet connection'],
+      ]
+    }},
+    { id: 'b8', type: 'h3', content: '2.2 Installation' },
+    { id: 'b9', type: 'para', content: 'Follow these steps to set up your Nexus workspace for the first time.' },
+    { id: 'b10', type: 'procedure', content: 'Initial Setup', procedureSteps: [
+      'Navigate to nexus.example.com and click Sign In.',
+      'Enter your organization credentials or use your SSO provider.',
+      'Accept the workspace invitation from your administrator.',
+      'Complete the onboarding setup wizard to configure your preferences.',
+    ]},
+    { id: 'b11', type: 'callout', content: 'Administrator credentials are required to complete initial workspace configuration. Contact your IT administrator if you do not receive an invitation email within 10 minutes.', calloutVariant: 'note' },
+    { id: 'b12', type: 'h2', content: '3. Dashboard Overview' },
+    { id: 'b13', type: 'para', content: 'The Nexus Dashboard is your central workspace. It provides an at-a-glance view of all active projects, recent activity, and team notifications.' },
+    { id: 'b14', type: 'para', content: 'When you first log in, you will see the main dashboard with your pinned projects and a summary of any items requiring your attention.' },
+    { id: 'b15', type: 'callout', content: 'Do not share your workspace URL with users outside your organization. Access controls apply at the workspace level.', calloutVariant: 'warning' },
+  ] : []
+
+  const [docBlocks, setDocBlocks] = useState<DocBlock[]>(INITIAL_DOC_BLOCKS)
+  const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null)
+  // Guard ref: set true during topic hydration load so the sync effect doesn't fire for the load itself
+  const isHydratingTopicRef = useRef(false)
+
+  // Keep parent ref in sync so PublishScreen can read current blocks
+  useEffect(() => { onDocBlocksChange?.(docBlocks) }, [docBlocks])
+
+  // Continuously sync active topic's blocks to central topicContent — do not wait for topic switch
+  useEffect(() => {
+    if (activeTopicId === null || isHydratingTopicRef.current) return
+    onTopicContentChange?.({ ...(topicContent ?? {}), [String(activeTopicId)]: docBlocks })
+  }, [docBlocks, activeTopicId])
+
+  const triggerSave = () => {
+    setSaveState('saving')
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => setSaveState('saved'), 1500)
+    onContentEdit?.()
+  }
+
+  const mkId = () => `b${Date.now()}`
+
+  const insertBlockAfter = (afterId: string, block: Omit<DocBlock, 'id'>) => {
+    recordHistory()
+    const newBlock = { ...block, id: mkId() }
+    setDocBlocks(prev => {
+      const idx = prev.findIndex(b => b.id === afterId)
+      const next = [...prev]
+      next.splice(idx + 1, 0, newBlock)
+      return next
+    })
+    setFocusedBlockId(newBlock.id)
+    triggerSave()
+    setTimeout(() => {
+      const el = document.getElementById(newBlock.id)?.querySelector('[contenteditable]') as HTMLElement | null
+      if (el) { el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(r) }
+    }, 30)
+    return newBlock.id
+  }
+
+  const deleteBlock = (id: string) => {
+    recordHistory()
+    setDocBlocks(prev => prev.filter(b => b.id !== id))
+    triggerSave()
+  }
+
+  const updateBlock = (id: string, patch: Partial<DocBlock>) => {
+    setDocBlocks(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b))
+    triggerSave()
+  }
+
+  const execFmt = (cmd: string, value?: string) => {
+    document.execCommand(cmd, false, value)
+    triggerSave()
+  }
+
+  // Block-level undo/redo history
+  const docBlocksRef = useRef<DocBlock[]>([])
+  docBlocksRef.current = docBlocks
+  const historyRef = useRef<{ past: DocBlock[][]; future: DocBlock[][] }>({ past: [], future: [] })
+  const recordHistory = () => {
+    const snap = [...docBlocksRef.current]
+    historyRef.current = { past: [...historyRef.current.past.slice(-49), snap], future: [] }
+  }
+  const undoBlocks = () => {
+    const { past, future } = historyRef.current
+    if (past.length === 0) { execFmt('undo'); return }
+    const prev = past[past.length - 1]
+    historyRef.current = { past: past.slice(0, -1), future: [docBlocksRef.current, ...future.slice(0, 49)] }
+    setDocBlocks(prev)
+    triggerSave()
+  }
+  const redoBlocks = () => {
+    const { past, future } = historyRef.current
+    if (future.length === 0) { execFmt('redo'); return }
+    const next = future[0]
+    historyRef.current = { past: [...past.slice(-49), docBlocksRef.current], future: future.slice(1) }
+    setDocBlocks(next)
+    triggerSave()
+  }
+
+  const checkInTable = useCallback(() => {
+    const sel = window.getSelection()
+    if (!sel?.anchorNode) { setInTableBlockId(null); return }
+    let node: Node | null = sel.anchorNode
+    while (node && node !== document.body) {
+      if ((node as HTMLElement).dataset?.blocktype === 'table') {
+        setInTableBlockId((node as HTMLElement).id || null)
+        return
+      }
+      node = node.parentNode
+    }
+    setInTableBlockId(null)
+  }, [])
+
+  const getFocusedBlockId = (): string | null => {
+    return focusedBlockId ?? (docBlocks.length > 0 ? docBlocks[docBlocks.length - 1].id : null)
+  }
+
+  const insertBlock = (type: DocBlockType, extra?: Partial<DocBlock>) => {
+    const afterId = getFocusedBlockId() ?? docBlocks[docBlocks.length - 1]?.id
+    if (!afterId) return
+    let defaults: Partial<DocBlock> = {}
+    if (type === 'callout') defaults = { calloutVariant: 'note', content: 'Enter content here.' }
+    else if (type === 'table') defaults = { tableData: { hasHeader: true, rows: [['Header 1', 'Header 2', 'Header 3'], ['', '', ''], ['', '', '']] }, content: '' }
+    else if (type === 'procedure') defaults = { content: 'Procedure Title', procedureSteps: ['Step 1', 'Step 2', 'Step 3'] }
+    else if (type === 'divider') defaults = { content: '' }
+    else if (type === 'code') defaults = { content: '// Enter code here' }
+    else if (type === 'quote') defaults = { content: 'Enter quotation here.' }
+    else if (type === 'media') defaults = { content: 'Figure caption', mediaType: 'image', caption: '' }
+    else if (type === 'list') defaults = { listItems: [{ id: `li${Date.now()}`, text: '', level: 1, type: 'bullet' }], content: '' }
+    else defaults = { content: 'New paragraph.' }
+    insertBlockAfter(afterId, { type, content: '', ...defaults, ...extra } as Omit<DocBlock, 'id'>)
+    setShowInsertMenu(false)
+    setTablePickerOpen(false)
+  }
+
+  // Shared Enter handler for heading/para blocks: Enter=new para, Shift+Enter=<br>
+  const handleBlockEnterKey = (e: React.KeyboardEvent, blockId: string, el: HTMLElement) => {
+    if (e.key !== 'Enter') return false
+    if (e.shiftKey) {
+      // Soft line break within same block
+      e.preventDefault()
+      document.execCommand('insertLineBreak')
+      return true
+    }
+    // Hard Enter: new paragraph block after this one
+    e.preventDefault()
+    const content = el.innerText
+    updateBlock(blockId, { content })
+    insertBlockAfter(blockId, { type: 'para', content: '' })
+    return true
+  }
+
+  // Convert text selection to a Variable and optionally replace all identical text across topics
+  const convertSelectionToVariable = () => {
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || !focusedBlockId) return
+    const text = sel.toString().trim()
+    if (!text) return
+    setTextVarModal({ text, blockId: focusedBlockId })
+    setTextVarName('')
+    setTextVarReplaceAll(true)
+  }
+
+  const commitTextVariable = () => {
+    if (!textVarModal || !textVarName.trim()) return
+    const { text } = textVarModal
+    const newVar: Variable = { id: `v${Date.now()}`, name: textVarName.trim(), value: text }
+    onVariablesChange?.([...(variables ?? []), newVar])
+    if (textVarReplaceAll) {
+      const esc = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const rx = new RegExp(esc, 'g')
+      setDocBlocks(prev => prev.map(b =>
+        typeof b.content === 'string' && b.content.includes(text)
+          ? { ...b, content: b.content.replace(rx, text) }
+          : b
+      ))
+      if (onTopicContentChange && topicContent) {
+        const next: Record<string, DocBlock[]> = {}
+        for (const tid of Object.keys(topicContent)) {
+          next[tid] = topicContent[tid].map(b =>
+            typeof b.content === 'string' && b.content.includes(text)
+              ? { ...b, content: b.content.replace(rx, text) }
+              : b
+          )
+        }
+        onTopicContentChange({ ...topicContent, ...next })
+      }
+    }
+    triggerSave()
+    setTextVarModal(null)
+    setTextVarName('')
+  }
+
+  // Save selected blocks as a new snippet
+  const saveBlocksAsSnippet = () => {
+    if (selectedBlockIds.size === 0 || !snippetName.trim()) return
+    const blocks = docBlocks.filter(b => selectedBlockIds.has(b.id))
+    const combined = blocks.map(b => b.content).filter(Boolean).join('\n\n')
+    setSnippets(prev => [...prev, { id: `s${Date.now()}`, name: snippetName.trim(), content: combined }])
+    setSelectedBlockIds(new Set())
+    setSnippetFromBlocksModal(false)
+    setSnippetName('')
+  }
+
+  // Convert a block to a different type
+  const convertBlock = (blockId: string, newType: DocBlockType) => {
+    recordHistory()
+    setDocBlocks(prev => prev.map(b => {
+      if (b.id !== blockId) return b
+      const base: DocBlock = { ...b, type: newType }
+      if (newType === 'list') base.listItems = [{ id: `li${Date.now()}`, text: b.content, level: 1, type: 'bullet' }]
+      if (newType === 'callout') { base.calloutVariant = 'note'; base.content = b.content || 'Enter content here.' }
+      if (newType === 'procedure') { base.procedureSteps = [b.content || 'Step 1']; base.content = 'Procedure' }
+      if (newType === 'code') base.content = b.content || '// code'
+      if (newType === 'quote') base.content = b.content || 'Quote'
+      return base
+    }))
+    setConvertMenuBlockId(null)
+    triggerSave()
+  }
+
+  const CALLOUT_STYLES: Record<CalloutVariant, { bg: string; border: string; label: string; labelColor: string; textColor: string }> = {
+    note:      { bg: 'bg-[#E0F2FE]', border: 'border-[#0EA5E9]', label: 'Note',      labelColor: 'text-[#075985]', textColor: 'text-[#0C4A6E]' },
+    tip:       { bg: 'bg-[#DCFCE7]', border: 'border-[#16A34A]', label: 'Tip',       labelColor: 'text-[#15803D]', textColor: 'text-[#14532D]' },
+    important: { bg: 'bg-[#F3F0FF]', border: 'border-[#7C3AED]', label: 'Important', labelColor: 'text-[#6D28D9]', textColor: 'text-[#4C1D95]' },
+    warning:   { bg: 'bg-[#FEF3C7]', border: 'border-[#D97706]', label: 'Warning',   labelColor: 'text-[#92400E]', textColor: 'text-[#78350F]' },
+    example:   { bg: 'bg-[#F9F8F6]', border: 'border-[#9898AB]', label: 'Example',   labelColor: 'text-[#6B6B7E]', textColor: 'text-[#3D3D4E]' },
+  }
+
+  const CONDITIONS = [
+    { group: 'Audience', values: ['Beginner', 'Advanced', 'Administrator'] },
+    { group: 'Platform', values: ['Web', 'Mobile'] },
+    { group: 'Edition', values: ['Standard', 'Enterprise'] },
+    { group: 'Language', values: ['English', 'Arabic'] },
+  ]
+
+  const studioToc = toc ?? []
+  const setStudioToc = (updater: TocItem[] | ((prev: TocItem[]) => TocItem[])) => {
+    const next = typeof updater === 'function' ? updater(studioToc) : updater
+    onTocChange?.(next)
+  }
+
+  const handleSelection = useCallback(() => {
+    const sel = window.getSelection()
+    if (sel && sel.toString().trim().length > 10 && canvasRef.current?.contains(sel.anchorNode ?? null)) {
+      try {
+        const range = sel.getRangeAt(0)
+        const rect = range.getBoundingClientRect()
+        setAiPopover({ visible: true, x: rect.left + rect.width / 2, y: rect.top - 8, text: sel.toString() })
+      } catch {}
+    } else {
+      setAiPopover(null)
+    }
+    checkInTable()
+  }, [checkInTable])
+
+  useEffect(() => {
+    document.addEventListener('selectionchange', handleSelection)
+    return () => document.removeEventListener('selectionchange', handleSelection)
+  }, [handleSelection])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        setShowFind(true)
+        setTimeout(() => findInputRef.current?.focus(), 50)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
+        e.preventDefault()
+        redoBlocks()
+      } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+        const inEditable = (document.activeElement as HTMLElement)?.isContentEditable
+        if (!inEditable || historyRef.current.past.length > 0) {
+          e.preventDefault()
+          undoBlocks()
+        }
+      }
+      if (e.key === 'Escape') {
+        setShowFind(false)
+        setShowInsertMenu(false)
+        setShowMoreMenu(false)
+        setShowConditions(false)
+        setShowAlignMenu(false)
+        setShowRefsMenu(false)
+        setShowAiMenu(false)
+        setShowSpecialChars(false)
+        setShowCaseMenu(false)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Focus newly created list items after state settles
+  useEffect(() => {
+    if (!pendingListFocusId) return
+    const el = listItemRefs.current[pendingListFocusId]
+    if (el) {
+      el.focus()
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      range.collapse(true)
+      window.getSelection()?.removeAllRanges()
+      window.getSelection()?.addRange(range)
+      setPendingListFocusId(null)
+    }
+  }, [pendingListFocusId, docBlocks])
+
+  const convertToList = (listType: 'bullet' | 'ordered') => {
+    const targetId = focusedBlockId ?? docBlocks[docBlocks.length - 1]?.id
+    if (!targetId) return
+    const block = docBlocks.find(b => b.id === targetId)
+    if (!block) return
+    recordHistory()
+
+    if (block.type === 'list') {
+      const allSame = (block.listItems ?? []).every(i => i.type === listType)
+      if (allSame) {
+        // Toggle off: convert items back to paragraphs
+        const newParas: DocBlock[] = (block.listItems ?? []).map(item => ({
+          id: `b${Date.now()}${Math.random().toString(36).slice(2,5)}`,
+          type: 'para',
+          content: item.text,
+          conditions: block.conditions,
+        }))
+        setDocBlocks(prev => {
+          const idx = prev.findIndex(b => b.id === targetId)
+          const next = [...prev]
+          next.splice(idx, 1, ...newParas)
+          return next
+        })
+      } else {
+        // Convert all items to new type
+        updateBlock(targetId, { listItems: (block.listItems ?? []).map(i => ({ ...i, type: listType })) })
+      }
+    } else if (['para', 'h1', 'h2', 'h3', 'h4'].includes(block.type)) {
+      // Convert paragraph/heading to list with one item
+      const newItemId = `li${Date.now()}`
+      setDocBlocks(prev => prev.map(b => b.id === targetId
+        ? { ...b, type: 'list', listItems: [{ id: newItemId, text: b.content, level: 1, type: listType }] }
+        : b
+      ))
+      setPendingListFocusId(newItemId)
+    } else {
+      // Insert new list block after focused block
+      const newItemId = `li${Date.now()}`
+      insertBlockAfter(targetId, { type: 'list', content: '', listItems: [{ id: newItemId, text: '', level: 1, type: listType }] })
+      setPendingListFocusId(newItemId)
+    }
+    triggerSave()
+  }
+
+  const runAiAction = (action: string) => {
+    // Save selection range before the modal opens and clears it
+    const sel = window.getSelection()
+    if (sel && sel.rangeCount > 0) {
+      savedRangeRef.current = sel.getRangeAt(0).cloneRange()
+    }
+    setAiAction(action)
+    setAiPopover(null)
+    setTimeout(() => {
+      const demoResults: Record<string, string> = isDemoMode ? {
+        'Improve': 'The Nexus Platform is an enterprise-grade solution for distributed teams managing complex, multi-stakeholder projects with precision and clarity.',
+        'Shorten': 'Nexus is an enterprise collaboration platform for complex projects.',
+        'Expand': 'The Nexus Platform represents a new paradigm in enterprise project management. Designed from the ground up for distributed teams, it unifies project tracking, stakeholder communication, document management, and real-time collaboration into a single, coherent workspace.',
+        'Convert to Steps': '1. Log in to your Nexus workspace.\n2. Navigate to the Dashboard.\n3. Select the project you want to manage.\n4. Use the sidebar to access project tools.',
+        'Convert to Bullets': '• Log in to your Nexus workspace\n• Navigate to the Dashboard\n• Select the project\n• Use the sidebar to access project tools',
+        'Simplify': 'Nexus helps teams work on big projects together, no matter where they are.',
+        'Summarize': 'Nexus Platform: enterprise project management for distributed teams.',
+        'Generate Example': 'Example: A project manager at Acme Corp uses Nexus to coordinate a 12-person team across three time zones, with all deliverables tracked and visible to stakeholders in real-time.',
+        'Check Terminology': '✓ All terms are consistent with the Nexus style guide. "workspace" used correctly throughout.',
+        'Rewrite': 'Nexus Platform delivers enterprise-grade project coordination built for distributed teams tackling high-stakes, multi-stakeholder work.',
+      } : {}
+      const genericResults: Record<string, string> = {
+        'Check Grammar': '✓ No grammar issues detected in the selected text.',
+        'Verify vs Source': '✓ The selected content is consistent with the uploaded source documents.',
+      }
+      setAiResult(demoResults[action] ?? genericResults[action] ?? '✓ The selected content has been refined for clarity and consistency.')
+    }, 1200)
+  }
+
+  const applyAiResult = () => {
+    if (!aiResult || !savedRangeRef.current) { setAiAction(null); setAiResult(null); return }
+    try {
+      const range = savedRangeRef.current
+      range.deleteContents()
+      const textNode = document.createTextNode(aiResult)
+      range.insertNode(textNode)
+      // Move cursor after inserted text
+      const newRange = document.createRange()
+      newRange.setStartAfter(textNode)
+      newRange.collapse(true)
+      const sel = window.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(newRange)
+      triggerSave()
+    } catch {}
+    setAiAction(null)
+    setAiResult(null)
+    savedRangeRef.current = null
+  }
+
+  const applyStyleToBlock = (styleValue: string) => {
+    if (!focusedBlockId) return
+    const typeMap: Record<string, DocBlockType> = { p: 'para', h1: 'h1', h2: 'h2', h3: 'h3', h4: 'h4', caption: 'caption' }
+    const newType = typeMap[styleValue]
+    if (newType) { recordHistory(); updateBlock(focusedBlockId, { type: newType }) }
+  }
+
+  const tableOp = (blockId: string, op: string) => {
+    const block = docBlocks.find(b => b.id === blockId)
+    if (!block?.tableData) return
+    const td = block.tableData
+    const rows = td.rows.map(r => [...r])
+    if (op === 'addRowAbove') rows.splice(td.hasHeader ? 1 : 0, 0, Array(rows[0].length).fill(''))
+    else if (op === 'addRowBelow') rows.push(Array(rows[0].length).fill(''))
+    else if (op === 'addColLeft') { rows.forEach((r, i) => r.unshift(i === 0 && td.hasHeader ? 'Header' : '')) }
+    else if (op === 'addColRight') { rows.forEach((r, i) => r.push(i === 0 && td.hasHeader ? 'Header' : '')) }
+    else if (op === 'delRow' && rows.length > 1) rows.pop()
+    else if (op === 'delCol' && rows[0].length > 1) { rows.forEach(r => r.pop()) }
+    else if (op === 'toggleHeader') { updateBlock(blockId, { tableData: { ...td, hasHeader: !td.hasHeader } }); return }
+    updateBlock(blockId, { tableData: { ...td, rows } })
+  }
+
+  const addComment = () => {
+    if (!focusedBlockId || !newCommentText.trim()) return
+    const sel = window.getSelection()
+    const anchor = sel?.toString().slice(0, 60) || 'Block comment'
+    setDocComments(prev => [...prev, { id: `c${Date.now()}`, blockId: focusedBlockId, anchor, text: newCommentText, resolved: false }])
+    setNewCommentText('')
+    setShowCommentPanel(false)
+  }
+
+  if (mode === 'knowledge') {
+    return <KnowledgeMapScreen onNav={onNav} onBack={() => setMode('author')} />
+  }
+
+
+  return (
+    <div className="flex-1 flex overflow-hidden">
+      {/* Editable outline / TOC panel */}
+      {outlineOpen && (
+        <>
+          <OutlineTocPanel
+            toc={studioToc}
+            setToc={setStudioToc}
+            activeSection={activeSection}
+            onSelectSection={setActiveSection}
+            onOpenTopic={openTopic}
+            width={tocWidth}
+            onCollapse={() => setOutlineOpen(false)}
+          />
+          {/* Draggable separator */}
+          <div
+            ref={separatorRef}
+            onMouseDown={startResize}
+            onDoubleClick={resetWidth}
+            className="group w-1 flex-shrink-0 relative bg-[#E2DED7] hover:bg-[#5B5BD6] transition-colors duration-150 cursor-col-resize z-10"
+            title="Drag to resize · Double-click to reset"
+          >
+            {/* Wider invisible hit area */}
+            <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
+          </div>
+        </>
+      )}
+
+      {/* Main canvas */}
+      <div className="flex-1 flex flex-col overflow-hidden bg-[#F4F2EE]">
+        {/* Review context banner — shown when jumped here from Review */}
+        {reviewContext && (
+          <div className="bg-[#EEEEFF] border-b border-[#C7C5F4] flex items-center gap-3 px-4 py-2 flex-shrink-0">
+            <div className="w-2 h-2 rounded-full bg-[#F59E0B] animate-pulse flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <span className="text-[11px] text-[#6B6B7E]">Reviewing: </span>
+              <span className="text-[12px] font-semibold text-[#111218]">{reviewContext.category}</span>
+              <span className="text-[11px] text-[#9898AB]"> · {reviewContext.section}</span>
+            </div>
+            <button
+              onClick={() => onNav('quality')}
+              className="flex items-center gap-1.5 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors flex-shrink-0"
+            >
+              ← Back to Review
+            </button>
+            <button
+              onClick={onClearReviewContext}
+              className="text-[#9898AB] hover:text-[#6B6B7E] transition-colors flex-shrink-0 ml-1"
+              title="Dismiss"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            </button>
+          </div>
+        )}
+        {/* Studio toolbar — two rows */}
+        <div className="bg-white border-b border-[#E2DED7] flex-shrink-0">
+          {/* Row 1: document-level controls */}
+          <div className="flex items-center gap-1 px-4 py-1.5 border-b border-[#F0EDE8]">
+          {/* Outline toggle */}
+          {!outlineOpen && (
+            <button onClick={() => setOutlineOpen(true)} className="w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#6B6B7E] transition-colors mr-1">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M3 7h8M3 4h8M3 10h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+              </svg>
+            </button>
+          )}
+          {/* Mode switcher */}
+          <div className="flex items-center gap-0.5 bg-[#F4F2EE] rounded-lg p-0.5 mr-3">
+            {(['author','knowledge'] as StudioMode[]).map(m => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`px-3 py-1 rounded-md text-[12px] font-medium capitalize transition-all ${
+                  mode === m ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB] hover:text-[#6B6B7E]'
+                }`}
+              >
+                {m === 'knowledge' ? 'Knowledge Map' : 'Content'}
+              </button>
+            ))}
+          </div>
+          {/* Row 1 right side */}
+          <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+            {mode === 'author' && (
+              <span className={`text-[11px] font-medium transition-colors ${saveState === 'saving' ? 'text-[#D97706]' : 'text-[#9898AB]'}`}>
+                {saveState === 'saving' ? 'Saving…' : 'Saved'}
+              </span>
+            )}
+            <button onClick={() => onNav('branding')} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium text-[#9898AB] hover:text-[#6B6B7E] transition-colors" title="Style Profile">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.2"/><circle cx="6" cy="6" r="1.5" fill="currentColor"/></svg>
+              Style
+            </button>
+            <button
+              onClick={() => setSourceRef(!sourceRef)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${sourceRef ? 'bg-[#F3F0FF] text-[#7C3AED]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
+            >
+              <div className="w-3 h-3 rounded-sm border border-current" />
+              Sources
+            </button>
+            <button onClick={() => onNav('quality')} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium text-[#9898AB] hover:text-[#6B6B7E] transition-colors">
+              Quality
+            </button>
+            <button onClick={() => onNav('preview')} className="flex items-center gap-1.5 bg-white border border-[#E2DED7] px-2.5 py-1 rounded text-[11px] font-medium text-[#111218] hover:bg-[#F9F8F6] transition-colors">
+              Preview
+            </button>
+            <button onClick={() => { onNav('publish') }} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium px-3 py-1 rounded transition-colors">
+              Publish
+            </button>
+          </div>
+          </div>
+          {/* Row 2: formatting toolbar — Author mode only */}
+          {mode === 'author' && (
+            <div className="flex items-center flex-wrap gap-0.5 px-4 py-1.5"><>
+              {/* Undo / Redo */}
+              <div className="flex items-center gap-0.5 pr-2">
+                <button onClick={undoBlocks} title="Undo (Ctrl+Z)" className="w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#6B6B7E] hover:text-[#111218] transition-colors">
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 5H8.5C10.4 5 12 6.6 12 8.5S10.4 12 8.5 12H5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M4 2.5L1.5 5 4 7.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                <button onClick={redoBlocks} title="Redo (Ctrl+Shift+Z)" className="w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#6B6B7E] hover:text-[#111218] transition-colors">
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M11 5H4.5C2.6 5 1 6.6 1 8.5S2.6 12 4.5 12H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M9 2.5L11.5 5 9 7.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+              </div>
+
+              {/* Paragraph style */}
+              <div className="flex items-center gap-0.5 border-l border-[#E2DED7] pl-3">
+                <select
+                  value={focusedBlockId ? (docBlocks.find(b => b.id === focusedBlockId)?.type === 'h1' ? 'h1' : docBlocks.find(b => b.id === focusedBlockId)?.type === 'h2' ? 'h2' : docBlocks.find(b => b.id === focusedBlockId)?.type === 'h3' ? 'h3' : docBlocks.find(b => b.id === focusedBlockId)?.type === 'h4' ? 'h4' : docBlocks.find(b => b.id === focusedBlockId)?.type === 'caption' ? 'caption' : 'p') : 'p'}
+                  onChange={e => applyStyleToBlock(e.target.value)}
+                  className="h-7 px-1.5 text-[11px] font-medium text-[#6B6B7E] bg-transparent rounded hover:bg-[#F4F2EE] border-0 cursor-pointer focus:outline-none"
+                  title="Paragraph style"
+                >
+                  <option value="p">Paragraph</option>
+                  <option value="h1">Heading 1</option>
+                  <option value="h2">Heading 2</option>
+                  <option value="h3">Heading 3</option>
+                  <option value="h4">Heading 4</option>
+                  <option value="caption">Caption</option>
+                </select>
+              </div>
+
+              {/* Text formatting */}
+              <div className="flex items-center gap-0.5 border-l border-[#E2DED7] pl-3">
+                {[
+                  { cmd: 'bold', label: 'B', cls: 'font-bold', tip: 'Bold (Ctrl+B)' },
+                  { cmd: 'italic', label: 'I', cls: 'italic', tip: 'Italic (Ctrl+I)' },
+                  { cmd: 'underline', label: 'U', cls: 'underline', tip: 'Underline (Ctrl+U)' },
+                  { cmd: 'strikeThrough', label: 'S̶', cls: '', tip: 'Strikethrough' },
+                ].map(f => (
+                  <button key={f.cmd} onClick={() => execFmt(f.cmd)} title={f.tip} className={`w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[12px] ${f.cls} text-[#6B6B7E] hover:text-[#111218] transition-colors`}>{f.label}</button>
+                ))}
+              </div>
+
+              {/* Alignment ▼ */}
+              <div className="flex items-center gap-0.5 border-l border-[#E2DED7] pl-3">
+                <div className="relative">
+                  <button
+                    onMouseDown={e => { e.preventDefault(); setShowAlignMenu(v => !v); setShowInsertMenu(false); setShowConditions(false); setShowMoreMenu(false); setShowRefsMenu(false); setShowAiMenu(false) }}
+                    title="Text alignment"
+                    className={`flex items-center gap-1 h-7 px-2 rounded text-[11px] font-medium transition-colors ${showAlignMenu ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#6B6B7E] hover:bg-[#F4F2EE] hover:text-[#111218]'}`}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 3h11M1 6h8M1 9h11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                    <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 2.5l2.5 3 2.5-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                  {showAlignMenu && (
+                    <div className="absolute top-9 left-0 z-50 bg-white border border-[#E2DED7] rounded-xl popover-shadow py-1 min-w-[150px]">
+                      {[
+                        { label: 'Align Left', cmd: 'justifyLeft', icon: <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 3h11M1 6h7M1 9h9M1 12h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg> },
+                        { label: 'Align Center', cmd: 'justifyCenter', icon: <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 3h11M3 6h7M2 9h9M4 12h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg> },
+                        { label: 'Align Right', cmd: 'justifyRight', icon: <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 3h11M5 6h7M3 9h9M7 12h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg> },
+                        { label: 'Justify', cmd: 'justifyFull', icon: <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 3h11M1 6h11M1 9h11M1 12h8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg> },
+                      ].map(a => (
+                        <button key={a.cmd} onMouseDown={e => { e.preventDefault(); execFmt(a.cmd); setShowAlignMenu(false) }} className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                          <span className="text-[#6B6B7E]">{a.icon}</span>{a.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Lists */}
+              <div className="flex items-center gap-0.5 border-l border-[#E2DED7] pl-3">
+                <button onMouseDown={e => { e.preventDefault(); convertToList('bullet') }} title="Bulleted list" className="w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#6B6B7E] hover:text-[#111218] transition-colors">
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><circle cx="2" cy="4" r="1.2" fill="currentColor"/><circle cx="2" cy="7" r="1.2" fill="currentColor"/><circle cx="2" cy="10" r="1.2" fill="currentColor"/><path d="M5 4h7M5 7h7M5 10h7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                </button>
+                <button onMouseDown={e => { e.preventDefault(); convertToList('ordered') }} title="Numbered list" className="w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#6B6B7E] hover:text-[#111218] transition-colors">
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 3h1V6M1.5 6h2M1 9.5h2.5l-1.5 2H4" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/><path d="M6 4h6M6 7h6M6 10h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                </button>
+                <button onClick={() => execFmt('outdent')} title="Decrease indent" className="w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#6B6B7E] hover:text-[#111218] transition-colors">
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 3h11M6 6.5h6M6 10h6M4 8l-3-1.5L4 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                <button onClick={() => execFmt('indent')} title="Increase indent" className="w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#6B6B7E] hover:text-[#111218] transition-colors">
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 3h11M6 6.5h6M6 10h6M1 8l3-1.5L1 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+              </div>
+
+              {/* Insert / Conditions / References / AI / More menus */}
+              <div className="flex items-center gap-1 border-l border-[#E2DED7] pl-3" ref={insertMenuRef}>
+                <div className="relative">
+                  <button
+                    onClick={() => { setShowInsertMenu(v => !v); setShowConditions(false) }}
+                    className={`flex items-center gap-1 h-7 px-2.5 rounded text-[11px] font-medium transition-colors ${showInsertMenu ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#6B6B7E] hover:bg-[#F4F2EE] hover:text-[#111218]'}`}
+                  >
+                    Insert
+                    <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M2 3l2.5 3L7 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                  {showInsertMenu && (
+                    <div className="absolute top-9 left-0 z-50 bg-white border border-[#E2DED7] rounded-xl popover-shadow py-1 min-w-[180px]">
+                      {tablePickerOpen ? (
+                        <div className="p-3">
+                          <p className="text-[10px] text-[#9898AB] font-medium uppercase tracking-wider mb-2">
+                            {tablePickerHover[0] > 0 ? `${tablePickerHover[1]} × ${tablePickerHover[0]}` : 'Select table size'}
+                          </p>
+                          <div className="grid gap-0.5" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
+                            {Array.from({ length: 5 }, (_, row) =>
+                              Array.from({ length: 6 }, (_, col) => (
+                                <div
+                                  key={`${row}-${col}`}
+                                  onMouseEnter={() => setTablePickerHover([row + 1, col + 1])}
+                                  onClick={() => {
+                                    const [rows, cols] = tablePickerHover
+                                    const dataRows = [Array(cols).fill(''), ...Array(rows - 1).fill(null).map(() => Array(cols).fill(''))]
+                                    dataRows[0] = Array(cols).fill('').map((_, i) => `Header ${i + 1}`)
+                                    insertBlock('table', { tableData: { hasHeader: true, rows: dataRows }, content: '' })
+                                  }}
+                                  className={`w-5 h-5 rounded-sm border transition-colors cursor-pointer ${row < tablePickerHover[0] && col < tablePickerHover[1] ? 'bg-[#EEEEFF] border-[#5B5BD6]' : 'bg-[#F9F8F6] border-[#E2DED7]'}`}
+                                />
+                              ))
+                            )}
+                          </div>
+                          <button onClick={() => setTablePickerOpen(false)} className="mt-2 text-[11px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors">← Back</button>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="px-3 py-1 text-[10px] font-medium text-[#9898AB] uppercase tracking-wider">Content Blocks</p>
+                          <button onClick={() => insertBlock('procedure')} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Procedure</button>
+                          <button onClick={() => { setTablePickerOpen(true); setTablePickerHover([3, 3]) }} className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Table <span className="text-[#9898AB]">▸</span></button>
+                          <div className="h-px bg-[#F4F2EE] my-1" />
+                          <p className="px-3 py-1 text-[10px] font-medium text-[#9898AB] uppercase tracking-wider">Callouts</p>
+                          {(['note', 'tip', 'important', 'warning', 'example'] as CalloutVariant[]).map(v => (
+                            <button key={v} onClick={() => insertBlock('callout', { calloutVariant: v, content: `Enter ${v} content here.` })} className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left capitalize">
+                              <div className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: { note: '#0EA5E9', tip: '#16A34A', important: '#7C3AED', warning: '#D97706', example: '#9898AB' }[v] }} />
+                              {v.charAt(0).toUpperCase() + v.slice(1)}
+                            </button>
+                          ))}
+                          <div className="h-px bg-[#F4F2EE] my-1" />
+                          <p className="px-3 py-1 text-[10px] font-medium text-[#9898AB] uppercase tracking-wider">Media</p>
+                          <button onClick={() => insertBlock('media')} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Image</button>
+                          <button onClick={() => insertBlock('media', { mediaType: 'video', content: 'Video placeholder' })} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Media</button>
+                          <button onClick={() => insertBlock('media', { mediaType: 'diagram', content: 'Diagram placeholder' })} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Diagram placeholder</button>
+                          <button onClick={() => insertBlock('media', { mediaType: 'chart', content: 'Chart placeholder' })} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Chart placeholder</button>
+                          <div className="h-px bg-[#F4F2EE] my-1" />
+                          <p className="px-3 py-1 text-[10px] font-medium text-[#9898AB] uppercase tracking-wider">Other</p>
+                          <button onClick={() => insertBlock('code')} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Code Block</button>
+                          <button onClick={() => insertBlock('quote')} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Quote</button>
+                          <button onClick={() => insertBlock('divider')} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Divider</button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Conditions */}
+                <div className="relative">
+                  <button
+                    onClick={() => { setShowConditions(v => !v); setShowInsertMenu(false); setShowMoreMenu(false); setShowRefsMenu(false); setShowAiMenu(false); setConditionsBlockId(focusedBlockId) }}
+                    className={`flex items-center gap-1 h-7 px-2.5 rounded text-[11px] font-medium transition-colors ${showConditions ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#6B6B7E] hover:bg-[#F4F2EE] hover:text-[#111218]'}`}
+                  >
+                    Conditions
+                    <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M2 3l2.5 3L7 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                  {showConditions && (
+                    <div className="absolute top-9 left-0 z-50 bg-white border border-[#E2DED7] rounded-xl popover-shadow py-2 min-w-[240px] max-h-96 overflow-y-auto">
+                      <div className="px-3 py-1 flex items-center justify-between">
+                        <p className="text-[11px] font-semibold text-[#111218]">Apply Conditions</p>
+                        <button onClick={() => { setShowConditions(false); setShowManageConditions(true) }} className="text-[10px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium transition-colors">Manage…</button>
+                      </div>
+                      <div className="h-px bg-[#F4F2EE] my-1" />
+                      {customConditions.map(group => {
+                        const block = conditionsBlockId ? docBlocks.find(b => b.id === conditionsBlockId) : null
+                        const active = block?.conditions ?? []
+                        return (
+                          <div key={group.id} className="px-3 py-1">
+                            <p className="text-[10px] font-medium text-[#9898AB] uppercase tracking-wider mb-1">{group.group}</p>
+                            <div className="flex flex-wrap gap-1 mb-1">
+                              {group.tags.map(v => {
+                                const on = active.includes(v)
+                                return (
+                                  <button
+                                    key={v}
+                                    onClick={() => {
+                                      if (!conditionsBlockId) return
+                                      const next = on ? active.filter(c => c !== v) : [...active, v]
+                                      updateBlock(conditionsBlockId, { conditions: next })
+                                    }}
+                                    className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors ${on ? 'bg-[#EEEEFF] border-[#5B5BD6] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E] hover:border-[#C8C6C0]'}`}
+                                  >
+                                    {v}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* References ▼ */}
+                <div className="relative">
+                  <button
+                    onClick={() => { setShowRefsMenu(v => !v); setShowInsertMenu(false); setShowConditions(false); setShowMoreMenu(false); setShowAiMenu(false) }}
+                    className={`flex items-center gap-1 h-7 px-2.5 rounded text-[11px] font-medium transition-colors ${showRefsMenu ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#6B6B7E] hover:bg-[#F4F2EE] hover:text-[#111218]'}`}
+                  >
+                    References
+                    <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M2 3l2.5 3L7 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                  {showRefsMenu && (
+                    <div className="absolute top-9 left-0 z-50 bg-white border border-[#E2DED7] rounded-xl popover-shadow py-1 min-w-[180px]">
+                      <button onClick={() => { setShowRefsMenu(false); setLinkModalOpen(true) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Insert Link</button>
+                      <button onClick={() => { setShowRefsMenu(false); setShowCrossRefModal(true) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Cross-reference</button>
+                      <button onClick={() => { setShowRefsMenu(false); insertBlock('bookmark', { content: 'anchor-name' }) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">Bookmark / Anchor</button>
+                      <div className="h-px bg-[#F4F2EE] my-1" />
+                      <button
+                        onClick={() => {
+                          setShowRefsMenu(false)
+                          if (focusedBlockId) {
+                            const b = docBlocks.find(x => x.id === focusedBlockId)
+                            const srcLabel = `[Source: Technical Spec §${Math.floor(Math.random() * 8) + 1}]`
+                            updateBlock(focusedBlockId, { content: (b?.content ?? '') + ' ' + srcLabel })
+                          }
+                        }}
+                        className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left"
+                      >Add Source Reference</button>
+                    </div>
+                  )}
+                </div>
+
+                {/* AI ✦ */}
+                <div className="relative">
+                  <button
+                    onClick={() => { setShowAiMenu(v => !v); setShowInsertMenu(false); setShowConditions(false); setShowMoreMenu(false); setShowRefsMenu(false) }}
+                    className={`flex items-center gap-1.5 h-7 px-2.5 rounded text-[11px] font-medium transition-colors ${showAiMenu ? 'bg-[#F3F0FF] text-[#7C3AED]' : 'text-[#7C3AED] hover:bg-[#F3F0FF]'}`}
+                  >
+                    <div className="w-3.5 h-3.5 rounded bg-[#8B5CF6] flex items-center justify-center flex-shrink-0">
+                      <span className="text-white text-[8px] leading-none">✦</span>
+                    </div>
+                    AI
+                    <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M2 3l2.5 3L7 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                  {showAiMenu && (
+                    <div className="absolute top-9 left-0 z-50 bg-white border border-[#E2DED7] rounded-xl popover-shadow py-1 min-w-[190px]">
+                      {['Improve', 'Rewrite', 'Shorten', 'Expand', 'Simplify', 'Summarize', 'Convert to Steps', 'Convert to Bullets', 'Convert to Table', 'Generate Example', 'Check Terminology', 'Verify Against Source', 'Generate Visual', 'Ask AI'].map(action => (
+                        <button key={action} onClick={() => { setShowAiMenu(false); runAiAction(action) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">{action}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* More menu */}
+                <div className="relative">
+                  <button
+                    onClick={() => { setShowMoreMenu(v => !v); setShowInsertMenu(false); setShowConditions(false); setShowRefsMenu(false); setShowAiMenu(false) }}
+                    className={`flex items-center gap-1 h-7 px-2.5 rounded text-[11px] font-medium transition-colors ${showMoreMenu ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#6B6B7E] hover:bg-[#F4F2EE] hover:text-[#111218]'}`}
+                  >
+                    More
+                    <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M2 3l2.5 3L7 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                  {showMoreMenu && (
+                    <div className="absolute top-9 left-0 z-50 bg-white border border-[#E2DED7] rounded-xl popover-shadow py-1 min-w-[200px]">
+                      <button onClick={() => { setShowMoreMenu(false); setShowFind(true); setTimeout(() => findInputRef.current?.focus(), 50) }} className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                        Find & Replace
+                        <span className="text-[10px] text-[#9898AB]">⌘F</span>
+                      </button>
+                      <div className="h-px bg-[#F4F2EE] my-1" />
+                      <p className="px-3 py-1 text-[10px] font-medium text-[#9898AB] uppercase tracking-wider">Formatting</p>
+                      {[
+                        { label: 'Superscript', cmd: 'superscript' },
+                        { label: 'Subscript', cmd: 'subscript' },
+                        { label: 'Clear Formatting', cmd: 'removeFormat' },
+                      ].map(a => (
+                        <button key={a.cmd} onClick={() => { execFmt(a.cmd); setShowMoreMenu(false) }} className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                          {a.label}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => {
+                          const sel = window.getSelection()?.toString() || ''
+                          if (sel) document.execCommand('insertHTML', false, `<code style="font-family:monospace;background:#F4F2EE;padding:1px 4px;border-radius:3px;font-size:0.875em">${sel}</code>`)
+                          setShowMoreMenu(false); triggerSave()
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left"
+                      >
+                        Inline Code
+                      </button>
+                      <div className="h-px bg-[#F4F2EE] my-1" />
+                      <button onClick={() => { setShowMoreMenu(false); setShowCommentPanel(true) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                        Add Comment
+                      </button>
+                      <button onClick={() => { setShowMoreMenu(false); setShowVarsModal(true) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                        Variables
+                      </button>
+                      <button onClick={() => { setShowMoreMenu(false); setShowSnippetsModal(true) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                        Snippets
+                      </button>
+                      <button onClick={() => { setShowMoreMenu(false); convertSelectionToVariable() }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                        Selection → Variable
+                      </button>
+                      <div className="h-px bg-[#F4F2EE] my-1" />
+                      {/* Change Case submenu */}
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowCaseMenu(v => !v)}
+                          className="w-full flex items-center justify-between px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left"
+                        >
+                          Change Case
+                          <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M3 2l2 2-2 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        </button>
+                        {showCaseMenu && (
+                          <div className="absolute left-full top-0 z-50 bg-white border border-[#E2DED7] rounded-xl popover-shadow py-1 min-w-[160px]">
+                            {[
+                              { label: 'UPPERCASE', fn: (s: string) => s.toUpperCase() },
+                              { label: 'lowercase', fn: (s: string) => s.toLowerCase() },
+                              { label: 'Title Case', fn: (s: string) => s.replace(/\b\w/g, c => c.toUpperCase()) },
+                              { label: 'Sentence case', fn: (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() },
+                            ].map(({ label, fn }) => (
+                              <button
+                                key={label}
+                                onClick={() => {
+                                  const sel = window.getSelection()
+                                  if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+                                    const range = sel.getRangeAt(0)
+                                    const text = range.toString()
+                                    range.deleteContents()
+                                    range.insertNode(document.createTextNode(fn(text)))
+                                  } else if (focusedBlockId) {
+                                    updateBlock(focusedBlockId, { content: fn(docBlocks.find(b => b.id === focusedBlockId)?.content ?? '') })
+                                  }
+                                  setShowCaseMenu(false); setShowMoreMenu(false); triggerSave()
+                                }}
+                                className="w-full px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left"
+                              >{label}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => { setShowSpecialChars(v => !v); setShowMoreMenu(false) }}
+                        className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left"
+                      >
+                        Special Characters…
+                      </button>
+                      <div className="h-px bg-[#F4F2EE] my-1" />
+                      <button onClick={() => { setShowMoreMenu(false); setShowLangDir(true) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                        Language / Direction
+                      </button>
+                      <button onClick={() => { setShowMoreMenu(false); setShowDocStats(true) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                        Document Statistics
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </></div>
+          )}
+        </div>
+
+        {/* Find & Replace bar */}
+        {showFind && (() => {
+          // ── Compute topic matches ──────────────────────────────────────────
+          type BlockMatch = { blockId: string; text: string; matchCount: number }
+          const q = findQuery.trim().toLowerCase()
+          const topicMatches: BlockMatch[] = q ? docBlocks.flatMap(b => {
+            const texts: string[] = [b.content]
+            if (b.listItems) texts.push(...b.listItems.map(i => i.text))
+            if (b.procedureSteps) texts.push(...b.procedureSteps)
+            if (b.tableData) texts.push(...b.tableData.rows.flat())
+            const combined = texts.join(' ')
+            let cnt = 0, pos = 0
+            while ((pos = combined.toLowerCase().indexOf(q, pos)) !== -1) { cnt++; pos += q.length }
+            return cnt > 0 ? [{ blockId: b.id, text: combined.slice(0, 120), matchCount: cnt }] : []
+          }) : []
+          const totalTopicMatches = topicMatches.reduce((s, m) => s + m.matchCount, 0)
+
+          // ── Mock project-wide search content ──────────────────────────────
+          const DEMO_PROJECT_CONTENT: Array<{ topicId: number; title: string; excerpt: string }> = [
+            { topicId: 1, title: 'Introduction', excerpt: 'The Nexus Platform is an enterprise-grade project management and collaboration solution designed for distributed teams working on complex, multi-stakeholder initiatives.' },
+            { topicId: 2, title: 'System Requirements', excerpt: 'Minimum system requirements for Windows 10/11, macOS 12+, Ubuntu 20.04+. Browser: Chrome 108+, Firefox 110+, or Edge 108+. Memory: 8 GB RAM minimum.' },
+            { topicId: 3, title: 'Installation', excerpt: 'Navigate to nexus.example.com and click Sign In. Enter your organization credentials or use your SSO provider. Accept the workspace invitation from your administrator.' },
+            { topicId: 4, title: 'Dashboard Overview', excerpt: 'The Nexus Dashboard is your central workspace. It provides an at-a-glance view of all active projects, recent activity, and team notifications.' },
+            { topicId: 5, title: 'User Authentication', excerpt: 'Single sign-on (SSO) is supported via SAML 2.0 and OAuth 2.0. Administrators can configure identity providers in the Security settings panel.' },
+            { topicId: 6, title: 'Project Dashboard', excerpt: 'The project dashboard displays a Kanban view, Gantt chart, and list view. Switch between views using the toolbar. Filter tasks by assignee, label, or due date.' },
+            { topicId: 7, title: 'Team Collaboration', excerpt: 'Invite team members by email. Assign roles: Owner, Editor, Viewer. Real-time collaboration is supported in document and diagram editors.' },
+            { topicId: 8, title: 'Notification System', excerpt: 'Notifications are delivered in-app and via email. Configure preferences under Profile → Notifications. Mute individual projects or channels.' },
+            { topicId: 9, title: 'API Reference', excerpt: 'The Nexus REST API uses OAuth 2.0 for authentication. Base URL: https://api.nexus.example.com/v1. All responses are JSON. Rate limit: 1000 req/min.' },
+            { topicId: 10, title: 'Troubleshooting', excerpt: 'If you cannot log in, check that your SSO provider is configured correctly. Clear browser cache and cookies. Contact support@nexus.example.com for assistance.' },
+          ]
+          const projectResults = q ? (isDemoMode ? DEMO_PROJECT_CONTENT.filter(p =>
+            p.title.toLowerCase().includes(q) || p.excerpt.toLowerCase().includes(q)
+          ) : (toc ?? []).filter(t =>
+            t.title.toLowerCase().includes(q)
+          ).map(t => ({
+            topicId: t.id,
+            title: t.title,
+            excerpt: ((topicContent ?? {})[String(t.id)]?.[0]?.content ?? '').slice(0, 120) || '(no content yet)',
+          })).filter(r => r.title.toLowerCase().includes(q) || r.excerpt.toLowerCase().includes(q))
+          ) : []
+
+          // Current matched block for navigation
+          const currentMatchBlock = topicMatches[findMatchIndex % Math.max(topicMatches.length, 1)]
+
+          const navigateToMatch = (idx: number) => {
+            const match = topicMatches[idx % Math.max(topicMatches.length, 1)]
+            if (!match) return
+            const el = document.getElementById(match.blockId)
+            if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); setFocusedBlockId(match.blockId) }
+          }
+          const goPrev = () => {
+            const next = (findMatchIndex - 1 + Math.max(topicMatches.length, 1)) % Math.max(topicMatches.length, 1)
+            setFindMatchIndex(next); navigateToMatch(next)
+          }
+          const goNext = () => {
+            const next = (findMatchIndex + 1) % Math.max(topicMatches.length, 1)
+            setFindMatchIndex(next); navigateToMatch(next)
+          }
+
+          return (
+            <div className="bg-white border-b border-[#E2DED7] flex-shrink-0 shadow-sm">
+              {/* Search bar row */}
+              <div className="px-4 py-2 flex items-center gap-2">
+                <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="text-[#9898AB] flex-shrink-0"><circle cx="5.5" cy="5.5" r="3.5" stroke="currentColor" strokeWidth="1.3"/><path d="M8.5 8.5l2.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+
+                {/* Scope toggle */}
+                <div className="flex items-center bg-[#F4F2EE] rounded p-0.5 flex-shrink-0">
+                  {(['topic', 'project'] as const).map(s => (
+                    <button key={s} onClick={() => { setFindScope(s); setFindMatchIndex(0) }}
+                      className={`h-5 px-2 rounded text-[11px] font-medium transition-colors ${findScope === s ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}>
+                      {s === 'topic' ? 'This Topic' : 'All Topics'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Find input */}
+                <input
+                  ref={findInputRef}
+                  value={findQuery}
+                  onChange={e => { setFindQuery(e.target.value); setFindMatchIndex(0) }}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.shiftKey ? goPrev() : goNext() } if (e.key === 'Escape') setShowFind(false) }}
+                  placeholder={findScope === 'topic' ? 'Find in topic…' : 'Search all topics…'}
+                  className="h-7 flex-1 min-w-0 border border-[#E2DED7] rounded px-2.5 text-[12px] text-[#111218] focus:outline-none focus:border-[#5B5BD6] bg-white max-w-[220px]"
+                />
+
+                {/* Match count + nav — topic scope only */}
+                {findScope === 'topic' && q && (
+                  <span className="text-[11px] text-[#9898AB] tabular-nums flex-shrink-0 min-w-[60px]">
+                    {totalTopicMatches === 0 ? 'No results' : `${Math.min(findMatchIndex + 1, topicMatches.length)} of ${topicMatches.length} block${topicMatches.length !== 1 ? 's' : ''}`}
+                  </span>
+                )}
+                {findScope === 'topic' && q && topicMatches.length > 0 && (
+                  <>
+                    <button onClick={goPrev} className="h-6 w-6 flex items-center justify-center text-[#6B6B7E] hover:bg-[#E8E4DD] rounded transition-colors" title="Previous (Shift+Enter)">
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 8L5 2M2 5l3-3 3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                    <button onClick={goNext} className="h-6 w-6 flex items-center justify-center text-[#6B6B7E] hover:bg-[#E8E4DD] rounded transition-colors" title="Next (Enter)">
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 2l0 6M2 5l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                  </>
+                )}
+
+                {/* Replace — topic scope only */}
+                {findScope === 'topic' && (
+                  <>
+                    <div className="w-px h-5 bg-[#E2DED7] flex-shrink-0" />
+                    <input
+                      value={replaceQuery}
+                      onChange={e => setReplaceQuery(e.target.value)}
+                      placeholder="Replace…"
+                      className="h-7 flex-1 min-w-0 border border-[#E2DED7] rounded px-2.5 text-[12px] text-[#111218] focus:outline-none focus:border-[#5B5BD6] bg-white max-w-[160px]"
+                    />
+                    <button
+                      onClick={() => {
+                        if (!findQuery || !replaceQuery || !currentMatchBlock) return
+                        setDocBlocks(prev => prev.map(b => b.id === currentMatchBlock.blockId
+                          ? { ...b, content: b.content.split(findQuery).join(replaceQuery) }
+                          : b))
+                        triggerSave()
+                      }}
+                      className="h-7 px-2 text-[11px] text-[#6B6B7E] hover:bg-[#E8E4DD] rounded transition-colors flex-shrink-0"
+                    >Replace</button>
+                    <button
+                      onClick={() => {
+                        if (!findQuery || !replaceQuery) return
+                        setDocBlocks(prev => prev.map(b =>
+                          (b.type === 'para' || b.type === 'h1' || b.type === 'h2' || b.type === 'h3' || b.type === 'h4' || b.type === 'caption')
+                            ? { ...b, content: b.content.split(findQuery).join(replaceQuery) }
+                            : b
+                        ))
+                        triggerSave()
+                      }}
+                      className="h-7 px-2 text-[11px] font-medium text-[#5B5BD6] hover:bg-[#EEEEFF] rounded transition-colors flex-shrink-0"
+                    >Replace All</button>
+                  </>
+                )}
+
+                <button onClick={() => { setShowFind(false); setFindQuery(''); setReplaceQuery('') }} className="text-[#C8C6C0] hover:text-[#9898AB] ml-auto flex-shrink-0" title="Close (Esc)">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                </button>
+              </div>
+
+              {/* Project-wide results panel */}
+              {findScope === 'project' && q && (
+                <div className="border-t border-[#E2DED7] max-h-[280px] overflow-y-auto">
+                  {projectResults.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-[12px] text-[#9898AB]">No results found across topics</div>
+                  ) : (
+                    <div>
+                      <div className="px-4 py-1.5 bg-[#F9F8F6] text-[10px] text-[#9898AB] font-medium uppercase tracking-wider border-b border-[#E2DED7]">
+                        {projectResults.length} topic{projectResults.length !== 1 ? 's' : ''} with matches
+                      </div>
+                      {projectResults.map(r => {
+                        const idx = r.excerpt.toLowerCase().indexOf(q)
+                        const snippet = idx >= 0
+                          ? r.excerpt.slice(Math.max(0, idx - 30), Math.min(r.excerpt.length, idx + q.length + 60))
+                          : r.excerpt.slice(0, 90)
+                        const highlightStart = Math.max(0, idx - Math.max(0, idx - 30))
+                        return (
+                          <button key={r.topicId} className="w-full text-left px-4 py-2.5 border-b border-[#F4F2EE] last:border-0 hover:bg-[#F9F8F6] transition-colors group">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="text-[#9898AB] flex-shrink-0"><rect x="1" y="1" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.2"/><path d="M3 4h4M3 6h2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                              <span className="text-[12px] font-medium text-[#111218]">{r.title}</span>
+                            </div>
+                            <p className="text-[11px] text-[#6B6B7E] leading-relaxed line-clamp-2">
+                              {snippet.slice(0, highlightStart)}
+                              <mark className="bg-[#FDE68A] text-[#92400E] rounded-sm px-0.5">{snippet.slice(highlightStart, highlightStart + q.length)}</mark>
+                              {snippet.slice(highlightStart + q.length)}
+                              {r.excerpt.length > 90 && '…'}
+                            </p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Topic match summary strip */}
+              {findScope === 'topic' && q && topicMatches.length > 0 && (
+                <div className="border-t border-[#E2DED7] px-4 py-1 flex gap-2 overflow-x-auto">
+                  {topicMatches.map((m, mi) => (
+                    <button key={m.blockId} onClick={() => { setFindMatchIndex(mi); navigateToMatch(mi) }}
+                      className={`flex-shrink-0 h-5 px-2 rounded text-[10px] transition-colors ${mi === findMatchIndex ? 'bg-[#5B5BD6] text-white' : 'bg-[#F4F2EE] text-[#6B6B7E] hover:bg-[#EEEEFF] hover:text-[#5B5BD6]'}`}>
+                      {m.matchCount > 1 ? `${m.matchCount}×` : '1×'} match
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Table toolbar placeholder — now rendered inline above table */}
+
+        {/* Canvas scroll area */}
+        <div
+          className="flex-1 overflow-y-auto px-6 py-8"
+          onClick={() => { setShowInsertMenu(false); setShowConditions(false); setShowMoreMenu(false); setShowAlignMenu(false); setShowRefsMenu(false); setShowAiMenu(false); setConvertMenuBlockId(null) }}
+        >
+          <div className="max-w-2xl mx-auto">
+            {/* Document card */}
+            <div ref={canvasRef} className="bg-white rounded-xl shadow-sm border border-[#E2DED7] p-10 min-h-[600px]">
+              {/* Document header — breadcrumb only when inside a topic */}
+              {activeTopicId !== null && (
+                <div className="mb-4">
+                  <button onClick={() => { if (onTopicContentChange) onTopicContentChange({ ...(topicContent ?? {}), [String(activeTopicId)]: docBlocks }); setActiveTopicId(null); setDocBlocks([]) }}
+                    className="flex items-center gap-1 font-mono-code text-[11px] text-[#9898AB] hover:text-[#5B5BD6] tracking-widest uppercase transition-colors">
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6 2L2 5l4 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    All Topics
+                  </button>
+                </div>
+              )}
+              {activeTopicId === null && (
+                <div className="mb-8">
+                  {isDemoMode
+                    ? <p className="font-mono-code text-[11px] text-[#9898AB] mb-3 tracking-widest uppercase">Nexus Platform v3.2</p>
+                    : projectName && <p className="font-mono-code text-[11px] text-[#9898AB] mb-3 tracking-widest uppercase">{projectName}</p>
+                  }
+                  <h1 className="font-doc text-[28px] font-semibold text-[#111218] leading-tight mb-2">
+                    {isDemoMode ? 'User Guide' : (documentType ?? 'Document')}
+                  </h1>
+                  <div className="h-px bg-[#E2DED7] mt-4" />
+                </div>
+              )}
+
+              {/* ── New topic guided flow ─────────────────────────────── */}
+              {activeTopicId !== null && (studioToc.find(t => t.id === activeTopicId)?.isNew || docBlocks.length <= 1) && (() => {
+                const currentTitle = docBlocks[0]?.content?.trim() ?? ''
+                const allSources = [...SOURCE_FILES.map(s => s.name), ...topicExtraSources]
+
+                /* ── Step 0: Choose how to start ── */
+                if (topicMode === 'choose') return (
+                  <div className="mb-6">
+                    <p className="text-[12px] text-[#9898AB] mb-4">This topic is empty. Choose how you'd like to add content:</p>
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                      {[
+                        { mode: 'write' as const, icon: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 16h12M13.5 3.5l3 3-8 8H5.5v-3l8-8z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>, label: 'Write manually', desc: 'Start with a blank page and type your content' },
+                        { mode: 'ai' as const, icon: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2l1.9 4.3L16.5 7l-3.3 3.2.8 4.8L10 12.7l-4 2.3.8-4.8L3.5 7l4.6-.7L10 2z" fill="currentColor" opacity=".9"/></svg>, label: 'Generate with AI', desc: 'Let AI draft content from your source files' },
+                        { mode: 'sources' as const, icon: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="1.4"/><path d="M7 7h6M7 10h4M7 13h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>, label: 'Browse sources', desc: 'Pick excerpts from your source documents' },
+                      ].map(opt => (
+                        <button key={opt.mode} onClick={() => {
+                          setTopicMode(opt.mode)
+                          if (opt.mode === 'write') {
+                            const pid = `p${Date.now()}`
+                            setDocBlocks(prev => [...prev, { id: pid, type: 'para', content: '' }])
+                            triggerSave()
+                            setTimeout(() => { const el = document.getElementById(pid); (el?.querySelector('[contenteditable]') as HTMLElement | null)?.focus() }, 80)
+                          }
+                        }}
+                          className="flex flex-col items-center gap-2 p-4 bg-white border-2 border-[#E2DED7] rounded-xl hover:border-[#5B5BD6] hover:bg-[#FAFAFF] transition-all group text-center"
+                        >
+                          <div className="text-[#9898AB] group-hover:text-[#5B5BD6] transition-colors">{opt.icon}</div>
+                          <span className="text-[12px] font-semibold text-[#111218]">{opt.label}</span>
+                          <span className="text-[10px] text-[#9898AB] leading-snug">{opt.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-[#C8C6C0] text-center">You can also use the <strong className="text-[#9898AB]">Insert</strong> toolbar above to add headings, tables, callouts, and more at any time.</p>
+                  </div>
+                )
+
+                /* ── Step 1: AI generation ── */
+                if (topicMode === 'ai') return (
+                  <div className="mb-6 rounded-xl border border-[#5B5BD6]/25 bg-[#FAFAFF] overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-3 border-b border-[#5B5BD6]/15 bg-[#EEEEFF]/60">
+                      <div className="w-5 h-5 rounded-md bg-[#5B5BD6] flex items-center justify-center">
+                        <span className="text-white text-[10px] font-bold">✦</span>
+                      </div>
+                      <span className="text-[12px] font-semibold text-[#5B5BD6]">Generate with AI</span>
+                      <button onClick={() => setTopicMode('choose')} className="ml-auto text-[#9898AB] hover:text-[#6B6B7E] transition-colors text-[11px]">← Back</button>
+                    </div>
+
+                    <div className="p-4 space-y-4">
+                      {/* Title refine */}
+                      <div>
+                        <p className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide mb-1.5">Topic title</p>
+                        <div className="flex gap-2">
+                          <input defaultValue={currentTitle} onBlur={e => { setDocBlocks(prev => prev.map((b, bi) => bi === 0 ? { ...b, content: e.target.value } : b)); suggestTitles(e.target.value); triggerSave() }}
+                            className="flex-1 h-8 border border-[#E2DED7] rounded-lg px-2.5 text-[12px] focus:outline-none focus:border-[#5B5BD6]"
+                            placeholder="Enter topic title…"
+                          />
+                          <button onClick={() => suggestTitles(currentTitle)} className="h-8 px-3 bg-white border border-[#E2DED7] rounded-lg text-[11px] text-[#6B6B7E] hover:bg-[#F4F2EE] transition-colors flex-shrink-0">
+                            {titleSugLoading ? <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border border-[#5B5BD6]/40 border-t-[#5B5BD6] animate-spin inline-block"/>…</span> : 'Suggest titles'}
+                          </button>
+                        </div>
+                        {titleSuggestions.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {titleSuggestions.map((s, i) => (
+                              <button key={i} onClick={() => { setDocBlocks(prev => prev.map((b, bi) => bi === 0 ? { ...b, content: s } : b)); if (activeTopicId !== null) setStudioToc(prev => prev.map(t => t.id === activeTopicId ? { ...t, title: s } : t)); setTitleSuggestions([]); triggerSave() }}
+                                className="flex items-center gap-1 px-2.5 py-1 bg-white border border-[#5B5BD6]/30 rounded-lg text-[11px] text-[#5B5BD6] hover:bg-[#EEEEFF] transition-colors">
+                                <span className="text-[9px]">★</span>{s}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="h-px bg-[#5B5BD6]/10" />
+
+                      {/* Generate */}
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide">Generate content</p>
+                          <span className="text-[10px] text-[#9898AB]">{allSources.length} source{allSources.length !== 1 ? 's' : ''}</span>
+                        </div>
+                        {contentSugLoading ? (
+                          <div className="flex items-center gap-2 p-3 bg-white border border-[#E2DED7] rounded-lg text-[11px] text-[#9898AB]">
+                            <div className="w-3.5 h-3.5 rounded-full border-2 border-[#5B5BD6]/30 border-t-[#5B5BD6] animate-spin flex-shrink-0"/>
+                            Searching {allSources.length} source file{allSources.length !== 1 ? 's' : ''}…
+                          </div>
+                        ) : topicAiWarning ? (
+                          <div className="space-y-2">
+                            <div className="flex items-start gap-2 bg-[#FEF9ED] border border-[#F59E0B]/30 rounded-lg p-3">
+                              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0 mt-0.5 text-[#D97706]"><path d="M7 1.5L13 12.5H1L7 1.5z" stroke="currentColor" strokeWidth="1.2"/><path d="M7 5.5v3M7 10v.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                              <div>
+                                <p className="text-[11px] text-[#92400E] font-medium mb-0.5">Not found in sources</p>
+                                <p className="text-[11px] text-[#B45309] leading-relaxed">{topicAiWarning}</p>
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={() => topicSourceFileRef.current?.click()} className="h-7 px-3 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-medium hover:bg-[#4A4AC4] transition-colors flex items-center gap-1.5">
+                                <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="white" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                                Add source document
+                              </button>
+                              <button onClick={() => setTopicMode('write')} className="h-7 px-3 border border-[#E2DED7] text-[#6B6B7E] rounded-lg text-[11px] hover:bg-[#F4F2EE] transition-colors">Write manually instead</button>
+                            </div>
+                          </div>
+                        ) : topicAiContent ? (
+                          <div className="space-y-2">
+                            <div className="bg-white border border-[#E2DED7] rounded-lg p-3 text-[12px] text-[#3D3D4E] leading-relaxed whitespace-pre-line">{topicAiContent}</div>
+                            <div className="flex gap-2 flex-wrap">
+                              <button onClick={() => { const para: DocBlock = { id: `ai-${Date.now()}`, type: 'para', content: topicAiContent!.replace(/\*\*[^*]+\*\*:\s*/g, '') }; setDocBlocks(prev => [...prev, para]); setTopicAiContent(null); setTopicMode('write'); triggerSave() }}
+                                className="h-7 px-3 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-medium hover:bg-[#4A4AC4] transition-colors">Insert & continue writing</button>
+                              <button onClick={() => { setTopicAiContent(null); generateTopicContent(currentTitle) }}
+                                className="h-7 px-3 border border-[#E2DED7] text-[#6B6B7E] rounded-lg text-[11px] hover:bg-[#F4F2EE] transition-colors">Regenerate</button>
+                              <button onClick={() => setTopicAiContent(null)}
+                                className="h-7 px-3 border border-[#E2DED7] text-[#6B6B7E] rounded-lg text-[11px] hover:bg-[#F4F2EE] transition-colors">Dismiss</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button onClick={() => generateTopicContent(currentTitle || 'New Topic')}
+                            className="w-full flex items-center justify-center gap-2 h-10 bg-[#5B5BD6] text-white rounded-xl text-[12px] font-medium hover:bg-[#4A4AC4] transition-colors">
+                            <span className="text-[14px]">✦</span> Generate from {allSources.length} source file{allSources.length !== 1 ? 's' : ''}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Source list */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <p className="text-[10px] text-[#9898AB] font-medium uppercase tracking-wide">Source files</p>
+                          <button onClick={() => topicSourceFileRef.current?.click()} className="flex items-center gap-1 text-[10px] text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors font-medium">
+                            <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M4.5 1v7M1 4.5h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                            Add source
+                          </button>
+                        </div>
+                        <div className="space-y-1">
+                          {allSources.map((name, i) => (
+                            <div key={i} className="flex items-center gap-2 px-2 py-1 bg-white border border-[#F4F2EE] rounded-lg">
+                              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" className="text-[#9898AB] flex-shrink-0"><rect x="1" y="1" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.1"/><path d="M3 4h5M3 6h3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
+                              <span className="text-[10px] text-[#6B6B7E] truncate flex-1">{name}</span>
+                              {i >= SOURCE_FILES.length && <button onClick={() => setTopicExtraSources(prev => prev.filter((_, pi) => pi !== i - SOURCE_FILES.length))} className="text-[#C8C6C0] hover:text-[#DC2626] text-[9px]">✕</button>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+
+                /* ── Step 2: Browse sources ── */
+                if (topicMode === 'sources') return (
+                  <div className="mb-6 rounded-xl border border-[#E2DED7] bg-white overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-3 border-b border-[#E2DED7] bg-[#F9F8F6]">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-[#6B6B7E]"><rect x="1.5" y="1.5" width="11" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.2"/><path d="M4 5h6M4 7.5h4M4 10h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
+                      <span className="text-[12px] font-semibold text-[#111218]">Browse source documents</span>
+                      <button onClick={() => setTopicMode('choose')} className="ml-auto text-[#9898AB] hover:text-[#6B6B7E] transition-colors text-[11px]">← Back</button>
+                    </div>
+                    <div className="divide-y divide-[#F4F2EE]">
+                      {allSources.map((name, si) => {
+                        const DEMO_EXCERPTS: Record<string, string[]> = isDemoMode ? {
+                          'Nexus_Technical_Specification_v3.2.pdf': ['§2 Installation — Navigate to nexus.example.com and sign in with org credentials.', '§4 Dashboard — Central workspace with project overview, tasks, and notifications.', '§7 Authentication — SAML 2.0 and OAuth 2.0 SSO supported.', '§14 API — REST API, OAuth 2.0, base URL https://api.nexus.example.com/v1.'],
+                          'UX_Research_Findings_Q3.docx': ['p.8 Dashboard — 83% of users preferred compact card view; sticky filters rated highly.', 'p.12 Login — 91% completion rate in user testing.', 'p.15 Collaboration — Real-time editing used by 74% of enterprise teams.'],
+                          'Product_Roadmap_Deck.pptx': ['Q1 — Mobile app launch for iOS and Android.', 'Q2 — Advanced analytics dashboard with custom reports.', 'Q3 — Integration marketplace with 50+ connectors.'],
+                          'Support_Ticket_Analysis_Oct.pdf': ['#1 Login issues — clear browser cache, verify SSO config.', '#2 Notification delay — check email provider settings.', '#3 Performance — recommended 16 GB RAM for large workspaces.'],
+                        } : {}
+                        const excerpts = DEMO_EXCERPTS[name] ?? ['Source excerpt preview not yet available for this file.']
+                        return (
+                          <div key={si} className="px-4 py-3">
+                            <p className="text-[11px] font-semibold text-[#111218] mb-2 flex items-center gap-1.5">
+                              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="text-[#9898AB]"><rect x="1" y="1" width="8" height="8" rx="1.2" stroke="currentColor" strokeWidth="1.1"/></svg>
+                              {name}
+                            </p>
+                            <div className="space-y-1">
+                              {excerpts.map((exc, ei) => (
+                                <button key={ei} onClick={() => { const para: DocBlock = { id: `src-${Date.now()}-${ei}`, type: 'para', content: exc }; setDocBlocks(prev => [...prev, para]); setTopicMode('write'); triggerSave() }}
+                                  className="w-full text-left flex items-start gap-2 px-2.5 py-2 rounded-lg border border-[#F4F2EE] hover:border-[#5B5BD6]/30 hover:bg-[#FAFAFF] transition-all group">
+                                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 mt-0.5 text-[#C8C6C0] group-hover:text-[#5B5BD6] transition-colors"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                                  <span className="text-[11px] text-[#3D3D4E] leading-relaxed">{exc}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="px-4 py-3 border-t border-[#F4F2EE] bg-[#F9F8F6] flex items-center justify-between">
+                      <button onClick={() => topicSourceFileRef.current?.click()} className="flex items-center gap-1.5 text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium transition-colors">
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                        Add source document
+                      </button>
+                      <button onClick={() => setTopicMode('write')} className="text-[11px] text-[#6B6B7E] hover:text-[#111218] transition-colors">Switch to manual writing →</button>
+                    </div>
+                  </div>
+                )
+
+                /* ── write mode: show a subtle prompt to keep adding content ── */
+                return docBlocks.length <= 1 ? (
+                  <div className="mb-4 flex items-center gap-3 px-3 py-2.5 bg-[#F9F8F6] border border-dashed border-[#D8D4CE] rounded-xl">
+                    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="text-[#9898AB] flex-shrink-0"><path d="M6.5 2v9M2 6.5h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                    <p className="text-[11px] text-[#9898AB]">Use the <strong className="text-[#6B6B7E]">Insert</strong> toolbar above to add paragraphs, headings, tables, and more. Or switch to <button onClick={() => setTopicMode('ai')} className="text-[#5B5BD6] hover:underline font-medium">AI generation</button>.</p>
+                  </div>
+                ) : null
+              })()}
+
+              {/* Hidden file input for source document upload */}
+              <input ref={topicSourceFileRef} type="file" accept=".pdf,.docx,.pptx,.txt,.md" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) { setTopicExtraSources(prev => [...prev, f.name]); e.target.value = '' } }} />
+
+              {/* Block-based document */}
+              {docBlocks.map((block) => {
+                const isFocused = focusedBlockId === block.id
+                const hasConditions = (block.conditions ?? []).length > 0
+                const fq = findQuery.trim().toLowerCase()
+                const isFindMatch = showFind && findScope === 'topic' && fq.length > 0 && (() => {
+                  const texts = [block.content, ...(block.listItems?.map(i => i.text) ?? []), ...(block.procedureSteps ?? []), ...(block.tableData?.rows.flat() ?? [])]
+                  return texts.some(t => t.toLowerCase().includes(fq))
+                })()
+
+                const isBlockSelected = selectedBlockIds.has(block.id)
+                const BLOCK_TYPE_LABELS: Partial<Record<DocBlockType, string>> = {
+                  h1: 'H1', h2: 'H2', h3: 'H3', h4: 'H4', para: 'P', callout: '!', quote: '"',
+                  code: '<>', list: '≡', procedure: '①', table: '⊞', media: '◻', divider: '—',
+                }
+                const CONVERTIBLE_TYPES: DocBlockType[] = ['h1','h2','h3','h4','para','quote','code','callout','list','procedure']
+
+                const blockWrapper = (children: React.ReactNode) => (
+                  <div
+                    key={block.id}
+                    id={block.id}
+                    className={`relative group mb-4 rounded-lg transition-all ${
+                      isBlockSelected
+                        ? 'ring-2 ring-[#5B5BD6] ring-offset-1 bg-[#EEEEFF]/30'
+                        : isFocused
+                        ? 'ring-2 ring-[#5B5BD6]/40 ring-offset-1'
+                        : isFindMatch
+                        ? 'ring-2 ring-[#F59E0B]/50 ring-offset-1 bg-[#FFFBEB]'
+                        : 'ring-1 ring-transparent hover:ring-[#E2DED7]'
+                    } ${hasConditions && !isBlockSelected ? 'ring-[#5B5BD6]/20' : ''}`}
+                    onFocus={() => setFocusedBlockId(block.id)}
+                  >
+                    {/* Condition badge */}
+                    {hasConditions && (
+                      <div className="absolute -top-2 right-2 flex gap-1 z-10">
+                        {(block.conditions ?? []).slice(0, 3).map(c => (
+                          <span key={c} className="bg-[#EEEEFF] text-[#5B5BD6] text-[9px] font-semibold px-1.5 py-0.5 rounded-full border border-[#5B5BD6]/20">{c}</span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Left gutter: select checkbox */}
+                    <div className="absolute -left-8 top-1/2 -translate-y-1/2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity z-10" style={{ opacity: isBlockSelected ? 1 : undefined }}>
+                      <button
+                        onMouseDown={e => { e.preventDefault(); setSelectedBlockIds(prev => { const n = new Set(prev); n.has(block.id) ? n.delete(block.id) : n.add(block.id); return n }) }}
+                        className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${isBlockSelected ? 'bg-[#5B5BD6] border-[#5B5BD6]' : 'border-[#D8D4CE] bg-white hover:border-[#5B5BD6]'}`}
+                        title="Select block"
+                        tabIndex={-1}
+                      >
+                        {isBlockSelected && <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.5 6L6.5 2" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                      </button>
+                    </div>
+
+                    {/* Block action buttons — shown when block is focused/selected */}
+                    {(isFocused || isBlockSelected) && (
+                      <div className="absolute -top-2 -right-2 z-20 flex items-center gap-1">
+                        <button
+                          onMouseDown={e => { e.preventDefault(); setConditionsBlockId(block.id); setShowConditions(true); setShowInsertMenu(false); setShowMoreMenu(false); setShowRefsMenu(false); setShowAiMenu(false) }}
+                          className={`w-5 h-5 rounded-full bg-white border shadow-sm flex items-center justify-center transition-colors ${(block.conditions ?? []).length > 0 ? 'border-[#5B5BD6] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#9898AB] hover:text-[#5B5BD6] hover:border-[#5B5BD6]'}`}
+                          title="Conditions"
+                          tabIndex={-1}
+                        >
+                          <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M1 2.5h7M2.5 4.5h4M4 6.5h1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                        </button>
+                        <button
+                          onMouseDown={e => { e.preventDefault(); deleteBlock(block.id) }}
+                          className="w-5 h-5 rounded-full bg-white border border-[#E2DED7] shadow-sm flex items-center justify-center text-[#9898AB] hover:text-[#DC2626] hover:border-[#DC2626] transition-colors"
+                          title="Delete block"
+                          tabIndex={-1}
+                        >
+                          <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 1l6 6M7 1L1 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                        </button>
+                      </div>
+                    )}
+                    {children}
+                  </div>
+                )
+
+                if (block.type === 'h1') return blockWrapper(
+                  <h1
+                    contentEditable suppressContentEditableWarning
+                    className="font-doc text-[28px] font-bold text-[#111218] focus:outline-none focus:bg-[#F9F8F6] rounded px-1 -mx-1 border-b border-[#E2DED7] pb-2"
+                    onInput={e => {
+                      triggerSave()
+                      checkVarAutocomplete()
+                      const isFirstBlock = docBlocks[0]?.id === block.id
+                      const isNew = activeTopicId !== null && (studioToc.find(t => t.id === activeTopicId)?.isNew || docBlocks.length <= 1)
+                      if (isFirstBlock && isNew) suggestTitles((e.target as HTMLElement).innerText)
+                    }}
+                    onKeyDown={e => { if (handleVarPopoverKey(e)) return; handleBlockEnterKey(e, block.id, e.currentTarget as HTMLElement) }}
+                    onBlur={e => {
+                      const text = (e.target as HTMLElement).innerText
+                      updateBlock(block.id, { content: text })
+                      const isFirstBlock = docBlocks[0]?.id === block.id
+                      if (isFirstBlock && activeTopicId !== null) setStudioToc(prev => prev.map(t => t.id === activeTopicId ? { ...t, title: text } : t))
+                    }}
+                  >{block.content}</h1>
+                )
+
+                if (block.type === 'h2') return blockWrapper(
+                  <h2
+                    contentEditable suppressContentEditableWarning
+                    className="font-doc text-[20px] font-semibold text-[#111218] focus:outline-none focus:bg-[#F9F8F6] rounded px-1 -mx-1"
+                    onInput={() => { triggerSave(); checkVarAutocomplete() }}
+                    onKeyDown={e => { if (handleVarPopoverKey(e)) return; handleBlockEnterKey(e, block.id, e.currentTarget as HTMLElement) }}
+                    onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                  >{block.content}</h2>
+                )
+
+                if (block.type === 'h3') return blockWrapper(
+                  <h3
+                    contentEditable suppressContentEditableWarning
+                    className="font-doc text-[16px] font-medium text-[#111218] focus:outline-none focus:bg-[#F9F8F6] rounded px-1 -mx-1"
+                    onInput={() => { triggerSave(); checkVarAutocomplete() }}
+                    onKeyDown={e => { if (handleVarPopoverKey(e)) return; handleBlockEnterKey(e, block.id, e.currentTarget as HTMLElement) }}
+                    onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                  >{block.content}</h3>
+                )
+
+                if (block.type === 'h4') return blockWrapper(
+                  <h4
+                    contentEditable suppressContentEditableWarning
+                    className="font-doc text-[14px] font-semibold text-[#3D3D4E] uppercase tracking-wide focus:outline-none focus:bg-[#F9F8F6] rounded px-1 -mx-1"
+                    onInput={() => { triggerSave(); checkVarAutocomplete() }}
+                    onKeyDown={e => { if (handleVarPopoverKey(e)) return; handleBlockEnterKey(e, block.id, e.currentTarget as HTMLElement) }}
+                    onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                  >{block.content}</h4>
+                )
+
+                if (block.type === 'para') return blockWrapper(
+                  <div
+                    contentEditable suppressContentEditableWarning
+                    className="font-doc text-[15px] text-[#2A2A3A] leading-relaxed focus:outline-none focus:bg-[#F9F8F6] rounded px-1 -mx-1 min-h-[1.5em]"
+                    onInput={() => { triggerSave(); checkVarAutocomplete() }}
+                    onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                    onKeyDown={e => {
+                      if (handleVarPopoverKey(e)) return
+                      if (handleBlockEnterKey(e, block.id, e.currentTarget as HTMLElement)) return
+                      if (e.key === 'Backspace') {
+                        const el = e.currentTarget as HTMLElement
+                        const text = el.innerText.replace(/\n$/, '')
+                        const sel = window.getSelection()
+                        const atStart = sel && sel.anchorOffset === 0 && sel.focusOffset === 0
+                        if (text === '' || atStart) {
+                          const blockIdx = docBlocks.findIndex(b => b.id === block.id)
+                          const prevBlock = docBlocks[blockIdx - 1]
+                          if (text === '' && blockIdx > 0) {
+                            e.preventDefault()
+                            deleteBlock(block.id)
+                            setTimeout(() => {
+                              const prevEl = document.getElementById(prevBlock.id)?.querySelector('[contenteditable]') as HTMLElement
+                              if (prevEl) { prevEl.focus(); const r = document.createRange(); r.selectNodeContents(prevEl); r.collapse(false); const s = window.getSelection(); s?.removeAllRanges(); s?.addRange(r) }
+                            }, 20)
+                          }
+                        }
+                      }
+                    }}
+                  >{block.content}</div>
+                )
+
+                if (block.type === 'caption') return blockWrapper(
+                  <div
+                    contentEditable suppressContentEditableWarning
+                    className="font-doc text-[12px] text-[#6B6B7E] italic leading-relaxed focus:outline-none focus:bg-[#F9F8F6] rounded px-1 -mx-1 min-h-[1.5em] text-center"
+                    onInput={() => triggerSave()}
+                    onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                  >{block.content}</div>
+                )
+
+                if (block.type === 'list') {
+                  const items = block.listItems ?? []
+                  const handleItemKeyDown = (e: React.KeyboardEvent<HTMLElement>, itemIdx: number) => {
+                    const item = items[itemIdx]
+                    const el = e.currentTarget
+
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      const rawText = el.innerText.replace(/\n$/, '')
+                      const isEmpty = rawText.trim() === ''
+
+                      if (isEmpty) {
+                        if (item.level > 1) {
+                          // Outdent on empty Enter
+                          updateBlock(block.id, { listItems: items.map((i, ix) => ix === itemIdx ? { ...i, level: i.level - 1 } : i) })
+                          setPendingListFocusId(item.id)
+                        } else {
+                          // Exit list — remove empty item, insert paragraph after
+                          const newItems = items.filter((_, ix) => ix !== itemIdx)
+                          if (newItems.length === 0) {
+                            setDocBlocks(prev => prev.map(b => b.id === block.id ? { ...b, type: 'para', content: '', listItems: undefined } : b))
+                            triggerSave()
+                            setTimeout(() => { const w = document.getElementById(block.id); const ed = w?.querySelector('[contenteditable]') as HTMLElement; ed?.focus() }, 30)
+                          } else {
+                            const newParaId = `b${Date.now()}`
+                            setDocBlocks(prev => {
+                              const idx = prev.findIndex(b => b.id === block.id)
+                              const next = [...prev]
+                              next[idx] = { ...next[idx], listItems: newItems }
+                              next.splice(idx + 1, 0, { id: newParaId, type: 'para', content: '' })
+                              return next
+                            })
+                            triggerSave()
+                            setTimeout(() => { const w = document.getElementById(newParaId); const ed = w?.querySelector('[contenteditable]') as HTMLElement; ed?.focus() }, 30)
+                          }
+                        }
+                        return
+                      }
+
+                      // Split item at caret
+                      const { before, after } = splitAtCaret(el)
+                      const newItemId = `li${Date.now()}`
+                      const newItems = [
+                        ...items.slice(0, itemIdx),
+                        { ...item, text: before },
+                        { id: newItemId, text: after, level: item.level, type: item.type },
+                        ...items.slice(itemIdx + 1),
+                      ]
+                      updateBlock(block.id, { listItems: newItems })
+                      setPendingListFocusId(newItemId)
+                      return
+                    }
+
+                    if (e.key === 'Backspace') {
+                      const rawText = el.innerText.replace(/\n$/, '')
+                      const sel = window.getSelection()
+                      const atStart = sel && sel.anchorOffset === 0 && sel.focusOffset === 0
+
+                      if (rawText.trim() === '' || atStart) {
+                        e.preventDefault()
+                        if (rawText.trim() === '') {
+                          // Delete this empty item
+                          const newItems = items.filter((_, ix) => ix !== itemIdx)
+                          if (newItems.length === 0) {
+                            // Last item — convert block to para
+                            setDocBlocks(prev => prev.map(b => b.id === block.id ? { ...b, type: 'para', content: '', listItems: undefined } : b))
+                            triggerSave()
+                            setTimeout(() => { const w = document.getElementById(block.id); const ed = w?.querySelector('[contenteditable]') as HTMLElement; ed?.focus() }, 30)
+                          } else {
+                            updateBlock(block.id, { listItems: newItems })
+                            // Focus previous item or first
+                            const focusId = items[itemIdx - 1]?.id ?? newItems[0].id
+                            setPendingListFocusId(focusId)
+                          }
+                        } else if (atStart && itemIdx > 0) {
+                          // Merge text into previous item
+                          const prevItem = items[itemIdx - 1]
+                          const merged = prevItem.text + rawText
+                          const newItems = items
+                            .filter((_, ix) => ix !== itemIdx)
+                            .map((i, ix) => ix === itemIdx - 1 ? { ...i, text: merged } : i)
+                          updateBlock(block.id, { listItems: newItems })
+                          setPendingListFocusId(prevItem.id)
+                        } else if (atStart && itemIdx === 0 && item.level > 1) {
+                          // Outdent at start of indented item
+                          updateBlock(block.id, { listItems: items.map((i, ix) => ix === 0 ? { ...i, level: i.level - 1 } : i) })
+                          setPendingListFocusId(item.id)
+                        }
+                        return
+                      }
+                    }
+
+                    if (e.key === 'Tab') {
+                      e.preventDefault()
+                      const currentText = el.innerText.replace(/\n$/, '')
+                      const newLevel = Math.max(1, Math.min(4, item.level + (e.shiftKey ? -1 : 1)))
+                      if (newLevel !== item.level) {
+                        updateBlock(block.id, { listItems: items.map((i, ix) => ix === itemIdx ? { ...i, text: currentText, level: newLevel } : i) })
+                      }
+                      return
+                    }
+                  }
+
+                  return blockWrapper(
+                    <div data-blocktype="list" className="py-0.5">
+                      {items.map((item, idx) => (
+                        <div key={item.id} className="flex items-baseline gap-1.5 mb-0.5 group/item" style={{ paddingLeft: `${(item.level - 1) * 24}px` }}>
+                          {/* Item type toggle — click to switch between bullet and ordered */}
+                          <button
+                            onClick={() => updateBlock(block.id, { listItems: items.map((i, ix) => ix === idx ? { ...i, type: i.type === 'bullet' ? 'ordered' : 'bullet' } : i) })}
+                            tabIndex={-1}
+                            title={item.type === 'bullet' ? 'Switch to numbered' : 'Switch to bullet'}
+                            className="text-[#6B6B7E] hover:text-[#5B5BD6] text-[13px] select-none flex-shrink-0 min-w-[1.5rem] text-right leading-relaxed transition-colors"
+                          >
+                            {getItemLabel(items, idx)}
+                          </button>
+                          <span
+                            ref={el => { listItemRefs.current[item.id] = el }}
+                            contentEditable
+                            suppressContentEditableWarning
+                            className="flex-1 font-doc text-[15px] text-[#2A2A3A] focus:outline-none leading-relaxed"
+                            onFocus={() => setFocusedBlockId(block.id)}
+                            onInput={() => triggerSave()}
+                            onBlur={e => {
+                              const newText = (e.target as HTMLElement).innerText.replace(/\n$/, '')
+                              updateBlock(block.id, { listItems: items.map((i, ix) => ix === idx ? { ...i, text: newText } : i) })
+                            }}
+                            onKeyDown={e => handleItemKeyDown(e, idx)}
+                          >{item.text}</span>
+                          {/* Restart/continue sequence toggle — only for ordered items */}
+                          {item.type === 'ordered' && (
+                            <button
+                              onClick={() => updateBlock(block.id, { listItems: items.map((i, ix) => ix === idx ? { ...i, startFresh: !i.startFresh } : i) })}
+                              tabIndex={-1}
+                              title={item.startFresh ? 'Continuing sequence — click to restart from 1' : 'Click to restart sequence here'}
+                              className={`opacity-0 group-hover/item:opacity-100 text-[10px] transition-opacity flex-shrink-0 leading-none ${item.startFresh ? 'text-[#5B5BD6]' : 'text-[#C8C6C0] hover:text-[#5B5BD6]'}`}
+                            >↺</button>
+                          )}
+                          <button
+                            onClick={() => {
+                              const newItems = items.filter((_, ix) => ix !== idx)
+                              if (newItems.length === 0) {
+                                setDocBlocks(prev => prev.map(b => b.id === block.id ? { ...b, type: 'para', content: '', listItems: undefined } : b))
+                                triggerSave()
+                              } else {
+                                updateBlock(block.id, { listItems: newItems })
+                              }
+                            }}
+                            className="opacity-0 group-hover/item:opacity-100 text-[#C8C6C0] hover:text-[#DC2626] text-[10px] transition-opacity flex-shrink-0"
+                            tabIndex={-1}
+                          >✕</button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => {
+                          const lastItem = items[items.length - 1]
+                          const newItemId = `li${Date.now()}`
+                          updateBlock(block.id, { listItems: [...items, { id: newItemId, text: '', level: lastItem?.level ?? 1, type: lastItem?.type ?? 'bullet' }] })
+                          setPendingListFocusId(newItemId)
+                        }}
+                        className="opacity-0 group-hover:opacity-100 text-[11px] text-[#9898AB] hover:text-[#5B5BD6] transition-all mt-1 pl-1"
+                        tabIndex={-1}
+                      >+ Add item</button>
+                    </div>
+                  )
+                }
+
+                if (block.type === 'variable') return blockWrapper(
+                  <span className="inline-flex items-center gap-1 bg-[#FEF3C7] border border-[#D97706]/30 text-[#92400E] text-[12px] font-mono-code px-2 py-0.5 rounded cursor-pointer hover:bg-[#FDE68A] transition-colors" title="Variable">
+                    {`{{${block.content}}}`}
+                    <button onClick={() => deleteBlock(block.id)} className="text-[#D97706] hover:text-[#B45309] text-[9px]">✕</button>
+                  </span>
+                )
+
+                if (block.type === 'bookmark') return blockWrapper(
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="w-3 h-3 rounded-sm bg-[#5B5BD6]/20 border border-[#5B5BD6]/40 flex-shrink-0" />
+                    <div
+                      contentEditable suppressContentEditableWarning
+                      className="text-[11px] font-mono-code text-[#5B5BD6] focus:outline-none"
+                      onInput={() => triggerSave()}
+                      onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                    >{block.content}</div>
+                    <span className="text-[9px] text-[#9898AB] uppercase tracking-wider">anchor</span>
+                    <button onClick={() => deleteBlock(block.id)} className="text-[#C8C6C0] hover:text-[#9898AB] text-[10px] ml-auto">✕</button>
+                  </div>
+                )
+
+                if (block.type === 'callout') {
+                  const cs = CALLOUT_STYLES[block.calloutVariant ?? 'note']
+                  return blockWrapper(
+                    <div
+                      className={`border-l-2 ${cs.border} ${cs.bg} rounded-r-lg px-4 py-3 relative`}
+                      onClick={() => setSelectedCalloutId(block.id === selectedCalloutId ? null : block.id)}
+                    >
+                      <div className="flex items-center justify-between mb-0.5">
+                        <p className={`text-[12px] font-semibold ${cs.labelColor}`}>{cs.label}</p>
+                        {selectedCalloutId === block.id && (
+                          <div className="flex items-center gap-1">
+                            {(['note','tip','important','warning','example'] as CalloutVariant[]).map(v => (
+                              <button key={v} onClick={e => { e.stopPropagation(); updateBlock(block.id, { calloutVariant: v }) }} className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors capitalize ${block.calloutVariant === v ? 'bg-white border-[#5B5BD6] text-[#5B5BD6]' : 'border-transparent text-[#9898AB] hover:border-[#E2DED7]'}`}>{v}</button>
+                            ))}
+                            <button onClick={e => { e.stopPropagation(); deleteBlock(block.id) }} className="text-[#9898AB] hover:text-[#DC2626] transition-colors ml-1 text-[11px]">✕</button>
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        contentEditable suppressContentEditableWarning
+                        className={`font-doc text-[13px] ${cs.textColor} focus:outline-none min-h-[1em]`}
+                        onInput={() => triggerSave()}
+                        onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                      >{block.content}</div>
+                    </div>
+                  )
+                }
+
+                if (block.type === 'table' && block.tableData) {
+                  const td = block.tableData
+                  const tableActive = inTableBlockId === block.id || isFocused
+                  return blockWrapper(
+                    <div className="rounded-lg overflow-visible" data-blocktype="table">
+                      {/* Inline table toolbar — floats above the table when active */}
+                      {tableActive && (
+                        <div className="flex items-center gap-0.5 mb-1 flex-wrap">
+                          <span className="text-[10px] text-[#9898AB] font-medium uppercase tracking-wider mr-1.5">Table</span>
+                          {[
+                            { label: '+ Row ↑', op: 'addRowAbove' },
+                            { label: '+ Row ↓', op: 'addRowBelow' },
+                            { label: '+ Col ←', op: 'addColLeft' },
+                            { label: '+ Col →', op: 'addColRight' },
+                            { label: '− Row', op: 'delRow' },
+                            { label: '− Col', op: 'delCol' },
+                            { label: td.hasHeader ? '⊟ No Header' : '⊞ Header', op: 'toggleHeader' },
+                          ].map(a => (
+                            <button
+                              key={a.op}
+                              onMouseDown={e => { e.preventDefault(); tableOp(block.id, a.op) }}
+                              className="h-6 px-2 rounded text-[11px] font-medium transition-colors text-[#6B6B7E] hover:bg-[#EEEEFF] hover:text-[#5B5BD6] border border-transparent hover:border-[#5B5BD6]/20"
+                            >
+                              {a.label}
+                            </button>
+                          ))}
+                          <div className="w-px h-4 bg-[#E2DED7] mx-0.5" />
+                          <button
+                            onMouseDown={e => { e.preventDefault(); deleteBlock(block.id) }}
+                            className="h-6 px-2 rounded text-[11px] font-medium transition-colors text-[#DC2626] hover:bg-[#FEF2F2] border border-transparent hover:border-[#DC2626]/20"
+                          >Delete</button>
+                        </div>
+                      )}
+                      <div className="border border-[#E2DED7] rounded-lg overflow-hidden">
+                      <table className="w-full text-[13px]">
+                        {td.hasHeader && (
+                          <thead className="bg-[#F9F8F6] border-b border-[#E2DED7]">
+                            <tr>
+                              {(td.rows[0] ?? []).map((cell, ci) => (
+                                <th key={ci} className="text-left px-4 py-2.5 font-semibold text-[#111218]">
+                                  <div
+                                    contentEditable suppressContentEditableWarning
+                                    className="focus:outline-none min-w-[40px]"
+                                    onInput={() => triggerSave()}
+                                    onFocus={() => { setInTableBlockId(block.id); setFocusedBlockId(block.id) }}
+                                    onBlur={e => {
+                                      const newRows = td.rows.map((r, ri) => ri === 0 ? r.map((c, cj) => cj === ci ? (e.target as HTMLElement).innerText : c) : r)
+                                      updateBlock(block.id, { tableData: { ...td, rows: newRows } })
+                                      setTimeout(() => setInTableBlockId(null), 200)
+                                    }}
+                                  >{cell}</div>
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                        )}
+                        <tbody>
+                          {(td.hasHeader ? td.rows.slice(1) : td.rows).map((row, ri) => (
+                            <tr key={ri} className="border-b border-[#F4F2EE] last:border-0">
+                              {row.map((cell, ci) => (
+                                <td key={ci} className="px-4 py-2.5 text-[#3D3D4E]">
+                                  <div
+                                    contentEditable suppressContentEditableWarning
+                                    className="focus:outline-none min-w-[40px] min-h-[1em]"
+                                    onInput={() => triggerSave()}
+                                    onFocus={() => setInTableBlockId(block.id)}
+                                    onBlur={e => {
+                                      const absRi = td.hasHeader ? ri + 1 : ri
+                                      const newRows = td.rows.map((r, rx) => rx === absRi ? r.map((c, cx) => cx === ci ? (e.target as HTMLElement).innerText : c) : r)
+                                      updateBlock(block.id, { tableData: { ...td, rows: newRows } })
+                                      setTimeout(() => setInTableBlockId(null), 200)
+                                    }}
+                                  >{cell}</div>
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      </div>
+                    </div>
+                  )
+                }
+
+                if (block.type === 'procedure') {
+                  return blockWrapper(
+                    <div className="border border-[#E2DED7] rounded-xl overflow-hidden">
+                      <div className="bg-[#EEEEFF] border-b border-[#E2DED7] px-4 py-2.5 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-sm bg-[#5B5BD6]" />
+                          <div
+                            contentEditable suppressContentEditableWarning
+                            className="text-[13px] font-semibold text-[#5B5BD6] focus:outline-none"
+                            onInput={() => triggerSave()}
+                            onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                          >{block.content}</div>
+                        </div>
+                        <button onClick={() => deleteBlock(block.id)} className="text-[#9898AB] hover:text-[#DC2626] transition-colors text-[11px]">✕</button>
+                      </div>
+                      <div className="p-4 space-y-3">
+                        {(block.procedureSteps ?? []).map((step, si) => (
+                          <div key={si} className="flex items-start gap-3">
+                            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-[#EEEEFF] text-[#5B5BD6] text-[11px] font-bold flex items-center justify-center mt-0.5">{si + 1}</span>
+                            <div
+                              contentEditable suppressContentEditableWarning
+                              className="font-doc text-[14px] text-[#2A2A3A] flex-1 focus:outline-none min-h-[1em]"
+                              onInput={() => triggerSave()}
+                              onBlur={e => {
+                                const newSteps = [...(block.procedureSteps ?? [])]
+                                newSteps[si] = (e.target as HTMLElement).innerText
+                                updateBlock(block.id, { procedureSteps: newSteps })
+                              }}
+                            >{step}</div>
+                            <button onClick={() => {
+                              const newSteps = (block.procedureSteps ?? []).filter((_, i) => i !== si)
+                              updateBlock(block.id, { procedureSteps: newSteps })
+                            }} className="text-[#C8C6C0] hover:text-[#DC2626] text-[10px] mt-0.5 transition-colors">✕</button>
+                          </div>
+                        ))}
+                        <button
+                          onClick={() => updateBlock(block.id, { procedureSteps: [...(block.procedureSteps ?? []), 'New step'] })}
+                          className="text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors"
+                        >+ Add step</button>
+                      </div>
+                    </div>
+                  )
+                }
+
+                if (block.type === 'code') return blockWrapper(
+                  <div className="bg-[#1A1B22] rounded-xl p-4 relative group">
+                    <div className="flex items-center gap-1.5 mb-3">
+                      {['#DC2626','#D97706','#16A34A'].map(c => <div key={c} className="w-2.5 h-2.5 rounded-full" style={{ background: c }} />)}
+                    </div>
+                    <div
+                      contentEditable suppressContentEditableWarning
+                      className="font-mono-code text-[13px] text-[#A5B4FC] focus:outline-none whitespace-pre min-h-[2em]"
+                      onInput={() => triggerSave()}
+                      onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                    >{block.content}</div>
+                    <button onClick={() => deleteBlock(block.id)} className="absolute top-3 right-3 text-[#5B5B7E] hover:text-[#9898AB] text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                  </div>
+                )
+
+                if (block.type === 'quote') return blockWrapper(
+                  <div className="border-l-4 border-[#5B5BD6] pl-4 py-1">
+                    <div
+                      contentEditable suppressContentEditableWarning
+                      className="font-doc text-[15px] italic text-[#3D3D4E] focus:outline-none min-h-[1em]"
+                      onInput={() => triggerSave()}
+                      onBlur={e => updateBlock(block.id, { content: (e.target as HTMLElement).innerText })}
+                    >{block.content}</div>
+                    <button onClick={() => deleteBlock(block.id)} className="text-[10px] text-[#C8C6C0] hover:text-[#9898AB] transition-colors opacity-0 group-hover:opacity-100 mt-1">✕</button>
+                  </div>
+                )
+
+                if (block.type === 'divider') return blockWrapper(
+                  <div className="relative py-1">
+                    <div className="h-px bg-[#E2DED7]" />
+                    <button onClick={() => deleteBlock(block.id)} className="absolute top-1/2 right-0 -translate-y-1/2 text-[10px] text-[#C8C6C0] hover:text-[#9898AB] opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                  </div>
+                )
+
+                if (block.type === 'media') {
+                  const hasImage = !!block.mediaType?.startsWith('data:')
+                  return blockWrapper(
+                    <div
+                      className={`border-2 border-dashed rounded-xl relative group transition-colors ${hasImage ? 'border-transparent p-0' : 'border-[#C8C6C0] p-6 text-center'}`}
+                      onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('border-[#5B5BD6]', 'bg-[#EEEEFF]') }}
+                      onDragLeave={e => { e.currentTarget.classList.remove('border-[#5B5BD6]', 'bg-[#EEEEFF]') }}
+                      onDrop={e => {
+                        e.preventDefault()
+                        e.currentTarget.classList.remove('border-[#5B5BD6]', 'bg-[#EEEEFF]')
+                        const file = e.dataTransfer.files[0]
+                        if (file && file.type.startsWith('image/')) {
+                          const reader = new FileReader()
+                          reader.onload = ev => updateBlock(block.id, { mediaType: ev.target?.result as string })
+                          reader.readAsDataURL(file)
+                        }
+                      }}
+                    >
+                      {hasImage ? (
+                        <div className="relative">
+                          <img src={block.mediaType} alt={block.caption || ''} className="max-w-full rounded-xl" />
+                          <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => { setPendingMediaBlockId(block.id); imageInputRef.current?.click() }} className="bg-white border border-[#E2DED7] text-[11px] text-[#6B6B7E] px-2 py-1 rounded-lg hover:bg-[#F9F8F6] transition-colors">Replace</button>
+                            <button onClick={() => updateBlock(block.id, { mediaType: 'image' })} className="bg-white border border-[#E2DED7] text-[11px] text-[#DC2626] px-2 py-1 rounded-lg hover:bg-[#FEF2F2] transition-colors">Remove</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="w-10 h-10 rounded-xl bg-[#F4F2EE] flex items-center justify-center mx-auto mb-3">
+                            <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="3" width="14" height="10" rx="1.5" stroke="#9898AB" strokeWidth="1.3"/><path d="M5 9.5l2.5-3 2.5 3 2-2 2 2" stroke="#9898AB" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/><circle cx="6.5" cy="6.5" r="1" fill="#9898AB"/></svg>
+                          </div>
+                          <p className="text-[12px] font-medium text-[#6B6B7E] mb-1">Drop image here or</p>
+                          <div className="flex items-center justify-center gap-2">
+                            <button onClick={() => { setPendingMediaBlockId(block.id); imageInputRef.current?.click() }} className="text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors font-medium">Upload</button>
+                            <span className="text-[#C8C6C0]">·</span>
+                            <button className="text-[11px] text-[#8B5CF6] hover:text-[#7C3AED] transition-colors font-medium">✦ Generate</button>
+                          </div>
+                        </>
+                      )}
+                      <div
+                        contentEditable suppressContentEditableWarning
+                        className={`text-[11px] text-[#9898AB] italic focus:outline-none text-center ${hasImage ? 'mt-2 px-2 pb-2' : 'mt-3'}`}
+                        onInput={() => triggerSave()}
+                        onBlur={e => updateBlock(block.id, { caption: (e.target as HTMLElement).innerText })}
+                      >{block.caption || 'Add caption…'}</div>
+                      {!hasImage && <button onClick={() => deleteBlock(block.id)} className="absolute top-2 right-2 text-[10px] text-[#C8C6C0] hover:text-[#9898AB] opacity-0 group-hover:opacity-100 transition-opacity">✕</button>}
+                    </div>
+                  )
+                }
+
+                return null
+              })}
+
+              {/* Source reference badge */}
+              {sourceRef && (
+                <div className="inline-flex items-center gap-1.5 bg-[#F3F0FF] border border-[#DDD6FE] px-2 py-0.5 rounded text-[11px] text-[#7C3AED] font-medium cursor-pointer hover:bg-[#EDE9FE] transition-colors mt-4">
+                  <div className="w-3 h-3 rounded-sm bg-[#8B5CF6] flex items-center justify-center"><span className="text-white text-[8px]">S</span></div>
+                  Technical Spec v3.2 · §1.1
+                </div>
+              )}
+            </div>
+
+            {/* Page navigation */}
+            <div className="flex items-center justify-between mt-6 px-2">
+              {reviewContext ? (
+                <button onClick={() => onNav('quality')} className="text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors">← Back to Review</button>
+              ) : (
+                <button className="text-[12px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors">← Previous: Overview</button>
+              )}
+              <button className="text-[12px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors">Next: Managing Projects →</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Link insertion modal */}
+        {linkModalOpen && (
+          <div className="fixed inset-0 bg-black/20 z-40 flex items-center justify-center fade-in" onClick={() => setLinkModalOpen(false)}>
+            <div className="bg-white rounded-2xl popover-shadow w-80 overflow-hidden" onClick={e => e.stopPropagation()}>
+              <div className="px-5 py-4 border-b border-[#E2DED7]">
+                <p className="text-[13px] font-semibold text-[#111218]">Insert Link</p>
+              </div>
+              <div className="p-5 space-y-3">
+                <div>
+                  <label className="text-[11px] text-[#9898AB] font-medium block mb-1">URL or email</label>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={linkUrl}
+                    onChange={e => setLinkUrl(e.target.value)}
+                    placeholder="https:// or mailto:"
+                    className="w-full border border-[#E2DED7] rounded-lg px-3 py-2 text-[13px] text-[#111218] focus:outline-none focus:border-[#5B5BD6]"
+                  />
+                </div>
+                <div className="h-px bg-[#F4F2EE]" />
+                <p className="text-[11px] text-[#9898AB] font-medium mb-1">Internal topic</p>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {studioToc.filter(t => t.level <= 2).map(t => (
+                    <button key={t.id} onClick={() => { execFmt('createLink', `#topic-${t.id}`); setLinkModalOpen(false) }} className="w-full text-left px-2 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] rounded transition-colors truncate">{t.title}</button>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => { if (linkUrl) { execFmt('createLink', linkUrl); setLinkUrl('') }; setLinkModalOpen(false) }} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Insert</button>
+                  <button onClick={() => setLinkModalOpen(false)} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Contextual AI Popover */}
+      {aiPopover?.visible && (
+        <div
+          className="fixed z-50 fade-in"
+          style={{ left: Math.min(aiPopover.x - 160, window.innerWidth - 340), top: aiPopover.y - 48 }}
+        >
+          <div className="bg-[#1A1B22] rounded-xl p-1.5 popover-shadow flex items-center gap-0.5 flex-wrap max-w-xs">
+            <div className="flex items-center gap-1.5 px-2 py-1 mr-1">
+              <div className="w-3.5 h-3.5 rounded bg-[#8B5CF6] flex items-center justify-center">
+                <span className="text-white text-[9px]">✦</span>
+              </div>
+              <span className="text-[11px] text-[#8B8BAA] font-medium">AI</span>
+            </div>
+            {AI_ACTIONS.slice(0, 6).map(action => (
+              <button
+                key={action}
+                onClick={() => runAiAction(action)}
+                className="px-2 py-1 rounded-lg text-[11px] text-white font-medium hover:bg-[#2A2B38] transition-colors whitespace-nowrap"
+              >
+                {action}
+              </button>
+            ))}
+            <button
+              onClick={() => setAiPopover(p => p ? { ...p, visible: false } : null)}
+              className="px-2 py-1 rounded-lg text-[11px] text-[#5B5BAA] hover:text-white transition-colors"
+            >
+              ···
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* AI Action Result Modal */}
+      {aiAction && (
+        <div className="fixed inset-0 bg-black/20 z-40 flex items-center justify-center fade-in" onClick={() => { setAiAction(null); setAiResult(null) }}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-md w-full mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded bg-[#8B5CF6] flex items-center justify-center">
+                  <span className="text-white text-[10px]">✦</span>
+                </div>
+                <span className="text-[13px] font-semibold text-[#111218]">{aiAction}</span>
+              </div>
+              <button onClick={() => { setAiAction(null); setAiResult(null) }} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div className="p-5">
+              {!aiResult ? (
+                <div className="space-y-2">
+                  <div className="h-4 rounded shimmer" />
+                  <div className="h-4 w-4/5 rounded shimmer" />
+                  <div className="h-4 w-3/5 rounded shimmer" />
+                </div>
+              ) : (
+                <div>
+                  <p className="text-[13px] text-[#2A2A3A] font-doc leading-relaxed mb-4 whitespace-pre-line">{aiResult}</p>
+                  <div className="flex gap-2">
+                    <button onClick={applyAiResult} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">
+                      Apply
+                    </button>
+                    <button onClick={() => { setAiAction(null); setAiResult(null); savedRangeRef.current = null }} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden image file input */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/svg+xml"
+        className="hidden"
+        onChange={e => {
+          const file = e.target.files?.[0]
+          if (file && pendingMediaBlockId) {
+            const reader = new FileReader()
+            reader.onload = ev => {
+              updateBlock(pendingMediaBlockId, { mediaType: ev.target?.result as string })
+              setPendingMediaBlockId(null)
+            }
+            reader.readAsDataURL(file)
+          }
+          e.target.value = ''
+        }}
+      />
+
+      {/* Inline variable autocomplete popover */}
+      {varPopover && varPopover.matches.length > 0 && (
+        <div
+          ref={varPopoverRef}
+          className="fixed z-[200] bg-white border border-[#E2DED7] rounded-xl shadow-lg overflow-hidden min-w-[180px]"
+          style={{ left: varPopover.x, top: varPopover.y }}
+        >
+          <div className="px-3 py-1.5 border-b border-[#F4F2EE] bg-[#F9F8F6]">
+            <span className="text-[10px] text-[#9898AB] font-medium uppercase tracking-wide">Insert variable</span>
+          </div>
+          {varPopover.matches.map((v, mi) => (
+            <button
+              key={v.id}
+              onMouseDown={e => { e.preventDefault(); insertVariable(v) }}
+              onMouseEnter={() => setVarPopoverIdx(mi)}
+              className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-left ${mi === varPopoverIdx ? 'bg-[#EEEEFF]' : 'hover:bg-[#F9F8F6]'}`}
+            >
+              <code className="bg-[#FEF3C7] border border-[#D97706]/20 text-[#92400E] px-1.5 py-0.5 rounded text-[11px] font-mono-code flex-shrink-0">{`{{${v.name}}}`}</code>
+              <span className="text-[11px] text-[#6B6B7E] truncate flex-1">{v.value}</span>
+              {mi === varPopoverIdx && <kbd className="text-[9px] text-[#9898AB] bg-[#F4F2EE] border border-[#E2DED7] rounded px-1 py-0.5 flex-shrink-0">↵</kbd>}
+            </button>
+          ))}
+          <div className="px-3 py-1 border-t border-[#F4F2EE] bg-[#F9F8F6] flex items-center gap-2">
+            <span className="text-[10px] text-[#C8C6C0]"><kbd className="bg-[#F4F2EE] border border-[#E2DED7] rounded px-1">↑↓</kbd> navigate</span>
+            <span className="text-[10px] text-[#C8C6C0]"><kbd className="bg-[#F4F2EE] border border-[#E2DED7] rounded px-1">↵</kbd> insert</span>
+            <span className="text-[10px] text-[#C8C6C0]"><kbd className="bg-[#F4F2EE] border border-[#E2DED7] rounded px-1">Esc</kbd> dismiss</span>
+          </div>
+        </div>
+      )}
+
+      {/* Variables Modal */}
+      {showVarsModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center fade-in" onClick={() => setShowVarsModal(false)}>
+          <div className="bg-white rounded-2xl popover-shadow w-[420px] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Variables</p>
+              <button onClick={() => setShowVarsModal(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="p-5 space-y-3 max-h-80 overflow-y-auto">
+              {docVariables.map(v => (
+                <div key={v.id} className="flex items-center gap-3">
+                  <span className="font-mono-code text-[12px] text-[#92400E] bg-[#FEF3C7] border border-[#D97706]/20 px-2 py-1 rounded flex-shrink-0">{`{{${v.name}}}`}</span>
+                  {editingVar === v.id ? (
+                    <input
+                      autoFocus
+                      defaultValue={v.value}
+                      className="flex-1 border border-[#E2DED7] rounded px-2 py-1 text-[12px] text-[#111218] focus:outline-none focus:border-[#5B5BD6]"
+                      onBlur={e => { setDocVariables(prev => prev.map(x => x.id === v.id ? { ...x, value: e.target.value } : x)); setEditingVar(null) }}
+                      onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+                    />
+                  ) : (
+                    <span className="flex-1 text-[12px] text-[#3D3D4E] cursor-pointer hover:text-[#111218]" onClick={() => setEditingVar(v.id)}>{v.value}</span>
+                  )}
+                  <button
+                    onClick={() => {
+                      insertBlock('variable', { content: v.name })
+                      setShowVarsModal(false)
+                    }}
+                    className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors flex-shrink-0"
+                  >Insert</button>
+                  <button onClick={() => setDocVariables(prev => prev.filter(x => x.id !== v.id))} className="text-[#C8C6C0] hover:text-[#DC2626] text-[10px]">✕</button>
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-3 border-t border-[#E2DED7] flex items-center gap-2">
+              <button
+                onClick={() => setDocVariables(prev => [...prev, { id: `v${Date.now()}`, name: 'NewVariable', value: 'Value' }])}
+                className="text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors"
+              >+ New variable</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Snippets Modal */}
+      {showSnippetsModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center fade-in" onClick={() => setShowSnippetsModal(false)}>
+          <div className="bg-white rounded-2xl popover-shadow w-[440px] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Snippets</p>
+              <button onClick={() => setShowSnippetsModal(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="p-5 space-y-2 max-h-80 overflow-y-auto">
+              {localSnippets.map(s => (
+                <div key={s.id} className="border border-[#E2DED7] rounded-xl p-3 flex items-start justify-between gap-3 hover:border-[#5B5BD6] transition-colors">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[12px] font-semibold text-[#111218] mb-0.5">{s.name}</p>
+                    <p className="text-[11px] text-[#9898AB] truncate">{s.content}</p>
+                  </div>
+                  <div className="flex gap-1 flex-shrink-0">
+                    <button
+                      onClick={() => {
+                        insertBlock('para', { content: s.content })
+                        setShowSnippetsModal(false)
+                      }}
+                      className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors px-2 py-1 rounded border border-[#5B5BD6] hover:bg-[#EEEEFF]"
+                    >Insert</button>
+                    <button onClick={() => setSnippets(prev => prev.filter(x => x.id !== s.id))} className="text-[#C8C6C0] hover:text-[#DC2626] text-[10px] px-1">✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-3 border-t border-[#E2DED7]">
+              <button
+                onClick={() => {
+                  const sel = window.getSelection()?.toString()
+                  if (sel) setSnippets(prev => [...prev, { id: `s${Date.now()}`, name: 'New Snippet', content: sel }])
+                }}
+                className="text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors"
+              >+ Save selection as snippet</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-block selection action bar */}
+      {selectedBlockIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#111218] text-white rounded-2xl px-4 py-2.5 flex items-center gap-3 popover-shadow fade-in">
+          <span className="text-[12px] font-medium">{selectedBlockIds.size} block{selectedBlockIds.size !== 1 ? 's' : ''} selected</span>
+          <div className="h-4 w-px bg-white/20" />
+          <button onClick={() => { setSnippetName(''); setSnippetFromBlocksModal(true) }}
+            className="flex items-center gap-1.5 text-[11px] font-medium bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><rect x="1" y="1" width="9" height="9" rx="1.5" stroke="white" strokeWidth="1.1"/><path d="M3.5 5.5h4M5.5 3.5v4" stroke="white" strokeWidth="1.1" strokeLinecap="round"/></svg>
+            Save as Snippet
+          </button>
+          <button onClick={() => { recordHistory(); setDocBlocks(prev => prev.filter(b => !selectedBlockIds.has(b.id))); setSelectedBlockIds(new Set()); triggerSave() }}
+            className="flex items-center gap-1 text-[11px] font-medium text-red-300 hover:text-red-200 px-2 py-1.5 rounded-lg hover:bg-white/10 transition-colors">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+            Delete
+          </button>
+          <button onClick={() => setSelectedBlockIds(new Set())}
+            className="text-[11px] text-white/50 hover:text-white/80 transition-colors ml-1">Deselect all</button>
+        </div>
+      )}
+
+      {/* Save blocks as Snippet modal */}
+      {snippetFromBlocksModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center fade-in" onClick={() => setSnippetFromBlocksModal(false)}>
+          <div className="bg-white rounded-2xl popover-shadow w-[380px] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Save as Reusable Snippet</p>
+              <button onClick={() => setSnippetFromBlocksModal(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-[12px] text-[#6B6B7E]">{selectedBlockIds.size} block{selectedBlockIds.size !== 1 ? 's' : ''} will be saved as a reusable snippet you can insert anywhere in the project.</p>
+              <div>
+                <label className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide block mb-1">Snippet name</label>
+                <input autoFocus value={snippetName} onChange={e => setSnippetName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && saveBlocksAsSnippet()}
+                  className="w-full h-9 border border-[#E2DED7] rounded-lg px-3 text-[13px] focus:outline-none focus:border-[#5B5BD6]"
+                  placeholder="e.g. Standard disclaimer, Login prerequisite…"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={saveBlocksAsSnippet} disabled={!snippetName.trim()}
+                  className="flex-1 h-9 bg-[#5B5BD6] text-white rounded-lg text-[12px] font-medium hover:bg-[#4A4AC4] transition-colors disabled:opacity-40">Save Snippet</button>
+                <button onClick={() => setSnippetFromBlocksModal(false)}
+                  className="h-9 px-4 border border-[#E2DED7] text-[#6B6B7E] rounded-lg text-[12px] hover:bg-[#F4F2EE] transition-colors">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Text → Variable modal */}
+      {textVarModal && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center fade-in" onClick={() => setTextVarModal(null)}>
+          <div className="bg-white rounded-2xl popover-shadow w-[420px] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Convert to Variable</p>
+              <button onClick={() => setTextVarModal(null)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-[#F4F2EE] rounded-lg px-3 py-2 text-[13px] text-[#3D3D4E] font-medium">
+                "{textVarModal.text}"
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide block mb-1">Variable name</label>
+                <input autoFocus value={textVarName} onChange={e => setTextVarName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && commitTextVariable()}
+                  className="w-full h-9 border border-[#E2DED7] rounded-lg px-3 text-[13px] focus:outline-none focus:border-[#5B5BD6]"
+                  placeholder="e.g. ProductName, Version, CompanyName…"
+                />
+              </div>
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <input type="checkbox" checked={textVarReplaceAll} onChange={e => setTextVarReplaceAll(e.target.checked)}
+                  className="w-4 h-4 accent-[#5B5BD6] rounded" />
+                <span className="text-[12px] text-[#3D3D4E]">Find and convert all identical instances across the project</span>
+              </label>
+              <p className="text-[11px] text-[#9898AB] leading-relaxed">The selected text becomes the variable's value. The variable will be added to the active theme's variable set and can be edited from Theme &amp; Styles → Variables.</p>
+              <div className="flex gap-2">
+                <button onClick={commitTextVariable} disabled={!textVarName.trim()}
+                  className="flex-1 h-9 bg-[#5B5BD6] text-white rounded-lg text-[12px] font-medium hover:bg-[#4A4AC4] transition-colors disabled:opacity-40">Create Variable</button>
+                <button onClick={() => setTextVarModal(null)}
+                  className="h-9 px-4 border border-[#E2DED7] text-[#6B6B7E] rounded-lg text-[12px] hover:bg-[#F4F2EE] transition-colors">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manage Conditions Modal */}
+      {showManageConditions && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center fade-in" onClick={() => setShowManageConditions(false)}>
+          <div className="bg-white rounded-2xl popover-shadow w-[480px] max-h-[80vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between flex-shrink-0">
+              <p className="text-[13px] font-semibold text-[#111218]">Manage Conditions</p>
+              <button onClick={() => setShowManageConditions(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {customConditions.map(group => (
+                <div key={group.id} className="border border-[#E2DED7] rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div
+                      contentEditable suppressContentEditableWarning
+                      className="text-[13px] font-semibold text-[#111218] focus:outline-none border-b border-transparent focus:border-[#5B5BD6] px-0.5"
+                      onBlur={e => setCustomConditions(prev => prev.map(g => g.id === group.id ? { ...g, group: (e.target as HTMLElement).innerText } : g))}
+                    >{group.group}</div>
+                    <button onClick={() => setCustomConditions(prev => prev.filter(g => g.id !== group.id))} className="text-[11px] text-[#9898AB] hover:text-[#DC2626] transition-colors">Delete group</button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {group.tags.map(tag => (
+                      <div key={tag} className="flex items-center gap-1 bg-[#F4F2EE] border border-[#E2DED7] rounded-full px-2 py-0.5">
+                        <span className="text-[11px] text-[#3D3D4E]">{tag}</span>
+                        <button onClick={() => setCustomConditions(prev => prev.map(g => g.id === group.id ? { ...g, tags: g.tags.filter(t => t !== tag) } : g))} className="text-[#C8C6C0] hover:text-[#DC2626] text-[9px]">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      placeholder="New tag…"
+                      value={newTagInputs[group.id] ?? ''}
+                      onChange={e => setNewTagInputs(prev => ({ ...prev, [group.id]: e.target.value }))}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && newTagInputs[group.id]?.trim()) {
+                          setCustomConditions(prev => prev.map(g => g.id === group.id ? { ...g, tags: [...g.tags, newTagInputs[group.id].trim()] } : g))
+                          setNewTagInputs(prev => ({ ...prev, [group.id]: '' }))
+                        }
+                      }}
+                      className="flex-1 border border-[#E2DED7] rounded-lg px-2.5 py-1 text-[12px] text-[#111218] focus:outline-none focus:border-[#5B5BD6]"
+                    />
+                    <button
+                      onClick={() => {
+                        const tag = newTagInputs[group.id]?.trim()
+                        if (!tag) return
+                        setCustomConditions(prev => prev.map(g => g.id === group.id ? { ...g, tags: [...g.tags, tag] } : g))
+                        setNewTagInputs(prev => ({ ...prev, [group.id]: '' }))
+                      }}
+                      className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] border border-[#5B5BD6] px-2.5 py-1 rounded-lg transition-colors"
+                    >Add</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-3 border-t border-[#E2DED7] flex items-center gap-2 flex-shrink-0">
+              <input
+                placeholder="New group name…"
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && newGroupName.trim()) {
+                    setCustomConditions(prev => [...prev, { id: `cg${Date.now()}`, group: newGroupName.trim(), tags: [] }])
+                    setNewGroupName('')
+                  }
+                }}
+                className="flex-1 border border-[#E2DED7] rounded-lg px-3 py-1.5 text-[12px] text-[#111218] focus:outline-none focus:border-[#5B5BD6]"
+              />
+              <button
+                onClick={() => {
+                  if (!newGroupName.trim()) return
+                  setCustomConditions(prev => [...prev, { id: `cg${Date.now()}`, group: newGroupName.trim(), tags: [] }])
+                  setNewGroupName('')
+                }}
+                className="text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] border border-[#5B5BD6] px-3 py-1.5 rounded-lg transition-colors"
+              >+ Add Group</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cross-reference Modal */}
+      {showCrossRefModal && (
+        <div className="fixed inset-0 bg-black/20 z-40 flex items-center justify-center fade-in" onClick={() => setShowCrossRefModal(false)}>
+          <div className="bg-white rounded-2xl popover-shadow w-96 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Insert Cross-reference</p>
+              <button onClick={() => setShowCrossRefModal(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="p-4">
+              <p className="text-[11px] text-[#9898AB] font-medium mb-2">Select a topic or heading</p>
+              <div className="space-y-0.5 max-h-64 overflow-y-auto border border-[#E2DED7] rounded-xl">
+                {studioToc.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => {
+                      execFmt('insertHTML', `<a href="#topic-${t.id}" style="color:#5B5BD6;text-decoration:underline">${t.title}</a>`)
+                      setShowCrossRefModal(false)
+                      triggerSave()
+                    }}
+                    className="w-full text-left px-3 py-2 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors flex items-center gap-2"
+                    style={{ paddingLeft: `${(t.level - 1) * 16 + 12}px` }}
+                  >
+                    <span className="text-[10px] text-[#C8C6C0] w-4 flex-shrink-0">{'H' + t.level}</span>
+                    {t.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Document Statistics */}
+      {showDocStats && (
+        <div className="fixed inset-0 bg-black/20 z-40 flex items-center justify-center fade-in" onClick={() => setShowDocStats(false)}>
+          <div className="bg-white rounded-2xl popover-shadow w-72 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Document Statistics</p>
+              <button onClick={() => setShowDocStats(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="p-5 space-y-4">
+              {(() => {
+                const allText = docBlocks.map(b => b.content + (b.procedureSteps ?? []).join(' ')).join(' ')
+                const words = allText.trim().split(/\s+/).filter(Boolean).length
+                const chars = allText.replace(/\s/g, '').length
+                const topics = docBlocks.filter(b => b.type === 'h2' || b.type === 'h1').length
+                return (
+                  <>
+                    {[
+                      { label: 'Word Count', value: words.toLocaleString() },
+                      { label: 'Character Count', value: chars.toLocaleString() },
+                      { label: 'Topic Count', value: topics },
+                      { label: 'Blocks', value: docBlocks.length },
+                    ].map(s => (
+                      <div key={s.label} className="flex items-center justify-between">
+                        <span className="text-[13px] text-[#6B6B7E]">{s.label}</span>
+                        <span className="text-[15px] font-semibold text-[#111218]">{s.value}</span>
+                      </div>
+                    ))}
+                  </>
+                )
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Language / Direction */}
+      {showLangDir && (
+        <div className="fixed inset-0 bg-black/20 z-40 flex items-center justify-center fade-in" onClick={() => setShowLangDir(false)}>
+          <div className="bg-white rounded-2xl popover-shadow w-80 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Language & Direction</p>
+              <button onClick={() => setShowLangDir(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 1.5l10 10M11.5 1.5l-10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <p className="text-[11px] text-[#9898AB] font-medium mb-2 uppercase tracking-wider">Language</p>
+                <div className="space-y-1">
+                  {['English (US)', 'Arabic', 'Custom / Future'].map(lang => (
+                    <button key={lang} onClick={() => setDocLang(lang)} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] transition-colors ${docLang === lang ? 'bg-[#EEEEFF] text-[#5B5BD6] font-medium' : 'text-[#3D3D4E] hover:bg-[#F4F2EE]'}`}>
+                      {lang}
+                      {docLang === lang && <span className="text-[10px]">✓</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-[11px] text-[#9898AB] font-medium mb-2 uppercase tracking-wider">Text Direction</p>
+                <div className="flex gap-2">
+                  {(['ltr', 'rtl', 'auto'] as const).map(dir => (
+                    <button key={dir} onClick={() => setDocDir(dir)} className={`flex-1 py-2 rounded-lg text-[12px] font-medium border transition-colors ${docDir === dir ? 'bg-[#EEEEFF] border-[#5B5BD6] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E] hover:bg-[#F4F2EE]'}`}>
+                      {dir.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={() => setShowLangDir(false)} className="w-full bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium py-2.5 rounded-xl transition-colors">
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Special Characters */}
+      {showSpecialChars && (
+        <div className="fixed inset-0 bg-black/20 z-50 flex items-center justify-center" onClick={() => setShowSpecialChars(false)}>
+          <div className="bg-white rounded-2xl popover-shadow w-80 overflow-hidden fade-in" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-[#E2DED7] flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Special Characters</p>
+              <button onClick={() => setShowSpecialChars(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1 1l9 9M10 1L1 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg></button>
+            </div>
+            <div className="p-3">
+              <div className="grid grid-cols-8 gap-1">
+                {['©','®','™','°','±','×','÷','→','←','↑','↓','↔','–','—','…',' ','«','»','‹','›','“','”','‘','’','•','·','§','¶','†','‡','¡','¿'].map(ch => (
+                  <button
+                    key={ch}
+                    title={ch === ' ' ? 'Non-breaking space' : ch}
+                    onClick={() => { document.execCommand('insertText', false, ch); triggerSave(); setShowSpecialChars(false) }}
+                    className="w-8 h-8 flex items-center justify-center text-[14px] text-[#2A2A3A] rounded hover:bg-[#EEEEFF] hover:text-[#5B5BD6] transition-colors border border-transparent hover:border-[#C4C3F8]"
+                  >{ch === ' ' ? '⎵' : ch}</button>
+                ))}
+              </div>
+              <p className="text-[10px] text-[#9898AB] mt-3">Click a character to insert it at the cursor.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comment Panel */}
+      {showCommentPanel && (
+        <div className="fixed bottom-20 right-8 z-50 bg-white border border-[#E2DED7] rounded-2xl popover-shadow w-72 overflow-hidden fade-in">
+          <div className="px-4 py-3 border-b border-[#E2DED7] flex items-center justify-between">
+            <p className="text-[12px] font-semibold text-[#111218]">Add Comment</p>
+            <button onClick={() => setShowCommentPanel(false)} className="text-[#C8C6C0] hover:text-[#9898AB]"><svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1 1l9 9M10 1L1 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg></button>
+          </div>
+          <div className="p-4 space-y-3">
+            {localDocComments.filter(c => !c.resolved).length > 0 && (
+              <div className="space-y-2 mb-3">
+                {localDocComments.filter(c => !c.resolved).map(c => (
+                  <div key={c.id} className="bg-[#FFFBEB] border border-[#FDE68A] rounded-lg p-2.5">
+                    <p className="text-[11px] text-[#92400E] truncate mb-1">"{c.anchor}"</p>
+                    <p className="text-[12px] text-[#3D3D4E]">{c.text}</p>
+                    <button onClick={() => setDocComments(prev => prev.map(x => x.id === c.id ? { ...x, resolved: true } : x))} className="text-[10px] text-[#9898AB] hover:text-[#16A34A] mt-1 transition-colors">Resolve</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <textarea
+              autoFocus
+              value={newCommentText}
+              onChange={e => setNewCommentText(e.target.value)}
+              placeholder="Add a comment…"
+              className="w-full border border-[#E2DED7] rounded-lg p-2.5 text-[12px] text-[#111218] resize-none focus:outline-none focus:border-[#5B5BD6] h-20"
+            />
+            <div className="flex gap-2">
+              <button onClick={addComment} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-1.5 rounded-lg transition-colors">Comment</button>
+              <button onClick={() => setShowCommentPanel(false)} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-1.5 rounded-lg hover:bg-[#F9F8F6] transition-colors">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  )
+}
+
+// ── Screen: Knowledge Map ─────────────────────────────────────────────────────
+function KnowledgeMapScreen({ onNav, onBack }: { onNav: (s: Screen) => void; onBack?: () => void }) {
+  const [selected, setSelected] = useState<string | null>(null)
+  const selectedNode = KM_NODES.find(n => n.id === selected)
+
+  return (
+    <div className="flex-1 flex overflow-hidden bg-[#F4F2EE]">
+      {/* Graph canvas */}
+      <div className="flex-1 relative overflow-hidden">
+        {/* Toolbar */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 bg-white border border-[#E2DED7] rounded-xl px-1.5 py-1 popover-shadow">
+          {onBack && (
+            <button onClick={onBack} className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-[#6B6B7E] hover:text-[#111218] border-r border-[#E2DED7] mr-1 pr-3 transition-colors">
+              ← Author
+            </button>
+          )}
+          {['Find Relationships', 'Suggest Missing Topics', 'Find Duplicates', 'Check Source Coverage'].map(action => (
+            <button key={action} className="px-2.5 py-1 text-[11px] font-medium text-[#6B6B7E] hover:text-[#5B5BD6] hover:bg-[#F4F2EE] rounded-lg transition-colors whitespace-nowrap">
+              {action}
+            </button>
+          ))}
+        </div>
+
+        {/* Legend */}
+        <div className="absolute bottom-4 left-4 z-10 bg-white border border-[#E2DED7] rounded-xl p-3 popover-shadow">
+          <p className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wider mb-2">Node Type</p>
+          {Object.entries(NODE_COLORS).map(([type, color]) => (
+            <div key={type} className="flex items-center gap-2 mb-1 last:mb-0">
+              <div className="w-2.5 h-2.5 rounded-full" style={{ background: color }} />
+              <span className="text-[11px] text-[#6B6B7E] capitalize">{type}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* SVG Graph */}
+        <svg className="absolute inset-0 w-full h-full" style={{ background: 'radial-gradient(circle at 50% 50%, #F4F2EE 0%, #EDE9E3 100%)' }}>
+          {/* Grid dots */}
+          <defs>
+            <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+              <circle cx="12" cy="12" r="1" fill="#D8D4CE" />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#dots)" />
+
+          {/* Edges */}
+          {KM_EDGES.map(([a, b], i) => {
+            const na = KM_NODES.find(n => n.id === a)!
+            const nb = KM_NODES.find(n => n.id === b)!
+            const highlight = selected && (a === selected || b === selected)
+            return (
+              <line
+                key={i}
+                x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
+                stroke={highlight ? '#5B5BD6' : '#C8C6C0'}
+                strokeWidth={highlight ? 2 : 1}
+                strokeOpacity={highlight ? 0.8 : 0.5}
+              />
+            )
+          })}
+
+          {/* Nodes */}
+          {KM_NODES.map(node => {
+            const color = NODE_COLORS[node.type]
+            const isSelected = selected === node.id
+            return (
+              <g key={node.id} className="km-node" onClick={() => setSelected(isSelected ? null : node.id)}>
+                <circle cx={node.x} cy={node.y} r={isSelected ? 22 : 18}
+                  fill={isSelected ? color : 'white'}
+                  stroke={color}
+                  strokeWidth={isSelected ? 0 : 2}
+                  style={{ filter: isSelected ? `drop-shadow(0 0 8px ${color}55)` : 'drop-shadow(0 2px 4px rgba(0,0,0,0.12))' }}
+                />
+                <text
+                  x={node.x} y={node.y + 28}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill={isSelected ? '#111218' : '#6B6B7E'}
+                  fontFamily="Inter, sans-serif"
+                  fontWeight={isSelected ? '600' : '500'}
+                >
+                  {node.label}
+                </text>
+                {/* Node type symbol */}
+                <text x={node.x} y={node.y + 4} textAnchor="middle" fontSize="12"
+                  fill={isSelected ? 'white' : color} fontWeight="600" fontFamily="Inter, sans-serif">
+                  {node.type === 'feature' ? '◉' : node.type === 'concept' ? '◎' : node.type === 'procedure' ? '◆' : node.type === 'source' ? '⊟' : '⊕'}
+                </text>
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+
+      {/* Node detail panel */}
+      {selectedNode && (
+        <aside className="w-64 bg-white border-l border-[#E2DED7] flex flex-col fade-in">
+          <div className="px-5 py-4 border-b border-[#E2DED7]">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-3 h-3 rounded-full" style={{ background: NODE_COLORS[selectedNode.type] }} />
+              <span className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider capitalize">{selectedNode.type}</span>
+            </div>
+            <h3 className="text-[15px] font-semibold text-[#111218]">{selectedNode.label}</h3>
+          </div>
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            {/* Connected topics */}
+            <div>
+              <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-2">Connected Topics</p>
+              {KM_EDGES
+                .filter(([a, b]) => a === selectedNode.id || b === selectedNode.id)
+                .map(([a, b], i) => {
+                  const other = KM_NODES.find(n => n.id === (a === selectedNode.id ? b : a))!
+                  return (
+                    <button key={i} onClick={() => setSelected(other.id)} className="flex items-center gap-2 w-full text-left py-1.5 hover:text-[#5B5BD6] transition-colors">
+                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: NODE_COLORS[other.type] }} />
+                      <span className="text-[12px] text-[#3D3D4E]">{other.label}</span>
+                    </button>
+                  )
+                })}
+            </div>
+            {/* Source references */}
+            <div>
+              <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-2">Source References</p>
+              <div className="bg-[#F3F0FF] rounded-lg px-3 py-2">
+                <p className="text-[12px] text-[#5B21B6]">Technical Specification v3.2</p>
+                <p className="text-[11px] text-[#7C3AED]">§ 2.4 – 2.7</p>
+              </div>
+            </div>
+            <button className="w-full text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] border border-[#5B5BD6] py-2 rounded-lg transition-colors">
+              Open Topic in Editor
+            </button>
+          </div>
+        </aside>
+      )}
+    </div>
+  )
+}
+
+// ── Screen: Quality Review ────────────────────────────────────────────────────
+const DISMISS_REASONS = ['Intentional', 'Not applicable', 'False positive', 'Approved exception', 'Other']
+
+function QualityScreen({
+  onNav,
+  findingStatuses,
+  onSetFindingStatus,
+  onJumpToSection,
+  aiReviewDone,
+  onSetAiReviewDone,
+  reviewStage,
+  onSetReviewStage,
+  reviewStaleContent,
+  isDemoMode,
+}: {
+  onNav: (s: Screen) => void
+  findingStatuses: Record<number, FindingStatus>
+  onSetFindingStatus: (id: number, status: FindingStatus) => void
+  onJumpToSection: (ctx: ReviewContext) => void
+  aiReviewDone: boolean
+  onSetAiReviewDone: (v: boolean) => void
+  reviewStage: 1 | 2
+  onSetReviewStage: (s: 1 | 2) => void
+  reviewStaleContent?: boolean
+  isDemoMode?: boolean
+}) {
+  const stage = reviewStage
+  const setStage = onSetReviewStage
+  const [aiReviewRunning, setAiReviewRunning] = useState(false)
+
+  const [activeWorkflow, setActiveWorkflow] = useState<number | null>(null)
+  const [workflowView, setWorkflowView] = useState<string | null>(null)
+  const visualUploadRef = useRef<HTMLInputElement>(null)
+  const [uploadedVisualName, setUploadedVisualName] = useState<string | null>(null)
+  const [showAiSuggestion, setShowAiSuggestion] = useState(false)
+  const [recheckState, setRecheckState] = useState<'idle' | 'checking' | 'passed' | 'failed'>('idle')
+  const [dismissTarget, setDismissTarget] = useState<number | null>(null)
+  const [dismissReason, setDismissReason] = useState('')
+  const [standardizeChoice, setStandardizeChoice] = useState('workspace')
+  const [expandSuggestion, setExpandSuggestion] = useState<string | null>(null)
+  const [visualType, setVisualType] = useState('screenshot')
+  const [visualGenerated, setVisualGenerated] = useState(false)
+  const [sourceAdded, setSourceAdded] = useState(false)
+
+  const getStatus = (id: number): FindingStatus => findingStatuses[id] ?? 'open'
+
+  const openFindings = QUALITY_FINDINGS.filter(f => getStatus(f.id) === 'open' || getStatus(f.id) === 'in-review')
+  const resolvedFindings = QUALITY_FINDINGS.filter(f => getStatus(f.id) === 'resolved')
+  const dismissedFindings = QUALITY_FINDINGS.filter(f => getStatus(f.id) === 'dismissed')
+
+  // Completion rule: required critical/warning findings must be resolved or dismissed; suggestions may remain
+  const blockers = QUALITY_FINDINGS.filter(f => f.required && (getStatus(f.id) === 'open' || getStatus(f.id) === 'in-review'))
+  const canComplete = blockers.length === 0
+
+  const openWorkflow = (id: number) => {
+    setActiveWorkflow(id)
+    setWorkflowView(null)
+    setSourceAdded(false)
+    setExpandSuggestion(null)
+    setVisualGenerated(false)
+    setUploadedVisualName(null)
+    setShowAiSuggestion(false)
+    setRecheckState('idle')
+  }
+  const closeWorkflow = () => { setActiveWorkflow(null); setWorkflowView(null) }
+
+  const finding = activeWorkflow !== null ? QUALITY_FINDINGS.find(f => f.id === activeWorkflow) : null
+
+  const sevColor = (sev: string) => sev === 'error' ? '#DC2626' : sev === 'warning' ? '#D97706' : '#0EA5E9'
+  const sevBorder = (sev: string) => sev === 'error' ? 'border-[#FCA5A5]' : sev === 'warning' ? 'border-[#FDE68A]' : 'border-[#BAE6FD]'
+  const sevBg = (sev: string) => sev === 'error' ? 'bg-[#FEF2F2]' : sev === 'warning' ? 'bg-[#FFFBEB]' : 'bg-[#F0F9FF]'
+  const statusLabel = (s: FindingStatus) => s === 'resolved' ? 'Resolved' : s === 'dismissed' ? 'Dismissed' : s === 'in-review' ? 'In Review' : 'Open'
+  const statusColor = (s: FindingStatus) => s === 'resolved' ? 'text-[#16A34A]' : s === 'dismissed' ? 'text-[#9898AB]' : s === 'in-review' ? 'text-[#D97706]' : 'text-[#DC2626]'
+
+  const renderWorkflow = () => {
+    if (!finding) return null
+    const f = finding
+
+    // AI Suggestion panel (shared across multiple finding types)
+    if (showAiSuggestion && f.aiSuggestion) {
+      return (
+        <div className="space-y-3">
+          <p className="text-[11px] font-semibold text-[#7C3AED] uppercase tracking-wide">✦ AI Suggestion</p>
+          <div className="rounded-lg border border-[#E2DED7] bg-[#F9F8F6] p-3">
+            <p className="text-[10px] font-semibold text-[#9898AB] uppercase mb-1">Original</p>
+            <p className="text-[12px] text-[#6B6B7E] italic">{f.text}</p>
+          </div>
+          <div className="rounded-lg border border-[#C4B5FD] bg-[#F3F0FF] p-3">
+            <p className="text-[10px] font-semibold text-[#7C3AED] uppercase mb-1">Suggested</p>
+            <p className="text-[12px] text-[#4C1D95]">{f.aiSuggestion}</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Apply</button>
+            <button onClick={() => setShowAiSuggestion(false)} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Edit Suggestion</button>
+            <button onClick={() => setShowAiSuggestion(false)} className="border border-[#E2DED7] text-[#9898AB] text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Discard</button>
+          </div>
+        </div>
+      )
+    }
+
+    // Recheck state
+    if (recheckState === 'checking') {
+      return (
+        <div className="flex flex-col items-center gap-3 py-4">
+          <div className="w-7 h-7 border-[2.5px] border-[#5B5BD6] border-t-transparent rounded-full animate-spin" />
+          <p className="text-[12px] text-[#6B6B7E]">AI is rechecking this finding…</p>
+        </div>
+      )
+    }
+    if (recheckState === 'passed') {
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg bg-[#DCFCE7] border border-[#86EFAC] p-3 flex items-center gap-2">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-6" stroke="#16A34A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <p className="text-[12px] font-semibold text-[#16A34A]">Issue corrected — finding resolved</p>
+          </div>
+          <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="w-full bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Mark Resolved</button>
+        </div>
+      )
+    }
+    if (recheckState === 'failed') {
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg bg-[#FEF3C7] border border-[#FDE68A] p-3">
+            <p className="text-[12px] font-semibold text-[#D97706]">Still requires attention</p>
+            <p className="text-[11px] text-[#92400E] mt-0.5">The issue was not fully resolved. Continue editing or dismiss.</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setRecheckState('idle')} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Continue Editing</button>
+            <button onClick={() => setDismissTarget(f.id)} className="flex-1 border border-[#E2DED7] text-[#9898AB] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Dismiss</button>
+          </div>
+        </div>
+      )
+    }
+
+    if (f.action === 'Verify or Remove') {
+      if (workflowView === 'sources') {
+        return (
+          <div className="space-y-3">
+            <p className="text-[12px] text-[#9898AB] mb-1">Source documents covering the Installation section:</p>
+            {[
+              { name: 'Nexus_Technical_Specification_v3.2.pdf', section: '§ 4.1 Installation', match: 'No mention of 5-minute claim', warn: true },
+              { name: 'UX_Research_Findings_Q3.docx', section: '§ 2 Onboarding Observations', match: 'Median setup time: 12–18 min', warn: true },
+            ].map((s, i) => (
+              <div key={i} className={`rounded-lg border p-3 ${s.warn ? 'border-[#FDE68A] bg-[#FFFBEB]' : 'border-[#E2DED7] bg-white'}`}>
+                <p className="text-[12px] font-medium text-[#111218]">{s.name}</p>
+                <p className="text-[11px] text-[#9898AB]">{s.section}</p>
+                {s.warn && <p className="text-[11px] text-[#D97706] mt-1">⚠ {s.match}</p>}
+              </div>
+            ))}
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="flex-1 bg-[#DC2626] hover:bg-[#B91C1C] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Remove Statement</button>
+              <button onClick={() => setWorkflowView('edit')} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Edit Instead</button>
+            </div>
+            <button onClick={() => setWorkflowView(null)} className="text-[11px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors">← Back</button>
+          </div>
+        )
+      }
+      if (workflowView === 'edit') {
+        return (
+          <div className="space-y-3">
+            <p className="text-[12px] text-[#9898AB] mb-1">Edit the statement to be source-accurate:</p>
+            <textarea className="w-full border border-[#E2DED7] rounded-lg p-3 text-[13px] text-[#111218] resize-none focus:outline-none focus:border-[#5B5BD6]" rows={3} defaultValue={f.aiSuggestion ?? ''} />
+            <div className="flex gap-2">
+              <button onClick={() => { setRecheckState('checking'); setTimeout(() => setRecheckState('passed'), 1600) }} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Apply & Recheck</button>
+              <button onClick={() => setWorkflowView(null)} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Cancel</button>
+            </div>
+          </div>
+        )
+      }
+      return (
+        <div className="space-y-2">
+          {f.aiSuggestion && <button onClick={() => setShowAiSuggestion(true)} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#C4B5FD] rounded-lg hover:bg-[#F3F0FF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">AI Suggestion</span><span className="text-[11px] text-[#7C3AED]">✦ AI</span></button>}
+          <button onClick={() => setWorkflowView('sources')} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#E2DED7] rounded-lg hover:border-[#5B5BD6] hover:bg-[#EEEEFF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">View Evidence</span><span className="text-[#9898AB] text-[11px]">→</span></button>
+          <button onClick={() => { onJumpToSection({ findingId: f.id, section: f.section, category: f.category }); onSetFindingStatus(f.id, 'in-review'); onNav('studio') }} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#E2DED7] rounded-lg hover:border-[#5B5BD6] hover:bg-[#EEEEFF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">Jump to Content</span><span className="text-[#9898AB] text-[11px]">→</span></button>
+          <button onClick={() => setWorkflowView('edit')} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#E2DED7] rounded-lg hover:border-[#5B5BD6] hover:bg-[#EEEEFF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">Edit Statement</span><span className="text-[#9898AB] text-[11px]">→</span></button>
+          <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#FCA5A5] bg-[#FEF2F2] rounded-lg hover:bg-[#FEE2E2] transition-all text-left"><span className="text-[12px] font-medium text-[#DC2626]">Remove Statement</span><span className="text-[#DC2626] text-[11px]">→</span></button>
+        </div>
+      )
+    }
+
+    if (f.action === 'Add Source Reference') {
+      return (
+        <div className="space-y-3">
+          <p className="text-[12px] text-[#9898AB] mb-1">Attach a source to "{f.section}"</p>
+          {sourceAdded ? (
+            <div className="rounded-lg bg-[#DCFCE7] border border-[#86EFAC] p-3 flex items-center gap-2">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-6" stroke="#16A34A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <p className="text-[12px] font-medium text-[#16A34A]">Technical Specification v3.2, § 3 added</p>
+            </div>
+          ) : (
+            <>
+              <p className="text-[11px] text-[#9898AB] font-medium uppercase tracking-wide mb-1">Search Existing Sources</p>
+              {SOURCE_FILES.map(s => (
+                <button key={s.id} onClick={() => setSourceAdded(true)} className="w-full flex items-center gap-3 p-2.5 border border-[#E2DED7] rounded-lg hover:border-[#5B5BD6] hover:bg-[#EEEEFF] transition-all text-left">
+                  <div className="w-6 h-6 rounded bg-[#F4F2EE] flex items-center justify-center text-[10px] font-bold text-[#9898AB] uppercase">{s.type}</div>
+                  <div className="flex-1 min-w-0"><p className="text-[12px] font-medium text-[#111218] truncate">{s.name}</p><p className="text-[10px] text-[#9898AB]">{s.coverage}% coverage</p></div>
+                  <span className="text-[11px] text-[#5B5BD6]">Link</span>
+                </button>
+              ))}
+              <button className="w-full border border-dashed border-[#C8C6C0] text-[12px] text-[#6B6B7E] py-2 rounded-lg hover:border-[#5B5BD6] hover:text-[#5B5BD6] transition-colors">+ Add Source</button>
+            </>
+          )}
+          {sourceAdded && <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="w-full bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Confirm & Resolve</button>}
+        </div>
+      )
+    }
+
+    if (f.action === 'Standardize') {
+      return (
+        <div className="space-y-3">
+          {f.aiSuggestion && <button onClick={() => setShowAiSuggestion(true)} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#C4B5FD] rounded-lg hover:bg-[#F3F0FF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">AI Suggestion</span><span className="text-[11px] text-[#7C3AED]">✦ AI</span></button>}
+          <p className="text-[12px] text-[#9898AB]">Two terms detected for the same concept:</p>
+          <div className="rounded-lg border border-[#E2DED7] bg-white p-3 space-y-2">
+            {[{ term: 'workspace', count: 14 }, { term: 'project', count: 9 }].map(t => (
+              <label key={t.term} className="flex items-center gap-3 cursor-pointer">
+                <input type="radio" name="stdterm" value={t.term} checked={standardizeChoice === t.term} onChange={() => setStandardizeChoice(t.term)} className="accent-[#5B5BD6]" />
+                <span className="text-[13px] font-medium text-[#111218]">"{t.term}"</span>
+                <span className="text-[11px] text-[#9898AB] ml-auto">{t.count} occurrences</span>
+              </label>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Replace All</button>
+            <button className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Review Each</button>
+          </div>
+        </div>
+      )
+    }
+
+    if (f.action === 'Expand Section') {
+      return (
+        <div className="space-y-3">
+          {expandSuggestion ? (
+            <>
+              <div className="rounded-lg bg-[#F3F0FF] border border-[#C4B5FD] p-3">
+                <p className="text-[11px] text-[#7C3AED] font-medium mb-1">✦ AI Suggestion</p>
+                <p className="text-[12px] text-[#4C1D95]">{f.aiSuggestion}</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Add to TOC for Review</button>
+                <button onClick={() => setExpandSuggestion(null)} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Regenerate</button>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <button onClick={() => setExpandSuggestion('ai')} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#C4B5FD] rounded-lg hover:bg-[#F3F0FF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">AI Suggestion</span><span className="text-[11px] text-[#7C3AED]">✦ AI</span></button>
+              <button onClick={() => { onJumpToSection({ findingId: f.id, section: f.section, category: f.category }); onSetFindingStatus(f.id, 'in-review'); onNav('studio') }} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#E2DED7] rounded-lg hover:border-[#5B5BD6] hover:bg-[#EEEEFF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">Jump to Content</span><span className="text-[#9898AB] text-[11px]">→</span></button>
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    if (f.action === 'Generate Visual') {
+      return (
+        <div className="space-y-3">
+          {visualGenerated ? (
+            <>
+              <div className="rounded-lg bg-[#DCFCE7] border border-[#86EFAC] p-3 text-center">
+                <p className="text-[12px] font-semibold text-[#16A34A] mb-1">Visual generated</p>
+                <div className="w-full h-16 rounded bg-[#F0FDF4] border border-[#86EFAC] flex items-center justify-center mt-2"><p className="text-[11px] text-[#16A34A]">Dashboard Overview — Wireframe Preview</p></div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Insert into Document</button>
+                <button onClick={() => setVisualGenerated(false)} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Try Again</button>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <input
+                ref={visualUploadRef}
+                type="file"
+                accept="image/*,.pdf,.svg"
+                className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  if (file) { setUploadedVisualName(file.name); setVisualGenerated(true) }
+                  e.target.value = ''
+                }}
+              />
+              {uploadedVisualName && (
+                <div className="rounded-lg bg-[#DCFCE7] border border-[#86EFAC] p-2.5 flex items-center gap-2 text-[12px] text-[#16A34A]">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="#16A34A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  {uploadedVisualName}
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-2 mb-1">
+                {['Screenshot', 'Diagram', 'Infographic', 'Chart', 'Image', 'Video'].map(v => (
+                  <button key={v} onClick={() => setVisualType(v.toLowerCase())} className={`p-2.5 rounded-lg border text-[11px] font-medium transition-all ${visualType === v.toLowerCase() ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E] hover:border-[#C8C6C0]'}`}>{v}</button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setVisualGenerated(true)} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">Generate</button>
+                <button onClick={() => visualUploadRef.current?.click()} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">Upload</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    // Default: Writing style / generic with AI suggestion + Jump to Content + Recheck
+    return (
+      <div className="space-y-2">
+        {f.aiSuggestion && <button onClick={() => setShowAiSuggestion(true)} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#C4B5FD] rounded-lg hover:bg-[#F3F0FF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">AI Suggestion</span><span className="text-[11px] text-[#7C3AED]">✦ AI</span></button>}
+        <button onClick={() => { onJumpToSection({ findingId: f.id, section: f.section, category: f.category }); onSetFindingStatus(f.id, 'in-review'); onNav('studio') }} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#E2DED7] rounded-lg hover:border-[#5B5BD6] hover:bg-[#EEEEFF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">Jump to Content</span><span className="text-[#9898AB] text-[11px]">→</span></button>
+        <button onClick={() => { setRecheckState('checking'); setTimeout(() => setRecheckState(Math.random() > 0.4 ? 'passed' : 'failed'), 1600) }} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#E2DED7] rounded-lg hover:border-[#5B5BD6] hover:bg-[#EEEEFF] transition-all text-left"><span className="text-[12px] font-medium text-[#111218]">Recheck Finding</span><span className="text-[#9898AB] text-[11px]">↻</span></button>
+        <button onClick={() => { onSetFindingStatus(f.id, 'resolved'); closeWorkflow() }} className="w-full flex items-center justify-between px-3 py-2.5 border border-[#86EFAC] bg-[#F0FDF4] rounded-lg hover:bg-[#DCFCE7] transition-all text-left"><span className="text-[12px] font-medium text-[#16A34A]">Resolve</span><span className="text-[#16A34A] text-[11px]">✓</span></button>
+      </div>
+    )
+  }
+
+  // Stage stepper
+  const STAGES = [
+    { num: 1, label: 'AI Review' },
+    { num: 2, label: 'Complete' },
+  ]
+
+  const PEER_TOPICS = ['Introduction', 'Getting Started', 'Dashboard Overview', 'System Requirements', 'Installation', 'Troubleshooting']
+  const SELF_TOPICS = [
+    { id: 'intro', title: 'Introduction', excerpt: 'The Nexus Platform is an enterprise-grade project management solution designed for distributed teams.' },
+    { id: 'started', title: 'Getting Started', excerpt: 'To begin, sign in with your organization credentials and navigate to the onboarding wizard.' },
+    { id: 'dashboard', title: 'Dashboard Overview', excerpt: 'The dashboard surfaces your most active projects, recent activity, and team notifications.' },
+    { id: 'sysreq', title: 'System Requirements', excerpt: 'Nexus requires a modern browser (Chrome 110+, Firefox 110+, Safari 16+) and a stable internet connection.' },
+    { id: 'install', title: 'Installation', excerpt: 'Enterprise deployments may install the Nexus desktop agent for enhanced offline and SSO capabilities.' },
+    { id: 'troubleshoot', title: 'Troubleshooting', excerpt: 'Common issues include login failures, slow sync, and missing notifications — each covered below.' },
+  ]
+
+  const renderStageStepper = () => (
+    <div className="flex items-center gap-0 mb-8">
+      {STAGES.map((s, idx) => {
+        const isDone = stage > s.num
+        const isActive = stage === s.num
+        return (
+          <div key={s.num} className="flex items-center flex-1 last:flex-none">
+            <div className="flex flex-col items-center gap-1.5">
+              <div
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-bold transition-all ${
+                  isDone
+                    ? 'bg-[#16A34A] text-white'
+                    : isActive
+                    ? 'bg-[#5B5BD6] text-white'
+                    : 'bg-[#E2DED7] text-[#9898AB]'
+                }`}
+              >
+                {isDone ? (
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7l3.5 3.5 5.5-5.5" stroke="white" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                ) : s.num}
+              </div>
+              <span className={`text-[11px] font-medium whitespace-nowrap ${isActive ? 'text-[#5B5BD6]' : isDone ? 'text-[#16A34A]' : 'text-[#9898AB]'}`}>{s.label}</span>
+            </div>
+            {idx < STAGES.length - 1 && (
+              <div className={`flex-1 h-px mx-2 mb-4 ${stage > s.num ? 'bg-[#16A34A]' : 'bg-[#E2DED7]'}`} />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+
+  const renderStage1 = () => (
+    <div>
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold text-[#111218] mb-1">AI Review</h2>
+        <p className="text-[14px] text-[#6B6B7E]">Checking against style guide, source documents, and project materials.</p>
+      </div>
+
+      {!aiReviewDone && !aiReviewRunning && (
+        <div className="bg-white rounded-xl border border-[#E2DED7] p-8 flex flex-col items-center text-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-[#EEEEFF] flex items-center justify-center">
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="14" r="10" stroke="#5B5BD6" strokeWidth="2"/><path d="M10 14l3 3 5-5" stroke="#5B5BD6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </div>
+          <div>
+            <p className="text-[15px] font-semibold text-[#111218] mb-1">
+              {isDemoMode ? 'Ready to analyze your document' : 'AI Review has not been run for this project.'}
+            </p>
+            <p className="text-[13px] text-[#6B6B7E]">
+              {isDemoMode
+                ? '4 source files · style guide · 15 topics will be checked'
+                : 'Project-specific review will become available after the review pipeline is connected.'}
+            </p>
+          </div>
+          {isDemoMode && (
+            <button
+              onClick={() => { setAiReviewRunning(true); setTimeout(() => { setAiReviewRunning(false); onSetAiReviewDone(true) }, 2000) }}
+              className="bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-6 py-2.5 rounded-lg transition-colors"
+            >
+              Run AI Review
+            </button>
+          )}
+        </div>
+      )}
+
+      {aiReviewRunning && isDemoMode && (
+        <div className="bg-white rounded-xl border border-[#E2DED7] p-8 flex flex-col items-center text-center gap-4">
+          <div className="w-10 h-10 border-[3px] border-[#5B5BD6] border-t-transparent rounded-full animate-spin" />
+          <p className="text-[14px] text-[#6B6B7E]">Analyzing 4 source files, style guide, and 15 topics…</p>
+        </div>
+      )}
+
+      {aiReviewDone && !isDemoMode && (
+        <div className="bg-white rounded-xl border border-[#E2DED7] p-8 flex flex-col items-center text-center gap-3">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="12" stroke="#16A34A" strokeWidth="2"/><path d="M11 16l4 4 6-6" stroke="#16A34A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <p className="text-[15px] font-semibold text-[#111218]">Review complete.</p>
+          <p className="text-[13px] text-[#6B6B7E]">Connect your analysis pipeline to see project-specific findings.</p>
+        </div>
+      )}
+
+      {aiReviewDone && isDemoMode && (
+        <>
+          {/* Counts bar */}
+          <div className="flex items-center gap-3 mb-5 p-3 bg-white rounded-xl border border-[#E2DED7]">
+            <span className="text-[13px] font-semibold text-[#111218]">{QUALITY_FINDINGS.length} findings</span>
+            <div className="w-px h-4 bg-[#E2DED7]" />
+            <span className="text-[12px] font-medium text-[#DC2626]">{openFindings.length} Open</span>
+            <span className="text-[12px] font-medium text-[#16A34A]">{resolvedFindings.length} Resolved</span>
+            <span className="text-[12px] font-medium text-[#9898AB]">{dismissedFindings.length} Dismissed</span>
+          </div>
+
+          <div className="space-y-3 mb-5">
+            {QUALITY_FINDINGS.map(f => {
+              const status = getStatus(f.id)
+              const isDone = status === 'resolved' || status === 'dismissed'
+              const isInReview = status === 'in-review'
+              return (
+                <div key={f.id} className={`bg-white border rounded-xl overflow-hidden transition-opacity ${isDone ? 'opacity-55' : ''} ${sevBorder(f.severity)}`}>
+                  <div className="p-4 flex items-start gap-3">
+                    <div className="w-1 self-stretch rounded-full flex-shrink-0" style={{ background: sevColor(f.severity) }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ color: sevColor(f.severity), background: sevColor(f.severity) + '18' }}>{f.severity === 'error' ? 'Critical' : f.severity === 'warning' ? 'Warning' : 'Suggestion'}</span>
+                        <span className="text-[11px] font-medium text-[#6B6B7E]">{f.category}</span>
+                        <span className="text-[11px] text-[#C8C6C0]">·</span>
+                        <span className="text-[11px] text-[#9898AB]">{f.section}</span>
+                        {f.required && <span className="text-[10px] font-semibold text-[#5B5BD6] bg-[#EEEEFF] px-1.5 py-0.5 rounded">Required</span>}
+                      </div>
+                      <p className="text-[13px] text-[#111218] mb-2">{f.text}</p>
+                      {!isDone && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button onClick={() => activeWorkflow === f.id ? closeWorkflow() : openWorkflow(f.id)} className="text-[12px] font-medium text-white bg-[#5B5BD6] hover:bg-[#4A4AC4] px-3 py-1 rounded-lg transition-colors">
+                            Fix
+                          </button>
+                          {isInReview && <span className="text-[11px] font-medium text-[#D97706] bg-[#FEF3C7] px-2 py-0.5 rounded">In Review</span>}
+                          <button onClick={() => { onJumpToSection({ findingId: f.id, section: f.section, category: f.category }); onSetFindingStatus(f.id, 'in-review'); onNav('studio') }} className="text-[12px] text-[#6B6B7E] hover:text-[#5B5BD6] px-2 py-1 transition-colors">
+                            Jump to Content
+                          </button>
+                          <button onClick={() => setDismissTarget(f.id)} className="text-[12px] text-[#9898AB] hover:text-[#6B6B7E] px-2 py-1 transition-colors">
+                            Dismiss
+                          </button>
+                        </div>
+                      )}
+                      {isDone && (
+                        <div className="flex items-center gap-1.5">
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke={status === 'dismissed' ? '#9898AB' : '#16A34A'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          <span className={`text-[11px] font-medium ${statusColor(status)}`}>{statusLabel(status)}</span>
+                          <button onClick={() => onSetFindingStatus(f.id, 'open')} className="text-[11px] text-[#9898AB] hover:text-[#5B5BD6] ml-2 transition-colors">Reopen</button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {activeWorkflow === f.id && (
+                    <div className={`border-t px-4 py-4 ${sevBg(f.severity)} ${sevBorder(f.severity)}`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider">{f.category} · {f.section}</p>
+                        <button onClick={closeWorkflow} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+                        </button>
+                      </div>
+                      {renderWorkflow()}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Completion status */}
+          {blockers.length > 0 && (
+            <div className="bg-[#FEF3C7] border border-[#FDE68A] rounded-xl p-3 mb-4 text-[12px] text-[#92400E]">
+              {blockers.length === 1
+                ? '1 required finding must be Resolved or Dismissed before review can be completed.'
+                : `${blockers.length} required findings must be Resolved or Dismissed before review can be completed.`}
+            </div>
+          )}
+
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => setStage(2)}
+              disabled={!canComplete}
+              className="bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors"
+            >
+              Complete Review →
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+
+
+  const remainingSuggestions = QUALITY_FINDINGS.filter(f => !f.required && (getStatus(f.id) === 'open' || getStatus(f.id) === 'in-review')).length
+
+  const renderStage4 = () => (
+    <div>
+      <div className="flex flex-col items-center text-center py-8 mb-6">
+        <div className="w-20 h-20 rounded-full bg-[#DCFCE7] flex items-center justify-center mb-4">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <circle cx="20" cy="20" r="18" stroke="#16A34A" strokeWidth="2.5"/>
+            <path d="M12 20l6 6 10-10" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+        <h2 className="text-2xl font-semibold text-[#111218] mb-2">Review Complete</h2>
+        <p className="text-[14px] text-[#6B6B7E]">All required findings have been addressed. Document is ready to publish.</p>
+      </div>
+
+      <div className="bg-white rounded-xl border border-[#E2DED7] p-5 mb-6">
+        <p className="text-[13px] font-semibold text-[#111218] mb-3">Summary</p>
+        <div className="space-y-0">
+          <div className="flex items-center justify-between py-2.5 border-b border-[#F4F2EE]">
+            <span className="text-[13px] text-[#6B6B7E]">Resolved</span>
+            <span className="text-[13px] font-semibold text-[#16A34A]">{resolvedFindings.length}</span>
+          </div>
+          <div className="flex items-center justify-between py-2.5 border-b border-[#F4F2EE]">
+            <span className="text-[13px] text-[#6B6B7E]">Dismissed</span>
+            <span className="text-[13px] font-semibold text-[#9898AB]">{dismissedFindings.length}</span>
+          </div>
+          <div className="flex items-center justify-between py-2.5">
+            <span className="text-[13px] text-[#6B6B7E]">Remaining suggestions</span>
+            <span className="text-[13px] font-semibold text-[#111218]">{remainingSuggestions}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-3 justify-center">
+        <button onClick={() => setStage(1)} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-5 py-2.5 rounded-lg hover:bg-[#F9F8F6] transition-colors">
+          ← Back to Review
+        </button>
+        <button onClick={() => onNav('publish')} className="bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-6 py-2.5 rounded-lg transition-colors">
+          Publish →
+        </button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="flex-1 overflow-auto bg-[#F4F2EE]">
+      <div className="max-w-3xl mx-auto w-full p-8 pb-20 fade-in">
+        {/* Page header */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Quality Review</p>
+            <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Review Pipeline</h1>
+          </div>
+          <button onClick={() => onNav('studio')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
+            Back to Editor
+          </button>
+        </div>
+
+        {reviewStaleContent && (
+          <div className="mb-4 flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-2.5">
+            <div className="w-2 h-2 rounded-full bg-[#F59E0B] animate-pulse flex-shrink-0" />
+            <p className="text-[12px] text-[#92400E] flex-1"><span className="font-semibold">Content changed since last review.</span> Some findings may no longer reflect the current document.</p>
+            <button onClick={() => onSetAiReviewDone(false)} className="text-[11px] font-semibold text-[#92400E] border border-[#FDE68A] px-2.5 py-1 rounded-lg hover:bg-[#FDE68A]/50">Re-review</button>
+          </div>
+        )}
+        {renderStageStepper()}
+
+        <div className="bg-white rounded-2xl border border-[#E2DED7] p-6 shadow-sm">
+          {stage === 1 && renderStage1()}
+          {stage === 2 && renderStage4()}
+        </div>
+      </div>
+
+      {/* Dismiss confirmation dialog */}
+      {dismissTarget !== null && (
+        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center fade-in" onClick={() => setDismissTarget(null)}>
+          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[#E2DED7]">
+              <p className="text-[13px] font-semibold text-[#111218]">Dismiss finding?</p>
+              <p className="text-[12px] text-[#6B6B7E] mt-0.5">{QUALITY_FINDINGS.find(f => f.id === dismissTarget)?.category} · {QUALITY_FINDINGS.find(f => f.id === dismissTarget)?.section}</p>
+            </div>
+            <div className="p-5">
+              <p className="text-[12px] text-[#9898AB] mb-3">Reason for dismissal:</p>
+              <div className="space-y-2 mb-4">
+                {DISMISS_REASONS.map(r => (
+                  <label key={r} className="flex items-center gap-2.5 cursor-pointer">
+                    <input type="radio" name="dismissReason" value={r} checked={dismissReason === r} onChange={() => setDismissReason(r)} className="accent-[#5B5BD6]" />
+                    <span className="text-[13px] text-[#3D3D4E]">{r}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  disabled={!dismissReason}
+                  onClick={() => { if (dismissReason) { onSetFindingStatus(dismissTarget, 'dismissed'); setDismissTarget(null); setDismissReason('') } }}
+                  className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[12px] font-medium py-2 rounded-lg transition-colors"
+                >
+                  Dismiss Finding
+                </button>
+                <button onClick={() => { setDismissTarget(null); setDismissReason('') }} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Screen: Preview ───────────────────────────────────────────────────────────
+function PreviewScreen({ onNav, isDemoMode, projectName, toc, topicContent }: {
+  onNav: (s: Screen) => void
+  isDemoMode?: boolean
+  projectName?: string
+  toc?: TocItem[]
+  topicContent?: Record<string, DocBlock[]>
+}) {
+  const [template, setTemplate] = useState('default')
+  const templates = ['Default', 'Enterprise', 'Minimal', 'Technical']
+
+  return (
+    <div className="flex-1 flex overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-56 bg-white border-r border-[#E2DED7] flex flex-col">
+        <div className="p-4 border-b border-[#E2DED7]">
+          <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-3">Template</p>
+          {templates.map(t => (
+            <button
+              key={t}
+              onClick={() => setTemplate(t.toLowerCase())}
+              className={`w-full text-left px-3 py-2 rounded-lg text-[12px] font-medium mb-1 transition-colors ${
+                template === t.toLowerCase() ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#6B6B7E] hover:bg-[#F4F2EE]'
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <div className="p-4 border-b border-[#E2DED7]">
+          <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-3">Brand Kit</p>
+          <div className="bg-[#F9F8F6] border border-dashed border-[#D8D4CE] rounded-lg p-3 text-center">
+            <p className="text-[11px] text-[#9898AB] mb-2">No brand kit connected</p>
+            <button className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors">Connect →</button>
+          </div>
+        </div>
+        <div className="p-4">
+          <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-2">Colors</p>
+          <div className="flex gap-2 mb-3">
+            {['#5B5BD6','#111218','#F4F2EE'].map(c => (
+              <div key={c} className="w-6 h-6 rounded-full border-2 border-white shadow-sm cursor-pointer" style={{ background: c }} />
+            ))}
+          </div>
+        </div>
+      </aside>
+
+      {/* Preview canvas */}
+      <div className="flex-1 overflow-auto bg-[#F4F2EE] p-8">
+        <div className="max-w-2xl mx-auto">
+          {/* Preview document */}
+          <div className="bg-white rounded-xl shadow-sm border border-[#E2DED7] overflow-hidden">
+            {/* Document header */}
+            <div className="bg-[#5B5BD6] px-10 py-8">
+              {isDemoMode ? (
+                <>
+                  <p className="text-[#C4C4F0] text-[11px] font-medium tracking-widest uppercase mb-2">Nexus Platform v3.2</p>
+                  <h1 className="font-doc text-[26px] font-semibold text-white">User Guide</h1>
+                </>
+              ) : (
+                <h1 className="font-doc text-[26px] font-semibold text-white">{projectName || 'Untitled Project'}</h1>
+              )}
+            </div>
+            {/* TOC preview */}
+            <div className="px-10 py-6 border-b border-[#F4F2EE]">
+              <h2 className="font-doc text-[15px] font-semibold text-[#111218] mb-4">Table of Contents</h2>
+              {!isDemoMode && (toc ?? []).length === 0 && (
+                <div className="py-8 text-center">
+                  <p className="text-[13px] text-[#9898AB]">Full document preview is not yet available for this project.</p>
+                  <p className="text-[11px] text-[#C8C6C0] mt-1">Add topics in the Author stage to populate the preview.</p>
+                </div>
+              )}
+              {(isDemoMode ? TOC_ITEMS : (toc ?? [])).filter(i => i.level === 1).map((item, i) => (
+                <div key={item.id} className="flex items-center gap-2 py-1.5 border-b border-[#F4F2EE] last:border-0">
+                  <span className="text-[12px] text-[#9898AB]">{i + 1}</span>
+                  <span className="flex-1 h-px bg-[#E2DED7] mx-2" />
+                  <span className="text-[13px] text-[#111218]">{item.title}</span>
+                </div>
+              ))}
+            </div>
+            {/* Content preview */}
+            <div className="px-10 py-8">
+              {isDemoMode ? (
+                <>
+                  <h2 className="font-doc text-[20px] font-semibold text-[#111218] mb-4">1. Introduction</h2>
+                  <p className="font-doc text-[14px] text-[#2A2A3A] leading-relaxed mb-4">
+                    The Nexus Platform is an enterprise-grade project management and collaboration solution designed for distributed teams working on complex, multi-stakeholder initiatives.
+                  </p>
+                  <p className="font-doc text-[14px] text-[#2A2A3A] leading-relaxed">
+                    This guide covers everything you need to know to use Nexus effectively — from initial setup through advanced project configuration and team coordination.
+                  </p>
+                </>
+              ) : (() => {
+                // Show first available topic content from real project
+                const firstTopic = (toc ?? []).find(t => t.level === 1)
+                const firstBlocks = firstTopic ? (topicContent ?? {})[String(firstTopic.id)] : undefined
+                if (!firstTopic) {
+                  return (
+                    <div className="py-8 text-center">
+                      <p className="text-[13px] text-[#9898AB]">Full document preview is not yet available for this project.</p>
+                      <p className="text-[11px] text-[#C8C6C0] mt-1">Add topics in the Author stage to populate the preview.</p>
+                    </div>
+                  )
+                }
+                return (
+                  <>
+                    <h2 className="font-doc text-[20px] font-semibold text-[#111218] mb-4">{firstTopic.title}</h2>
+                    {firstBlocks && firstBlocks.length > 0 ? firstBlocks.slice(0, 4).map(b => (
+                      b.type !== 'h1' && b.content ? (
+                        <p key={b.id} className="font-doc text-[14px] text-[#2A2A3A] leading-relaxed mb-3">{b.content}</p>
+                      ) : null
+                    )) : (
+                      <p className="font-doc text-[14px] text-[#9898AB] leading-relaxed italic">No content authored for this topic yet.</p>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
+          </div>
+        </div>
+
+        {/* Action bar */}
+        <div className="max-w-2xl mx-auto mt-4 flex justify-between gap-3">
+          <div className="flex gap-2">
+            <button onClick={() => onNav('quality')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
+              ← Back to Review
+            </button>
+          </div>
+          <div className="flex gap-2">
+          <button onClick={() => onNav('publish')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
+            ← Back to Publish
+          </button>
+          <button onClick={() => onNav('publish')} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
+            Export Document
+          </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Screen: Export ────────────────────────────────────────────────────────────
+function PublishScreen({ onNav, themes, projectMeta, projectName, variables, htmlMasterPages, pageLayouts, getDocBlocks, toc, masterAssignments, reviewStaleContent, publishConfig, onPublishConfigChange }: {
+  onNav: (s: Screen) => void
+  themes: Theme[]
+  projectMeta: ProjectMeta
+  projectName: string
+  variables?: Variable[]
+  htmlMasterPages: HtmlMasterPage[]
+  pageLayouts: PageLayout[]
+  getDocBlocks: () => DocBlock[]
+  toc?: TocItem[]
+  masterAssignments?: Record<number, string>
+  reviewStaleContent?: boolean
+  publishConfig?: PublishConfig
+  onPublishConfigChange?: (pc: PublishConfig) => void
+}) {
+  const allProfiles = themes.flatMap(t => t.styleProfiles)
+  const activeTheme = themes.find(t => t.id === projectMeta.themeId) ?? themes[0]
+  const activeProfile = allProfiles.find(p => p.id === projectMeta.styleProfileId) ?? allProfiles[0]
+  const activeBrand = activeTheme?.brandProfiles[0]
+  const activePack = activeTheme?.outputTemplatePacks.find(p => p.id === projectMeta.templatePackId) ?? activeTheme?.outputTemplatePacks[0]
+
+  const selectedFormats = (publishConfig?.selectedFormats ?? ['pdf', 'word', 'html']) as ('pdf' | 'word' | 'html')[]
+  const setSelectedFormats = (updater: ('pdf'|'word'|'html')[] | ((prev: ('pdf'|'word'|'html')[]) => ('pdf'|'word'|'html')[])) => {
+    const next = typeof updater === 'function' ? updater(selectedFormats) : updater
+    onPublishConfigChange?.({ selectedFormats: next, activeVariant })
+  }
+  const activeVariant = publishConfig?.activeVariant || 'presight-external'
+  const setActiveVariant = (v: string) => onPublishConfigChange?.({ selectedFormats, activeVariant: v })
+  const [genStep, setGenStep] = useState<string | null>(null)
+  const [blobs, setBlobs] = useState<Partial<Record<'pdf' | 'word' | 'html', Blob>>>({})
+  const [errors, setErrors] = useState<Partial<Record<'pdf' | 'word' | 'html', string>>>({})
+  const [activePreviewFormat, setActivePreviewFormat] = useState<'pdf' | 'word' | 'html'>('pdf')
+
+  const [showVariantMenu, setShowVariantMenu] = useState(false)
+  const [qaExpanded, setQaExpanded] = useState(true)
+
+  const OUTPUT_VARIANTS = [
+    { id: 'presight-external', label: 'Presight External Documentation' },
+    { id: 'government', label: 'Government Client Documentation' },
+    { id: 'internal', label: 'Internal Technical Reference' },
+  ]
+
+  const safeFilename = projectName.replace(/[^a-zA-Z0-9 ._-]/g, '').trim().replace(/\s+/g, '-') || 'Document'
+
+  // Resolve variables in text
+  const resolveVars = (text: string) => {
+    let out = text
+    for (const v of variables ?? []) {
+      out = out.replace(new RegExp(`\\{\\{${v.name}\\}\\}`, 'g'), v.value)
+    }
+    return out
+  }
+
+  // Flatten doc blocks into a clean representation
+  const buildContent = () => {
+    const blocks = getDocBlocks()
+    return blocks.map(b => ({ ...b, content: resolveVars(b.content ?? '') }))
+  }
+
+  const step = async (msg: string, ms = 300) => {
+    setGenStep(msg)
+    await new Promise(r => setTimeout(r, ms))
+  }
+
+  const generatePDF = async (blocks: DocBlock[]): Promise<Blob> => {
+    const { jsPDF } = await import('jspdf')
+    // Use cfg — same values as preview
+    const primary = cfg.primary
+    const bodyFont = 'helvetica'
+    const pageFormat = cfg.pageSize === 'Letter' ? 'letter' : 'a4'
+    const orientation = cfg.orientation === 'landscape' ? 'landscape' : 'portrait'
+
+    const doc = new jsPDF({ orientation, unit: 'mm', format: pageFormat })
+    const W = pageFormat === 'letter' ? 215.9 : 210
+    const H = pageFormat === 'letter' ? 279.4 : 297
+    const marginL = cfg.marginL, marginR = cfg.marginR, marginT = cfg.marginT, marginB = cfg.marginB
+    const contentW = W - marginL - marginR
+    let y = marginT
+
+    const hexToRgb = (hex: string) => {
+      const r = parseInt(hex.slice(1, 3), 16)
+      const g = parseInt(hex.slice(3, 5), 16)
+      const b = parseInt(hex.slice(5, 7), 16)
+      return { r, g, b }
+    }
+
+    const addPage = () => { doc.addPage(); y = marginT + 10 }
+
+    const checkY = (needed: number) => { if (y + needed > H - marginB) addPage() }
+
+    // Cover page
+    const pc = hexToRgb(primary)
+    doc.setFillColor(pc.r, pc.g, pc.b)
+    doc.rect(0, 0, 210, 297, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFont(bodyFont, 'bold')
+    doc.setFontSize(28)
+    doc.text(projectName, marginL, 80, { maxWidth: contentW })
+    doc.setFontSize(14)
+    doc.setFont(bodyFont, 'normal')
+    doc.text(activeTheme?.name ?? '', marginL, 100)
+    doc.setFontSize(11)
+    doc.text(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), marginL, 110)
+    addPage()
+
+    doc.setTextColor(30, 30, 50)
+
+    for (const block of blocks) {
+      const text = block.content ?? ''
+
+      if (block.type === 'h1') {
+        checkY(16)
+        const hc = hexToRgb(primary)
+        doc.setTextColor(hc.r, hc.g, hc.b)
+        doc.setFont(bodyFont, 'bold')
+        doc.setFontSize(20)
+        doc.text(resolveVars(text), marginL, y, { maxWidth: contentW })
+        y += 10
+        doc.setDrawColor(hc.r, hc.g, hc.b)
+        doc.setLineWidth(0.5)
+        doc.line(marginL, y, marginL + contentW, y)
+        y += 6
+        doc.setTextColor(30, 30, 50)
+      } else if (block.type === 'h2') {
+        checkY(12)
+        doc.setFont(bodyFont, 'bold')
+        doc.setFontSize(16)
+        doc.setTextColor(30, 30, 50)
+        doc.text(resolveVars(text), marginL, y, { maxWidth: contentW })
+        y += 9
+      } else if (block.type === 'h3') {
+        checkY(10)
+        doc.setFont(bodyFont, 'bold')
+        doc.setFontSize(13)
+        doc.text(resolveVars(text), marginL, y, { maxWidth: contentW })
+        y += 7
+      } else if (block.type === 'h4') {
+        checkY(8)
+        doc.setFont(bodyFont, 'bold')
+        doc.setFontSize(11)
+        doc.text(resolveVars(text).toUpperCase(), marginL, y, { maxWidth: contentW })
+        y += 6
+      } else if (block.type === 'para' || block.type === 'caption' || block.type === 'quote') {
+        if (!text.trim()) { y += 4; continue }
+        doc.setFont(bodyFont, block.type === 'quote' ? 'italic' : 'normal')
+        doc.setFontSize(11)
+        const lines = doc.splitTextToSize(resolveVars(text), contentW - (block.type === 'quote' ? 8 : 0))
+        checkY(lines.length * 5 + 4)
+        if (block.type === 'quote') {
+          doc.setDrawColor(pc.r, pc.g, pc.b)
+          doc.setLineWidth(1)
+          doc.line(marginL, y - 2, marginL, y + lines.length * 5)
+          doc.text(lines, marginL + 6, y, { maxWidth: contentW - 8 })
+        } else {
+          doc.text(lines, marginL, y, { maxWidth: contentW })
+        }
+        y += lines.length * 5 + 4
+        doc.setFont(bodyFont, 'normal')
+      } else if (block.type === 'list') {
+        const items = block.listItems ?? []
+        for (const item of items) {
+          const indent = (item.level - 1) * 6
+          const label = item.type === 'bullet' ? '•' : '1.'
+          const lines = doc.splitTextToSize(resolveVars(item.text), contentW - indent - 8)
+          checkY(lines.length * 5 + 2)
+          doc.setFont(bodyFont, 'normal')
+          doc.setFontSize(11)
+          doc.text(label, marginL + indent, y)
+          doc.text(lines, marginL + indent + 6, y)
+          y += lines.length * 5 + 2
+        }
+        y += 2
+      } else if (block.type === 'procedure') {
+        const steps = block.procedureSteps ?? []
+        checkY(8)
+        doc.setFont(bodyFont, 'bold')
+        doc.setFontSize(11)
+        doc.text(resolveVars(text), marginL, y)
+        y += 6
+        for (let i = 0; i < steps.length; i++) {
+          const lines = doc.splitTextToSize(`${i + 1}. ${resolveVars(steps[i])}`, contentW - 6)
+          checkY(lines.length * 5 + 2)
+          doc.setFont(bodyFont, 'normal')
+          doc.text(lines, marginL + 4, y)
+          y += lines.length * 5 + 2
+        }
+        y += 2
+      } else if (block.type === 'callout') {
+        const variant = block.calloutVariant ?? 'note'
+        const bgMap: Record<string, { r: number; g: number; b: number }> = {
+          note: { r: 224, g: 242, b: 254 }, tip: { r: 220, g: 252, b: 231 },
+          warning: { r: 254, g: 243, b: 199 }, important: { r: 243, g: 240, b: 255 }, example: { r: 244, g: 242, b: 238 }
+        }
+        const bg = bgMap[variant] ?? bgMap.note
+        const callLines = doc.splitTextToSize(`[${variant.toUpperCase()}] ${resolveVars(text)}`, contentW - 8)
+        checkY(callLines.length * 5 + 8)
+        doc.setFillColor(bg.r, bg.g, bg.b)
+        doc.roundedRect(marginL, y - 4, contentW, callLines.length * 5 + 8, 2, 2, 'F')
+        doc.setFont(bodyFont, 'normal')
+        doc.setFontSize(10)
+        doc.text(callLines, marginL + 4, y, { maxWidth: contentW - 8 })
+        y += callLines.length * 5 + 10
+      } else if (block.type === 'table' && block.tableData) {
+        const rows = block.tableData.rows
+        if (rows.length === 0) continue
+        const cols = rows[0].length
+        const colW = contentW / cols
+        const rowH = 8
+        for (let ri = 0; ri < rows.length; ri++) {
+          checkY(rowH + 2)
+          if (ri === 0 && block.tableData.hasHeader) {
+            doc.setFillColor(pc.r, pc.g, pc.b)
+            doc.rect(marginL, y - 5, contentW, rowH, 'F')
+            doc.setTextColor(255, 255, 255)
+            doc.setFont(bodyFont, 'bold')
+          } else {
+            doc.setFillColor(ri % 2 === 0 ? 249 : 255, 248, 246)
+            doc.rect(marginL, y - 5, contentW, rowH, 'F')
+            doc.setTextColor(30, 30, 50)
+            doc.setFont(bodyFont, 'normal')
+          }
+          doc.setFontSize(9)
+          for (let ci = 0; ci < cols; ci++) {
+            doc.text(String(rows[ri][ci] ?? ''), marginL + ci * colW + 2, y, { maxWidth: colW - 4 })
+          }
+          y += rowH
+        }
+        doc.setTextColor(30, 30, 50)
+        y += 4
+      } else if (block.type === 'divider') {
+        checkY(6)
+        doc.setDrawColor(200, 198, 192)
+        doc.setLineWidth(0.3)
+        doc.line(marginL, y, marginL + contentW, y)
+        y += 6
+      } else if (block.type === 'code') {
+        const codeLines = doc.splitTextToSize(resolveVars(text), contentW - 8)
+        checkY(codeLines.length * 5 + 8)
+        doc.setFillColor(244, 242, 238)
+        doc.roundedRect(marginL, y - 4, contentW, codeLines.length * 5 + 8, 2, 2, 'F')
+        doc.setFont('courier', 'normal')
+        doc.setFontSize(9)
+        doc.text(codeLines, marginL + 4, y)
+        doc.setFont(bodyFont, 'normal')
+        y += codeLines.length * 5 + 10
+      }
+    }
+
+    // Page numbers
+    const total = (doc as any).internal.getNumberOfPages()
+    for (let i = 2; i <= total; i++) {
+      doc.setPage(i)
+      doc.setFont(bodyFont, 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(150, 150, 160)
+      doc.text(`${i - 1} / ${total - 1}`, W / 2, 297 - 8, { align: 'center' })
+    }
+
+    return doc.output('blob')
+  }
+
+  const generateDOCX = async (blocks: DocBlock[]): Promise<Blob> => {
+    const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, AlignmentType, ShadingType, BorderStyle, UnderlineType } = await import('docx')
+
+    const primary = activeBrand?.primaryColor ?? '#5B5BD6'
+    const hexColor = (h: string) => h.replace('#', '')
+
+    const makeChildren = (block: DocBlock) => {
+      const text = resolveVars(block.content ?? '')
+
+      if (block.type === 'h1') return [new Paragraph({ text, heading: HeadingLevel.HEADING_1 })]
+      if (block.type === 'h2') return [new Paragraph({ text, heading: HeadingLevel.HEADING_2 })]
+      if (block.type === 'h3') return [new Paragraph({ text, heading: HeadingLevel.HEADING_3 })]
+      if (block.type === 'h4') return [new Paragraph({ text, heading: HeadingLevel.HEADING_4 })]
+
+      if (block.type === 'para') return [new Paragraph({ children: [new TextRun({ text })] })]
+
+      if (block.type === 'quote') return [new Paragraph({
+        children: [new TextRun({ text, italics: true })],
+        indent: { left: 720 },
+        border: { left: { color: hexColor(primary), size: 12, space: 8, style: BorderStyle.THICK } }
+      })]
+
+      if (block.type === 'code') return [new Paragraph({
+        children: [new TextRun({ text, font: 'Courier New', size: 18, shading: { type: ShadingType.SOLID, color: 'F4F2EE', fill: 'F4F2EE' } })],
+      })]
+
+      if (block.type === 'callout') {
+        const variant = block.calloutVariant ?? 'note'
+        const fillMap: Record<string, string> = { note: 'E0F2FE', tip: 'DCFCE7', warning: 'FEF3C7', important: 'F3F0FF', example: 'F9F8F6' }
+        return [new Paragraph({
+          children: [new TextRun({ text: `[${variant.toUpperCase()}] ${text}`, size: 20 })],
+          shading: { type: ShadingType.SOLID, color: fillMap[variant] ?? 'E0F2FE', fill: fillMap[variant] ?? 'E0F2FE' },
+          indent: { left: 360, right: 360 },
+        })]
+      }
+
+      if (block.type === 'list' && block.listItems) {
+        return block.listItems.map(item => new Paragraph({
+          children: [new TextRun({ text: resolveVars(item.text) })],
+          bullet: item.type === 'bullet' ? { level: item.level - 1 } : undefined,
+          numbering: item.type === 'ordered' ? { reference: 'default-numbering', level: item.level - 1 } : undefined,
+        }))
+      }
+
+      if (block.type === 'procedure' && block.procedureSteps) {
+        return [
+          new Paragraph({ children: [new TextRun({ text: resolveVars(text), bold: true })], }),
+          ...(block.procedureSteps.map((s, i) => new Paragraph({
+            children: [new TextRun({ text: `${i + 1}. ${resolveVars(s)}` })],
+            indent: { left: 360 },
+          })))
+        ]
+      }
+
+      if (block.type === 'table' && block.tableData) {
+        const rows = block.tableData.rows
+        return [new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: rows.map((row, ri) => new TableRow({
+            children: row.map(cell => new TableCell({
+              shading: ri === 0 && block.tableData?.hasHeader ? { type: ShadingType.SOLID, color: hexColor(primary), fill: hexColor(primary) } : undefined,
+              children: [new Paragraph({
+                children: [new TextRun({ text: String(cell), bold: ri === 0 && block.tableData?.hasHeader, color: ri === 0 && block.tableData?.hasHeader ? 'FFFFFF' : '111218' })],
+              })]
+            }))
+          }))
+        })]
+      }
+
+      if (block.type === 'divider') return [new Paragraph({ border: { bottom: { color: 'E2DED7', size: 6, space: 1, style: BorderStyle.SINGLE } } })]
+
+      return [new Paragraph({ children: [new TextRun({ text })] })]
+    }
+
+    const allChildren = blocks.flatMap(b => { try { return makeChildren(b) } catch { return [] } })
+
+    const docxDoc = new Document({
+      sections: [{
+        properties: {},
+        children: [
+          new Paragraph({
+            children: [new TextRun({ text: projectName, bold: true, size: 56, color: hexColor(primary) })],
+            spacing: { after: 400 },
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: activeTheme?.name ?? '', size: 28, color: '6B6B7E' })],
+            spacing: { after: 200 },
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), size: 24, color: '9898AB' })],
+            spacing: { after: 800 },
+          }),
+          ...allChildren,
+        ]
+      }]
+    })
+
+    return await Packer.toBlob(docxDoc)
+  }
+
+  const generateHTML = async (blocks: DocBlock[]): Promise<Blob> => {
+    const JSZip = (await import('jszip')).default
+    const zip = new JSZip()
+    // Use cfg — same source as preview
+    const primary = cfg.primary
+    const bodyFont = cfg.bodyFont
+    const headingFont = cfg.headingFont
+    const navWidth = cfg.navWidth
+
+    // CSS derived from cfg — identical model to preview
+    const css = `
+@import url('https://fonts.googleapis.com/css2?family=${bodyFont.replace(/ /g,'+')}:wght@400;500;600;700&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'${bodyFont}',sans-serif;font-size:16px;color:#111218;background:#F4F2EE;line-height:1.6}
+.site-header{background:${primary};color:#fff;padding:16px 32px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100}
+.site-header .logo{font-weight:700;font-size:18px}
+.layout{display:flex;max-width:${cfg.contentWidth}px;margin:0 auto;padding:32px 24px;gap:32px}
+.sidebar{width:${navWidth}px;flex-shrink:0;${cfg.showLeftNav ? '' : 'display:none'}
+.sidebar nav a{display:block;padding:6px 12px;border-radius:6px;text-decoration:none;color:#3D3D4E;font-size:14px;margin-bottom:2px}
+.sidebar nav a:hover,.sidebar nav a.active{background:${primary}20;color:${primary}}
+.content{flex:1;min-width:0}
+.content h1{font-size:28px;font-weight:700;color:#111218;border-bottom:2px solid ${primary};padding-bottom:12px;margin-bottom:24px}
+.content h2{font-size:22px;font-weight:600;color:#111218;margin:32px 0 12px}
+.content h3{font-size:18px;font-weight:600;color:#3D3D4E;margin:24px 0 8px}
+.content h4{font-size:14px;font-weight:700;color:#3D3D4E;text-transform:uppercase;letter-spacing:.05em;margin:20px 0 6px}
+.content p{margin-bottom:16px;color:#2A2A3A}
+.content ul,.content ol{padding-left:24px;margin-bottom:16px}
+.content li{margin-bottom:6px}
+.content blockquote{border-left:4px solid ${primary};padding:8px 16px;background:${primary}10;margin:16px 0;font-style:italic}
+.content pre{background:#F4F2EE;border:1px solid #E2DED7;border-radius:8px;padding:16px;font-family:monospace;font-size:14px;overflow-x:auto;margin-bottom:16px}
+.content table{width:100%;border-collapse:collapse;margin-bottom:16px;border-radius:8px;overflow:hidden}
+.content table th{background:${primary};color:#fff;padding:10px 14px;text-align:left;font-size:13px}
+.content table td{padding:9px 14px;border-bottom:1px solid #F4F2EE;font-size:13px}
+.content table tr:nth-child(even) td{background:#FAFAF9}
+.callout{border-radius:10px;padding:14px 18px;margin-bottom:16px}
+.callout.note{background:#E0F2FE;border-left:4px solid #0EA5E9}.callout.tip{background:#DCFCE7;border-left:4px solid #16A34A}
+.callout.warning{background:#FEF3C7;border-left:4px solid #D97706}.callout.important{background:#F3F0FF;border-left:4px solid #7C3AED}
+.callout .label{font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.procedure{counter-reset:step;margin-bottom:16px}
+.procedure-step{display:flex;gap:14px;margin-bottom:10px;align-items:flex-start}
+.procedure-step::before{counter-increment:step;content:counter(step);background:${primary};color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;margin-top:2px}
+hr{border:none;border-top:1px solid #E2DED7;margin:24px 0}
+.site-footer{background:#111218;color:#9898AB;text-align:center;padding:20px;font-size:13px;margin-top:48px}
+.breadcrumb{padding:8px 24px;background:#F9F8F6;font-size:13px;color:#9898AB;border-bottom:1px solid #F4F2EE}
+.breadcrumb a{color:${primary};text-decoration:none}
+.on-this-page{width:200px;flex-shrink:0;padding:24px 0}.on-this-page .otp-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9898AB;margin-bottom:8px}
+.on-this-page a{display:block;font-size:13px;color:#6B6B7E;text-decoration:none;padding:3px 0 3px 8px;border-left:2px solid #E2DED7;margin-bottom:4px}
+.search-box{margin-left:auto;background:rgba(255,255,255,0.15);border-radius:6px;padding:6px 12px;font-size:13px;color:rgba(255,255,255,0.7)}
+`
+
+    // Build topic page HTML
+    const blockToHtml = (block: DocBlock): string => {
+      const t = resolveVars(block.content ?? '').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      if (block.type === 'h1') return `<h1>${t}</h1>`
+      if (block.type === 'h2') return `<h2>${t}</h2>`
+      if (block.type === 'h3') return `<h3>${t}</h3>`
+      if (block.type === 'h4') return `<h4>${t}</h4>`
+      if (block.type === 'para') return t ? `<p>${t}</p>` : ''
+      if (block.type === 'quote') return `<blockquote>${t}</blockquote>`
+      if (block.type === 'code') return `<pre>${t}</pre>`
+      if (block.type === 'divider') return `<hr>`
+      if (block.type === 'callout') return `<div class="callout ${block.calloutVariant ?? 'note'}"><div class="label">${block.calloutVariant ?? 'Note'}</div>${t}</div>`
+      if (block.type === 'list' && block.listItems) {
+        const tag = block.listItems[0]?.type === 'ordered' ? 'ol' : 'ul'
+        const items = block.listItems.map(i => `<li>${resolveVars(i.text).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</li>`).join('')
+        return `<${tag}>${items}</${tag}>`
+      }
+      if (block.type === 'procedure' && block.procedureSteps) {
+        const steps = block.procedureSteps.map(s => `<div class="procedure-step">${resolveVars(s).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`).join('')
+        return `<div><strong>${t}</strong></div><div class="procedure">${steps}</div>`
+      }
+      if (block.type === 'table' && block.tableData) {
+        const rows = block.tableData.rows
+        const header = rows[0] && block.tableData.hasHeader
+          ? `<tr>${rows[0].map(c => `<th>${String(c).replace(/</g,'&lt;')}</th>`).join('')}</tr>`
+          : ''
+        const body = (block.tableData.hasHeader ? rows.slice(1) : rows)
+          .map(r => `<tr>${r.map(c => `<td>${String(c).replace(/</g,'&lt;')}</td>`).join('')}</tr>`).join('')
+        return `<table>${header ? `<thead>${header}</thead>` : ''}<tbody>${body}</tbody></table>`
+      }
+      return ''
+    }
+
+    // wrapPage consumes cfg — same model as preview
+    const topicNav = blocks.filter(b => b.type === 'h1').map((b, i) => `<a href="topic-${i + 1}.html">${resolveVars(b.content ?? '')}</a>`).join('')
+    const breadcrumb = cfg.showBreadcrumb ? `<div class="breadcrumb"><a href="../index.html">Home</a> › <span>{TITLE}</span></div>` : ''
+    const footer = cfg.showFooter ? `<footer class="site-footer">${projectName} · ${cfg.themeName} · Generated ${new Date().toLocaleDateString('en-US')}</footer>` : ''
+    const sidebar = cfg.showLeftNav ? `<aside class="sidebar"><nav><a href="../index.html">Home</a>${topicNav}</nav></aside>` : ''
+
+    const wrapPage = (title: string, bodyContent: string, h2s: string[] = []) => {
+      const onThisPage = cfg.showOnThisPage && h2s.length > 0
+        ? `<div class="on-this-page"><p class="otp-label">On this page</p>${h2s.map(h => `<a href="#">${h}</a>`).join('')}</div>`
+        : ''
+      return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} — ${projectName}</title><link rel="stylesheet" href="../css/theme.css"></head>
+<body>
+${cfg.showHeader ? `<header class="site-header">${cfg.showLogo ? `<span class="logo">${cfg.logoLabel}</span>` : ''}<span>${projectName}</span>${cfg.showSearch ? '<div class="search-box">Search…</div>' : ''}</header>` : ''}
+${breadcrumb.replace('{TITLE}', title)}
+<div class="layout">
+${sidebar}
+<main class="content">${bodyContent}</main>
+${onThisPage}
+</div>
+${footer}
+</body></html>`
+    }
+
+    // index.html — uses Home Page Master config from cfg
+    const homeNav = blocks.filter(b => b.type === 'h1').map((b, i) => `<a href="topics/topic-${i + 1}.html">${resolveVars(b.content ?? '')}</a>`).join('')
+    const indexHtml = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${projectName}</title><link rel="stylesheet" href="css/theme.css"></head>
+<body>
+${cfg.showHeader ? `<header class="site-header">${cfg.showLogo ? `<span class="logo">${cfg.logoLabel}</span>` : ''}<span>${projectName}</span>${cfg.showSearch ? '<div class="search-box">Search…</div>' : ''}</header>` : ''}
+<div class="layout">
+<aside class="sidebar"><nav>${homeNav}</nav></aside>
+<main class="content">
+<h1>${projectName}</h1>
+<p>${cfg.themeName} — Generated ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}</p>
+<ul>${blocks.filter(b => b.type === 'h1').map((b, i) => `<li><a href="topics/topic-${i + 1}.html">${resolveVars(b.content ?? '')}</a></li>`).join('')}</ul>
+</main>
+</div>
+${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${new Date().toLocaleDateString('en-US')}</footer>` : ''}
+</body></html>`
+
+    // Split blocks into sections at each h1
+    const sections: DocBlock[][] = []
+    let current: DocBlock[] = []
+    for (const b of blocks) {
+      if (b.type === 'h1' && current.length > 0) { sections.push(current); current = [] }
+      current.push(b)
+    }
+    if (current.length > 0) sections.push(current)
+
+    zip.file('index.html', indexHtml)
+    zip.file('css/theme.css', css)
+
+    sections.forEach((section, i) => {
+      const title = resolveVars(section[0]?.content ?? `Topic ${i + 1}`)
+      const sectionH2s = section.filter(b => b.type === 'h2').map(b => resolveVars(b.content ?? ''))
+      const html = section.map(blockToHtml).filter(Boolean).join('\n')
+      zip.file(`topics/topic-${i + 1}.html`, wrapPage(title, html, sectionH2s))
+    })
+
+    return await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' })
+  }
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+  }
+
+  const handleGenerate = async () => {
+    const blocks = buildContent()
+    const newBlobs: Partial<Record<'pdf' | 'word' | 'html', Blob>> = {}
+    const newErrors: Partial<Record<'pdf' | 'word' | 'html', string>> = {}
+    setBlobs({})
+    setErrors({})
+
+    await step('Preparing content…', 400)
+    await step(`Applying ${activeTheme?.name ?? 'theme'}…`, 300)
+    await step('Applying styles…', 300)
+
+    if (selectedFormats.includes('pdf')) {
+      try {
+        await step('Generating PDF…', 200)
+        const blob = await generatePDF(blocks)
+        newBlobs.pdf = blob
+      } catch (e) {
+        newErrors.pdf = `PDF generation failed: ${(e as Error).message}`
+      }
+    }
+    if (selectedFormats.includes('word')) {
+      try {
+        await step('Generating Word document…', 200)
+        const blob = await generateDOCX(blocks)
+        newBlobs.word = blob
+      } catch (e) {
+        newErrors.word = `Word generation failed: ${(e as Error).message}`
+      }
+    }
+    if (selectedFormats.includes('html')) {
+      try {
+        await step('Generating HTML package…', 200)
+        const blob = await generateHTML(blocks)
+        newBlobs.html = blob
+      } catch (e) {
+        newErrors.html = `HTML generation failed: ${(e as Error).message}`
+      }
+    }
+
+    await step('Finalizing…', 300)
+    setBlobs(newBlobs)
+    setErrors(newErrors)
+    setGenStep(null)
+  }
+
+  const generating = genStep !== null
+
+  const toggleFormat = (f: 'pdf' | 'word' | 'html') =>
+    setSelectedFormats(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f])
+
+  const FORMAT_META = {
+    pdf: { label: 'PDF', icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="1" width="10" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.2"/><path d="M5 5h6M5 8h4M5 11h3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/><path d="M10 1v3.5H13.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>, desc: 'Print-ready, fixed layout', color: '#DC2626' },
+    word: { label: 'Word', icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.2"/><path d="M4 5.5l2 5 2-3 2 3 2-5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>, desc: 'Editable .docx file', color: '#2563EB' },
+    html: { label: 'HTML', icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3l1.5 10L8 14.5l4.5-1.5L14 3H2z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/><path d="M5 6h6M4.5 9.5l1.5.5 1-3 1 3 1.5-.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>, desc: 'Web-ready, responsive', color: '#059669' },
+  }
+
+  // Variable validation
+  const blocks = getDocBlocks()
+  const varPattern = /\{\{(\w+)\}\}/g
+  const unresolvedVars = new Set<string>()
+  const knownVarNames = new Set((variables ?? []).map(v => v.name))
+  for (const b of blocks) {
+    const text = b.content ?? ''
+    let m: RegExpExecArray | null
+    while ((m = varPattern.exec(text)) !== null) {
+      if (!knownVarNames.has(m[1])) unresolvedVars.add(m[1])
+    }
+  }
+  const hasUnresolvedVars = unresolvedVars.size > 0
+
+  // ── Shared resolved config — single source of truth for BOTH preview and generation ──
+  const homeMaster = htmlMasterPages.find(m => m.masterType === 'home') ?? htmlMasterPages[0]
+  const topicMaster = htmlMasterPages.find(m => m.masterType === 'topic') ?? htmlMasterPages[1]
+  const coverLayout = pageLayouts.find(pl => pl.layoutType === 'cover') ?? pageLayouts[0]
+  const contentLayout = pageLayouts.find(pl => pl.layoutType === 'content') ?? pageLayouts[1]
+
+  const cfg = {
+    primary: activeBrand?.primaryColor ?? '#5B5BD6',
+    bodyFont: activeBrand?.bodyFont ?? 'Inter',
+    headingFont: activeBrand?.headingFont ?? activeBrand?.bodyFont ?? 'Inter',
+    logoLabel: activeBrand?.logoLabel ?? ((projectName ?? '').slice(0, 2).toUpperCase() || 'NX'),
+    brandName: activeBrand?.name ?? '',
+    themeName: activeTheme?.name ?? '',
+    profileName: activeProfile?.name ?? '',
+    packName: activePack?.name ?? '',
+    // Page layout
+    pageSize: contentLayout?.pageSize ?? 'A4',
+    orientation: contentLayout?.orientation ?? 'portrait',
+    marginL: contentLayout?.marginLeft ?? 20,
+    marginR: contentLayout?.marginRight ?? 20,
+    marginT: contentLayout?.marginTop ?? 20,
+    marginB: contentLayout?.marginBottom ?? 20,
+    coverName: coverLayout?.name ?? 'Default Cover',
+    // HTML master page — all settings flow into preview and generation
+    navWidth: topicMaster?.navWidth ?? 220,
+    showHeader: topicMaster?.showHeader ?? true,
+    showSearch: topicMaster?.showSearch ?? true,
+    showBreadcrumb: topicMaster?.showBreadcrumb ?? true,
+    showLeftNav: topicMaster?.showLeftNav ?? true,
+    showOnThisPage: topicMaster?.showOnThisPage ?? true,
+    showPrevNext: topicMaster?.showPrevNext ?? true,
+    showFooter: topicMaster?.showFooter ?? true,
+    showLogo: topicMaster?.showLogo ?? true,
+    contentWidth: topicMaster?.contentWidth ?? 900,
+  }
+
+  // Per-format config rows — all sourced from cfg / live state
+  const configRows: Record<string, { label: string; value: string }[]> = {
+    pdf: [
+      { label: 'Theme', value: cfg.themeName || '—' },
+      { label: 'Style Profile', value: cfg.profileName || '—' },
+      { label: 'PDF Layout Pack', value: cfg.packName || '—' },
+      { label: 'Cover Page Layout', value: cfg.coverName },
+      { label: 'Content Page Layout', value: `${cfg.pageSize} · ${cfg.orientation} · ${cfg.marginL}mm margins` },
+      { label: 'Output Variant', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
+    ],
+    word: [
+      { label: 'Theme', value: cfg.themeName || '—' },
+      { label: 'Style Profile', value: cfg.profileName || '—' },
+      { label: 'Word Layout Pack', value: cfg.packName || '—' },
+      { label: 'Cover Page Layout', value: cfg.coverName },
+      { label: 'Content Page Layout', value: `${cfg.pageSize} · ${cfg.orientation}` },
+      { label: 'Output Variant', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
+    ],
+    html: [
+      { label: 'Theme', value: cfg.themeName || '—' },
+      { label: 'Style Profile', value: cfg.profileName || '—' },
+      { label: 'Home Page Master', value: homeMaster?.name ?? '—' },
+      { label: 'Default Topic Master', value: topicMaster?.name ?? '—' },
+      { label: 'Custom Master Assignments', value: '2 topics' },
+      { label: 'Output Variant', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
+    ],
+  }
+
+  // Shared format preview — reads exclusively from cfg (same source as generators)
+  const renderFormatPreview = (fmt: 'pdf' | 'word' | 'html') => {
+    const { primary, logoLabel, themeName, profileName, bodyFont, headingFont, brandName } = cfg
+    const h1s = blocks.filter(b => b.type === 'h1').map(b => resolveVars(b.content ?? ''))
+    const h2s = blocks.filter(b => b.type === 'h2').map(b => resolveVars(b.content ?? ''))
+    const firstPara = blocks.find(b => b.type === 'para')
+    const excerpt = firstPara ? resolveVars(firstPara.content ?? '').slice(0, 180) : ''
+
+    if (fmt === 'html') {
+      // Renders using cfg.navWidth, cfg.showOnThisPage, cfg.showBreadcrumb, cfg.showFooter, etc.
+      // Exactly what generateHTML will use for layout/CSS
+      const navTopics = h1s.length > 0 ? h1s : ['Introduction', 'Getting Started', 'Overview']
+      return (
+        <div className="bg-white rounded-xl border border-[#E2DED7] overflow-hidden shadow-sm text-[11px]">
+          {/* Browser chrome */}
+          <div className="bg-[#EEECEB] border-b border-[#E2DED7] px-3 py-1.5 flex items-center gap-2">
+            <div className="flex gap-1"><div className="w-2.5 h-2.5 rounded-full bg-[#FC5C64]"/><div className="w-2.5 h-2.5 rounded-full bg-[#FDBC40]"/><div className="w-2.5 h-2.5 rounded-full bg-[#34CA49]"/></div>
+            <div className="flex-1 bg-white border border-[#E2DED7] rounded-full px-2.5 py-0.5 text-[9px] text-[#9898AB]">
+              help.{(projectName ?? 'example').toLowerCase().replace(/\s+/g, '')}.com/docs/index.html
+            </div>
+          </div>
+          {/* Header — driven by cfg.showHeader / cfg.showSearch */}
+          {cfg.showHeader && (
+            <div className="px-4 py-2.5 flex items-center justify-between" style={{ backgroundColor: primary }}>
+              <div className="flex items-center gap-2">
+                {cfg.showLogo && <div className="w-5 h-5 rounded bg-white/20 flex items-center justify-center text-[7px] font-bold text-white">{logoLabel.slice(0,2)}</div>}
+                <span className="text-white text-[11px] font-semibold">{projectName}</span>
+              </div>
+              {cfg.showSearch && (
+                <div className="flex items-center gap-1.5 bg-white/15 rounded px-2 py-0.5 text-white text-[9px]">
+                  <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><circle cx="4" cy="4" r="2.5" stroke="white" strokeWidth="1"/><path d="M6 6l1.5 1.5" stroke="white" strokeWidth="1" strokeLinecap="round"/></svg>
+                  Search…
+                </div>
+              )}
+            </div>
+          )}
+          {/* Breadcrumb — driven by cfg.showBreadcrumb */}
+          {cfg.showBreadcrumb && (
+            <div className="px-3 py-1 bg-[#F9F8F6] border-b border-[#F4F2EE] flex items-center gap-1 text-[8px] text-[#9898AB]">
+              <span style={{ color: primary }}>Home</span>
+              <span>›</span><span style={{ color: primary }}>User Guide</span>
+              <span>›</span><span className="text-[#3D3D4E]">{h1s[0] || 'Introduction'}</span>
+            </div>
+          )}
+          {/* Body layout — nav width driven by cfg.navWidth */}
+          <div className="flex" style={{ minHeight: 210 }}>
+            {cfg.showLeftNav && (
+              <div className="bg-[#F9F8F6] border-r border-[#F4F2EE] p-2 flex-shrink-0" style={{ width: Math.round(cfg.navWidth * 0.5) }}>
+                <p className="text-[8px] font-bold text-[#9898AB] uppercase tracking-wide px-1 mb-1.5">Contents</p>
+                {navTopics.slice(0, 6).map((t, i) => (
+                  <div key={i} className={`text-[9px] px-2 py-1 rounded mb-0.5 truncate ${i === 0 ? 'font-semibold text-white' : 'text-[#6B6B7E]'}`} style={i === 0 ? { backgroundColor: primary } : {}}>{t}</div>
+                ))}
+              </div>
+            )}
+            {/* Main content */}
+            <div className="flex-1 p-4 min-w-0">
+              <p className="text-[13px] font-bold mb-1" style={{ color: primary }}>{h1s[0] || projectName}</p>
+              <p className="text-[8px] text-[#9898AB] mb-2">Last updated · {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+              <p className="text-[9px] text-[#3D3D4E] leading-relaxed mb-2">{excerpt || 'Content will appear here when topics are authored.'}</p>
+              {h2s.slice(0, 2).map((h, i) => <div key={i} className="text-[9px] font-semibold mb-0.5" style={{ color: primary }}>▸ {h}</div>)}
+              {cfg.showPrevNext && (
+                <div className="flex items-center justify-between mt-3 pt-2 border-t border-[#F4F2EE]">
+                  <span className="text-[8px] text-[#9898AB]">← Previous</span>
+                  <span className="text-[8px] text-[#9898AB]">Next →</span>
+                </div>
+              )}
+            </div>
+            {/* On This Page — driven by cfg.showOnThisPage */}
+            {cfg.showOnThisPage && h2s.length > 0 && (
+              <div className="w-20 border-l border-[#F4F2EE] p-2 flex-shrink-0">
+                <p className="text-[8px] font-bold text-[#9898AB] uppercase tracking-wide mb-1.5">On this page</p>
+                {h2s.slice(0, 4).map((h, i) => <div key={i} className="text-[8px] text-[#9898AB] py-0.5 pl-1 border-l-2 border-[#E2DED7] mb-0.5 truncate">{h}</div>)}
+              </div>
+            )}
+          </div>
+          {/* Footer — driven by cfg.showFooter */}
+          {cfg.showFooter && (
+            <div className="bg-[#111218] px-4 py-1.5 flex items-center justify-between">
+              <span className="text-[8px] text-[#6B6B7E]">{projectName} · {themeName}</span>
+              <span className="text-[8px] text-[#6B6B7E]">© {new Date().getFullYear()}</span>
+            </div>
+          )}
+          {/* Config indicator — shows which master page values are active */}
+          <div className="bg-[#F9F8F6] border-t border-[#E2DED7] px-3 py-1 flex items-center gap-2 flex-wrap">
+            <span className="text-[8px] text-[#9898AB]">Master: {topicMaster?.name ?? 'Default'}</span>
+            <span className="text-[8px] text-[#C8C6C0]">·</span>
+            <span className="text-[8px] text-[#9898AB]">Nav {cfg.navWidth}px</span>
+            {!cfg.showOnThisPage && <span className="text-[8px] text-[#D97706]">On This Page off</span>}
+            {!cfg.showBreadcrumb && <span className="text-[8px] text-[#D97706]">Breadcrumb off</span>}
+            {!cfg.showFooter && <span className="text-[8px] text-[#D97706]">Footer off</span>}
+          </div>
+        </div>
+      )
+    }
+
+    if (fmt === 'word') {
+      // Layout reflects cfg.pageSize, cfg.orientation, cfg.marginL, cfg.profileName, cfg.headingFont
+      return (
+        <div className="bg-[#F0EEE8] rounded-xl border border-[#E2DED7] overflow-hidden shadow-sm p-4">
+          <div className="bg-[#F9F8F6] border border-[#E2DED7] rounded-lg mb-3 px-3 py-1.5 flex items-center gap-3 text-[9px] text-[#9898AB]">
+            <span className="font-bold">B</span><span className="italic">I</span><span className="underline">U</span>
+            <div className="w-px h-3 bg-[#E2DED7]" />
+            <span>Heading 1</span><span>·</span><span>{headingFont}</span>
+            <div className="ml-auto text-[8px]">{cfg.pageSize} · {cfg.orientation} · {cfg.marginL}mm</div>
+          </div>
+          <div className="bg-white border border-[#D0CEC8] shadow-sm mx-auto" style={{ maxWidth: 480 }}>
+            <div className="border-b border-[#E2DED7] px-6 py-1.5 flex items-center justify-between">
+              <span className="text-[8px] text-[#9898AB]">{projectName}</span>
+              <span className="text-[8px] text-[#9898AB]">{profileName}</span>
+            </div>
+            <div className="pt-8 pb-6 border-b border-[#E2DED7]" style={{ paddingLeft: `${cfg.marginL * 1.5}px`, paddingRight: `${cfg.marginR * 1.5}px`, borderLeftWidth: 4, borderLeftColor: primary, borderLeftStyle: 'solid' }}>
+              <p className="text-[8px] text-[#9898AB] uppercase tracking-widest mb-2">{themeName}</p>
+              <p className="text-[16px] font-bold font-doc" style={{ color: primary, fontFamily: headingFont }}>{projectName}</p>
+              <p className="text-[10px] text-[#6B6B7E] font-doc mt-0.5">{profileName || 'Technical Documentation'}</p>
+              <p className="text-[8px] text-[#9898AB] mt-3">{new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+            </div>
+            <div className="py-4 border-b border-[#F4F2EE]" style={{ paddingLeft: `${cfg.marginL * 1.5}px`, paddingRight: `${cfg.marginR * 1.5}px` }}>
+              <p className="text-[9px] font-bold text-[#9898AB] uppercase tracking-widest mb-2">Contents</p>
+              {(h1s.length > 0 ? h1s : ['Introduction', 'Getting Started', 'Overview']).slice(0, 5).map((t, i) => (
+                <div key={i} className="flex items-center gap-1 mb-1">
+                  <span className="text-[9px] text-[#9898AB] w-4">{i + 1}</span>
+                  <span className="text-[9px] text-[#111218]">{t}</span>
+                  <div className="flex-1 border-b border-dotted border-[#E2DED7] mx-1" />
+                  <span className="text-[8px] text-[#9898AB]">{i + 2}</span>
+                </div>
+              ))}
+            </div>
+            <div className="py-4" style={{ paddingLeft: `${cfg.marginL * 1.5}px`, paddingRight: `${cfg.marginR * 1.5}px` }}>
+              <p className="text-[13px] font-bold font-doc mb-1" style={{ color: primary, fontFamily: headingFont }}>{h1s[0] || 'Introduction'}</p>
+              <p className="text-[8px] text-[#3D3D4E] leading-relaxed mb-2" style={{ fontFamily: bodyFont }}>{excerpt || 'Body text will appear here using the configured body font and style profile.'}</p>
+              {h2s[0] && <p className="text-[10px] font-semibold font-doc mb-0.5" style={{ color: primary }}>{h2s[0]}</p>}
+              <div className="space-y-0.5 mt-1">
+                <div className="h-1.5 bg-[#F4F2EE] rounded-full w-full" />
+                <div className="h-1.5 bg-[#F4F2EE] rounded-full w-5/6" />
+              </div>
+            </div>
+            <div className="border-t border-[#E2DED7] px-6 py-1.5 flex items-center justify-between">
+              <span className="text-[8px] text-[#9898AB]">{brandName || projectName}</span>
+              <span className="text-[8px] text-[#9898AB]">Page 1</span>
+            </div>
+          </div>
+          <p className="text-center text-[8px] text-[#9898AB] mt-2">Word layout preview · {cfg.pageSize} {cfg.orientation} · {profileName}</p>
+        </div>
+      )
+    }
+
+    // PDF — reflects cfg.pageSize, cfg.marginL, cfg.primary, cfg.headingFont
+    return (
+      <div className="bg-[#DDDBD5] rounded-xl border border-[#D0CEC8] overflow-hidden shadow-sm p-4">
+        <div className="bg-white border border-[#C8C6C0] shadow-md mx-auto" style={{ maxWidth: 480 }}>
+          {/* Running header — uses same logo/title config as PDF generator */}
+          <div className="flex items-center justify-between border-b border-[#E2DED7]" style={{ backgroundColor: primary + '12', paddingLeft: `${cfg.marginL}px`, paddingRight: `${cfg.marginR}px`, paddingTop: 6, paddingBottom: 6 }}>
+            <div className="flex items-center gap-1.5">
+              <div className="w-4 h-4 rounded flex items-center justify-center text-[6px] font-bold text-white" style={{ backgroundColor: primary }}>{logoLabel.slice(0,2)}</div>
+              <span className="text-[8px] font-medium text-[#6B6B7E]">{projectName}</span>
+            </div>
+            <span className="text-[8px] text-[#9898AB]">{profileName}</span>
+          </div>
+          {/* Cover — gradient uses cfg.primary */}
+          <div style={{ padding: `${cfg.marginT * 2}px ${cfg.marginL * 2}px`, background: `linear-gradient(135deg, ${primary} 0%, ${primary}CC 100%)` }}>
+            <p className="text-white/60 text-[8px] font-medium tracking-widest uppercase mb-4">{themeName}</p>
+            <p className="text-white text-[20px] font-bold font-doc leading-tight" style={{ fontFamily: headingFont }}>{projectName}</p>
+            <p className="text-white/80 text-[11px] font-doc mt-1">{profileName || 'Technical Documentation'}</p>
+            <div className="mt-6 pt-4 border-t border-white/20">
+              <p className="text-white/60 text-[8px]">{new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+            </div>
+          </div>
+          {/* TOC */}
+          <div className="border-b border-[#F4F2EE]" style={{ paddingLeft: `${cfg.marginL * 2}px`, paddingRight: `${cfg.marginR * 2}px`, paddingTop: 12, paddingBottom: 12 }}>
+            <p className="text-[9px] font-bold uppercase tracking-widest mb-3" style={{ color: primary }}>Table of Contents</p>
+            {(h1s.length > 0 ? h1s : ['Introduction', 'Getting Started', 'Configuration', 'Troubleshooting']).slice(0, 5).map((t, i) => (
+              <div key={i} className="flex items-center gap-1 mb-1.5">
+                <span className="text-[9px] font-medium text-[#6B6B7E] w-5 flex-shrink-0">{i + 1}</span>
+                <span className="text-[9px] text-[#111218]">{t}</span>
+                <div className="flex-1 border-b border-dotted border-[#E2DED7] mx-1" />
+              </div>
+            ))}
+          </div>
+          {/* Content sample */}
+          <div style={{ paddingLeft: `${cfg.marginL * 2}px`, paddingRight: `${cfg.marginR * 2}px`, paddingTop: 12, paddingBottom: 12 }}>
+            <p className="text-[14px] font-bold font-doc mb-1.5" style={{ color: primary, fontFamily: headingFont }}>{h1s[0] || 'Introduction'}</p>
+            <p className="text-[9px] leading-relaxed mb-2 text-[#3D3D4E]" style={{ fontFamily: bodyFont }}>{excerpt || 'Body content will appear here using the configured brand and style profile.'}</p>
+            {h2s[0] && <p className="text-[11px] font-semibold font-doc mb-1" style={{ color: primary }}>{h2s[0]}</p>}
+            <div className="space-y-1">
+              <div className="h-1.5 bg-[#F4F2EE] rounded-full w-full" />
+              <div className="h-1.5 bg-[#F4F2EE] rounded-full w-5/6" />
+            </div>
+          </div>
+          {/* Footer */}
+          <div className="flex items-center justify-between border-t border-[#E2DED7]" style={{ paddingLeft: `${cfg.marginL * 2}px`, paddingRight: `${cfg.marginR * 2}px`, paddingTop: 5, paddingBottom: 5 }}>
+            <span className="text-[7px] text-[#9898AB]">{projectName} · {themeName}</span>
+            <span className="text-[7px] text-[#9898AB]">Page 2</span>
+          </div>
+        </div>
+        <p className="text-center text-[8px] text-[#9898AB] mt-2">{cfg.pageSize} · {cfg.orientation} · {cfg.marginL}mm margins · {profileName}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 overflow-auto bg-[#F4F2EE]">
+      <div className="max-w-5xl mx-auto w-full p-8 pb-20 fade-in">
+        {/* Review stale banner */}
+        {reviewStaleContent && (
+          <div className="mb-4 flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-2.5">
+            <div className="w-2 h-2 rounded-full bg-[#F59E0B] animate-pulse flex-shrink-0" />
+            <p className="text-[12px] text-[#92400E] flex-1"><span className="font-semibold">Content changed since last review.</span> Review may be outdated — consider re-running Review before publishing.</p>
+            <button onClick={() => onNav('quality')} className="text-[11px] font-semibold text-[#92400E] border border-[#FDE68A] px-2.5 py-1 rounded-lg hover:bg-[#FDE68A]/50">Go to Review</button>
+          </div>
+        )}
+        {/* Header */}
+        <div className="flex items-start justify-between mb-6">
+          <div>
+            <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Publish</p>
+            <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Publish Document</h1>
+            <p className="text-[14px] text-[#6B6B7E]">Generate outputs using the configured theme, master pages, and page layouts.</p>
+          </div>
+          <button onClick={() => onNav('studio')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
+            ← Back to Editor
+          </button>
+        </div>
+
+        {/* Unresolved variable warning */}
+        {hasUnresolvedVars && (
+          <div className="bg-[#FEF3C7] border border-[#FDE68A] rounded-xl p-3 mb-4 flex items-center gap-3">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L14.5 13H1.5L8 2z" stroke="#D97706" strokeWidth="1.3" strokeLinejoin="round"/><path d="M8 6v3.5M8 11v.5" stroke="#D97706" strokeWidth="1.4" strokeLinecap="round"/></svg>
+            <div className="flex-1">
+              <p className="text-[12px] font-semibold text-[#92400E]">Unresolved variables detected</p>
+              <p className="text-[11px] text-[#B45309]">{[...unresolvedVars].map(v => `{{${v}}}`).join(', ')} — define these in Variables before generating.</p>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-5 gap-6">
+          {/* Left column */}
+          <div className="col-span-2 space-y-4">
+
+            {/* Output Variant */}
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[13px] font-semibold text-[#111218]">Output Variant</p>
+                <button className="text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium transition-colors">+ New</button>
+              </div>
+              <div className="relative">
+                <button
+                  onClick={() => setShowVariantMenu(v => !v)}
+                  className="w-full flex items-center justify-between border border-[#E2DED7] rounded-lg px-3 py-2 text-[12px] text-[#111218] hover:border-[#5B5BD6] transition-colors text-left"
+                >
+                  <span className="truncate">{OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—'}</span>
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 ml-2"><path d="M2 3.5l3 3 3-3" stroke="#9898AB" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                {showVariantMenu && (
+                  <div className="absolute top-full mt-1 left-0 right-0 bg-white border border-[#E2DED7] rounded-lg shadow-md z-20 overflow-hidden">
+                    {OUTPUT_VARIANTS.map(v => (
+                      <button key={v.id} onClick={() => { setActiveVariant(v.id); setShowVariantMenu(false) }}
+                        className={`w-full text-left px-3 py-2 text-[12px] hover:bg-[#EEEEFF] transition-colors ${v.id === activeVariant ? 'text-[#5B5BD6] font-semibold' : 'text-[#111218]'}`}>
+                        {v.label}
+                      </button>
+                    ))}
+                    <div className="border-t border-[#F4F2EE] px-3 py-2">
+                      <button className="text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium">Duplicate · Rename</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Format-specific Output Configuration */}
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[13px] font-semibold text-[#111218]">Output Configuration</p>
+                <span className="text-[10px] font-bold uppercase text-[#5B5BD6] tracking-wide">{activePreviewFormat}</span>
+              </div>
+              <div className="space-y-2.5">
+                {configRows[activePreviewFormat].map(row => (
+                  <div key={row.label} className="flex items-start justify-between gap-2">
+                    <span className="text-[11px] text-[#9898AB] flex-shrink-0">{row.label}</span>
+                    <span className="text-[11px] font-medium text-[#111218] text-right">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 pt-3 border-t border-[#F4F2EE]">
+                {activeBrand && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-4 h-4 rounded flex items-center justify-center text-[6px] font-bold text-white flex-shrink-0" style={{ backgroundColor: activeBrand.primaryColor }}>{activeBrand.logoLabel?.slice(0,2)}</div>
+                    <div><p className="text-[11px] font-semibold text-[#111218]">{activeBrand.name}</p><p className="text-[10px] text-[#9898AB]">{activeBrand.bodyFont} · {activeBrand.primaryColor}</p></div>
+                  </div>
+                )}
+                <button onClick={() => onNav('branding')} className="text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium transition-colors">Edit in Theme & Styles →</button>
+              </div>
+            </div>
+
+            {/* Pre-publish QA */}
+            <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+              <button onClick={() => setQaExpanded(v => !v)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-[#F9F8F6] transition-colors">
+                <p className="text-[13px] font-semibold text-[#111218]">Pre-publish Check</p>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className={`transition-transform ${qaExpanded ? 'rotate-180' : ''}`}><path d="M2 4l4 4 4-4" stroke="#9898AB" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              {qaExpanded && (
+                <div className="border-t border-[#F4F2EE] px-4 py-3 space-y-2">
+                  {[
+                    { label: 'Variables', value: hasUnresolvedVars ? `${unresolvedVars.size} unresolved` : 'All resolved', ok: !hasUnresolvedVars },
+                    { label: 'Internal Links', value: '18 valid', ok: true },
+                    { label: 'Master Pages', value: htmlMasterPages.length > 0 ? 'All assigned' : 'Not configured', ok: htmlMasterPages.length > 0 },
+                    { label: 'Page Layouts', value: pageLayouts.length > 0 ? `${pageLayouts.length} configured` : 'Missing', ok: pageLayouts.length > 0 },
+                    { label: 'Theme', value: activeTheme ? activeTheme.name : 'Not selected', ok: !!activeTheme },
+                    { label: 'Review', value: 'Complete', ok: true },
+                  ].map(row => (
+                    <div key={row.label} className="flex items-center justify-between">
+                      <span className="text-[11px] text-[#6B6B7E]">{row.label}</span>
+                      <span className={`text-[11px] font-medium flex items-center gap-1 ${row.ok ? 'text-[#16A34A]' : 'text-[#D97706]'}`}>
+                        {row.ok
+                          ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.5 5l3 3 4-4" stroke="#16A34A" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 2v4M5 7.5v.5" stroke="#D97706" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                        }
+                        {row.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Format selection */}
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <p className="text-[13px] font-semibold text-[#111218] mb-3">Output Formats</p>
+              <div className="space-y-2">
+                {(['pdf', 'word', 'html'] as const).map(f => {
+                  const m = FORMAT_META[f]
+                  const checked = selectedFormats.includes(f)
+                  return (
+                    <label key={f} onClick={() => { setActivePreviewFormat(f) }} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${checked ? 'border-[#5B5BD6] bg-[#EEEEFF]' : 'border-[#E2DED7] hover:border-[#C8C6C0]'}`}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleFormat(f)} className="w-4 h-4 rounded accent-[#5B5BD6]" onClick={e => e.stopPropagation()} />
+                      <div className="flex-shrink-0" style={{ color: checked ? m.color : '#9898AB' }}>{m.icon}</div>
+                      <div>
+                        <p className={`text-[13px] font-semibold ${checked ? 'text-[#111218]' : 'text-[#6B6B7E]'}`}>{m.label}</p>
+                        <p className="text-[11px] text-[#9898AB]">{m.desc}</p>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Generate */}
+            <button
+              disabled={selectedFormats.length === 0 || generating}
+              onClick={handleGenerate}
+              className="w-full flex items-center justify-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-50 text-white text-[14px] font-semibold py-3.5 rounded-xl transition-colors"
+            >
+              {generating ? (
+                <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> {genStep}</>
+              ) : (
+                <><svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 1v10M4 8l3.5 3.5L11 8M1.5 13h12" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg> Generate Outputs</>
+              )}
+            </button>
+
+            {/* Per-format download cards */}
+            {(Object.keys(blobs).length > 0 || Object.keys(errors).length > 0) && (
+              <div className="space-y-2">
+                {(['pdf', 'word', 'html'] as const).filter(f => selectedFormats.includes(f)).map(f => {
+                  const blob = blobs[f]
+                  const err = errors[f]
+                  const exts: Record<string, string> = { pdf: `${safeFilename}.pdf`, word: `${safeFilename}.docx`, html: `${safeFilename}-html.zip` }
+                  if (err) return (
+                    <div key={f} className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-xl p-3 flex items-center justify-between">
+                      <div>
+                        <p className="text-[12px] font-semibold text-[#DC2626]">{FORMAT_META[f].label} generation failed</p>
+                        <p className="text-[10px] text-[#DC2626] opacity-70">{err}</p>
+                      </div>
+                      <button onClick={handleGenerate} className="text-[11px] font-medium text-[#DC2626] border border-[#FCA5A5] px-2 py-1 rounded hover:bg-[#FEE2E2] flex-shrink-0">Retry</button>
+                    </div>
+                  )
+                  if (!blob) return null
+                  return (
+                    <div key={f} className="bg-[#DCFCE7] border border-[#BBF7D0] rounded-xl p-3 flex items-center justify-between">
+                      <div>
+                        <p className="text-[12px] font-semibold text-[#15803D]">{FORMAT_META[f].label} Ready</p>
+                        <p className="text-[10px] text-[#16A34A]">{(blob.size / 1024).toFixed(1)} KB · {exts[f]}</p>
+                      </div>
+                      <button onClick={() => downloadBlob(blob, exts[f])} className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[#BBF7D0] rounded-lg text-[12px] text-[#15803D] font-medium hover:bg-[#F0FDF4] transition-colors flex-shrink-0">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v8M3 6.5L6 9.5 9 6.5M1.5 10.5h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        Download
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Right: output preview */}
+          <div className="col-span-3 space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-[#111218]">Output Preview</p>
+              <div className="flex items-center gap-1 bg-white border border-[#E2DED7] rounded-lg p-0.5">
+                {(['pdf', 'word', 'html'] as const).map(f => (
+                  <button key={f} onClick={() => { setActivePreviewFormat(f) }}
+                    className={`px-3 py-1 rounded-md text-[11px] font-semibold uppercase transition-all ${activePreviewFormat === f ? 'bg-[#5B5BD6] text-white' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}>
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {renderFormatPreview(activePreviewFormat)}
+
+            <div className="flex items-center justify-between pt-1">
+              <p className="text-[11px] text-[#9898AB]">
+                {FORMAT_META[activePreviewFormat].label} preview · {activeTheme?.name ?? 'Default Theme'} · {OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label}
+              </p>
+              <button onClick={() => onNav('preview')} className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors">
+                Full Preview →
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── App-level project defaults (used for reset and initial state) ─────────────
+const DEFAULT_PROJECT_META: ProjectMeta = {
+  themeId: 'th1', styleProfileId: 'sp1', templatePackId: 'tp1',
+  language: 'en-US', version: '', contentType: 'user-guide',
+}
+const DEFAULT_THEME_VARIABLES: Record<string, Variable[]> = {
+  th1: [
+    { id: 'v1', name: 'ProductName', value: '', description: 'Full product name' },
+    { id: 'v2', name: 'Version', value: '1.0', description: 'Current version number' },
+    { id: 'v3', name: 'CompanyName', value: '', description: 'Company or organization name' },
+    { id: 'v4', name: 'ReleaseDate', value: '', description: 'Release date' },
+    { id: 'v5', name: 'SupportEmail', value: '', description: 'Support contact email' },
+  ],
+}
+
+// ── App Root ──────────────────────────────────────────────────────────────────
+export default function App() {
+  // v2.1 — stable ProjectSource model
+  const [screen, setScreen] = useState<Screen>('dashboard')
+  const [projectId, setProjectId] = useState<string | null>(null)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [projectName, setProjectName] = useState('')
+  const [sources, setSources] = useState<ProjectSource[]>([])
+  const [sourceExtractions, setSourceExtractions] = useState<Record<string, SourceExtraction>>({})
+  const [isDemoMode, setIsDemoMode] = useState(false)
+  const [reviewContext, setReviewContext] = useState<ReviewContext>(null)
+  const [findingStatuses, setFindingStatuses] = useState<Record<number, FindingStatus>>({})
+  const [aiReviewDone, setAiReviewDone] = useState(false)
+  const [reviewStage, setReviewStage] = useState<1 | 2>(1)
+  const [themes, setThemes] = useState<Theme[]>(INITIAL_THEMES)
+  const [projectMeta, setProjectMeta] = useState<ProjectMeta>(DEFAULT_PROJECT_META)
+  const handleProjectMetaChange = (m: Partial<ProjectMeta>) => { setProjectMeta(prev => ({ ...prev, ...m })); triggerAutosave() }
+  const [activeStyleProfileId, setActiveStyleProfileId] = useState('sp1')
+  const [pageLayouts, setPageLayouts] = useState<PageLayout[]>(INITIAL_PAGE_LAYOUTS)
+  const [htmlMasterPages, setHtmlMasterPages] = useState<HtmlMasterPage[]>(INITIAL_HTML_MASTER_PAGES)
+  const handleAddTheme = (t: Theme) => { setThemes(prev => [...prev, t]); triggerAutosave() }
+  const [themeVariables, setThemeVariables] = useState<Record<string, Variable[]>>(DEFAULT_THEME_VARIABLES)
+  const getThemeVars = (themeId: string): Variable[] => themeVariables[themeId] ?? []
+  const setThemeVars = (themeId: string, vars: Variable[] | ((prev: Variable[]) => Variable[])) => {
+    setThemeVariables(prev => ({ ...prev, [themeId]: typeof vars === 'function' ? vars(prev[themeId] ?? []) : vars }))
+    triggerAutosave()
+  }
+
+  const [prevScreen, setPrevScreen] = useState<Screen | null>(null)
+
+  const persistCurrentProject = async (): Promise<boolean> => {
+    if (!projectId) return true
+    if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null }
+    const record = latestBuildRef.current()
+    if (!record) return true
+    try {
+      const existing = await loadProject(projectId)
+      if (existing) record.createdAt = existing.createdAt
+      await saveProject(record)
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 2000)
+      return true
+    } catch {
+      setSaveStatus('error')
+      return false
+    }
+  }
+
+  const navigate = async (s: Screen) => {
+    if (projectId) {
+      const ok = await persistCurrentProject()
+      if (!ok) {
+        setNavError('Your latest changes could not be saved.')
+        return
+      }
+    }
+    setNavError(null)
+    setPrevScreen(screen)
+    setScreen(s)
+    window.scrollTo(0, 0)
+  }
+
+  const jumpToSection = (ctx: ReviewContext) => {
+    setReviewContext(ctx)
+    navigate('studio')
+  }
+
+  const clearReviewContext = () => setReviewContext(null)
+
+  const setFindingStatus = (id: number, status: FindingStatus) => {
+    setFindingStatuses(prev => ({ ...prev, [id]: status }))
+    triggerAutosave()
+  }
+
+  // ── Revision counters for pipeline stale-state detection ──────────────────
+  const [sourcesRevision, setSourcesRevision] = useState(0)
+  const [analysisRevision, setAnalysisRevision] = useState(-1) // -1 = never run
+  const [tocRevision, setTocRevision] = useState(0)
+  const [contentRevision, setContentRevision] = useState(0)
+  const [reviewRevision, setReviewRevision] = useState(-1) // -1 = never run
+
+  // ── Analysis result (shared with StructureScreen) ─────────────────────────
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
+
+  // ── Lifted TOC state ───────────────────────────────────────────────────────
+  const [appToc, setAppToc] = useState<TocItem[]>([]) // empty until generated from analysis
+  const [tocGeneratedFromRev, setTocGeneratedFromRev] = useState<number>(-1)
+  const [tocHumanModified, setTocHumanModified] = useState(false)
+  const handleTocChange = (toc: TocItem[]) => { setAppToc(toc); setTocRevision(r => r + 1); setTocHumanModified(true); triggerAutosave() }
+
+  // ── Master page topic assignments ──────────────────────────────────────────
+  const [masterAssignments, setMasterAssignments] = useState<Record<number, string>>({}) // topicId → masterPageId
+
+  // ── Autosave-aware BrandingScreen handlers ────────────────────────────────
+  const handleThemesChange = (t: Theme[]) => { setThemes(t); triggerAutosave() }
+  const handlePageLayoutsChange = (pls: PageLayout[]) => { setPageLayouts(pls); triggerAutosave() }
+  const handleHtmlMasterPagesChange = (hmps: HtmlMasterPage[]) => { setHtmlMasterPages(hmps); triggerAutosave() }
+  const handleActiveStyleProfileChange = (id: string) => { setActiveStyleProfileId(id); triggerAutosave() }
+
+  // ── Autosave-aware Studio / Publish handlers ──────────────────────────────
+  const handleSnippetsChange = (s: Snippet[]) => { setSnippets(s); triggerAutosave() }
+  const handleConditionGroupsChange = (cg: ConditionGroup[]) => { setConditionGroups(cg); triggerAutosave() }
+  const handleDocCommentsChange = (c: DocComment[]) => { setDocComments(c); triggerAutosave() }
+  const handlePublishConfigChange = (pc: PublishConfig) => { setPublishConfig(pc); triggerAutosave() }
+  const handleTopicContentChange = (tc: Record<string, DocBlock[]>) => { setTopicContent(tc); triggerAutosave() }
+
+  // Create persisted project record when user clicks Continue on CreateScreen
+  const handleCreateProjectPersist = useCallback(async () => {
+    const newId = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setProjectId(newId)
+    setActiveProjectId(newId)
+    try {
+      await createProject({
+        projectId: newId, projectName: projectName || 'Untitled Project',
+        documentType: projectMeta.contentType, version: projectMeta.version,
+        themes: themes as unknown[], projectMeta: projectMeta as unknown,
+        activeStyleProfileId, themeVariables: themeVariables as Record<string, unknown[]>,
+        pageLayouts: pageLayouts as unknown[], htmlMasterPages: htmlMasterPages as unknown[],
+        isDemoMode,
+      })
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 2000)
+    } catch { setSaveStatus('error') }
+  }, [projectId, projectName, projectMeta, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, isDemoMode])
+
+  const handleSourceAdd = async (file: File): Promise<string> => {
+    if (!projectId) throw new Error('No project')
+    const stored = await saveFile(projectId, file)
+    const fileId = stored.fileId
+    setSources(prev => [...prev, { fileId, file }])
+    setSourcesRevision(r => r + 1)
+    // Mark extraction as pending immediately
+    const pending: SourceExtraction = {
+      sourceId: fileId, fileName: file.name, fileType: file.name.split('.').pop()?.toLowerCase() ?? 'other',
+      status: 'extracting', blocks: [], extractedText: '', warnings: [],
+    }
+    setSourceExtractions(prev => ({ ...prev, [fileId]: pending }))
+    triggerAutosave()
+    // Run extraction in the background
+    extractFromFile(file, fileId).then(result => {
+      setSourceExtractions(prev => ({ ...prev, [fileId]: result }))
+      triggerAutosave()
+    }).catch(() => {
+      setSourceExtractions(prev => ({
+        ...prev,
+        [fileId]: { ...pending, status: 'failed', extractionError: 'Extraction failed unexpectedly' },
+      }))
+    })
+    return fileId
+  }
+
+  const handleSourceRemove = async (fileId: string) => {
+    setSources(prev => prev.filter(s => s.fileId !== fileId))
+    setSourceExtractions(prev => { const next = { ...prev }; delete next[fileId]; return next })
+    setSourcesRevision(r => r + 1)
+    try { await removeFile(fileId) } catch { /* best effort */ }
+    triggerAutosave()
+  }
+
+  const handleRetryExtraction = (fileId: string, file: File) => {
+    const pending: SourceExtraction = {
+      sourceId: fileId, fileName: file.name, fileType: file.name.split('.').pop()?.toLowerCase() ?? 'other',
+      status: 'extracting', blocks: [], extractedText: '', warnings: [],
+    }
+    setSourceExtractions(prev => ({ ...prev, [fileId]: pending }))
+    extractFromFile(file, fileId).then(result => {
+      setSourceExtractions(prev => ({ ...prev, [fileId]: result }))
+      triggerAutosave()
+    }).catch(() => {
+      setSourceExtractions(prev => ({
+        ...prev,
+        [fileId]: { ...pending, status: 'failed', extractionError: 'Extraction failed unexpectedly' },
+      }))
+    })
+  }
+
+  // Called when Analysis completes — records which sourcesRevision was used + stores result
+  const handleAnalysisDone = (result: AnalysisResult) => { setAnalysisRevision(sourcesRevision); setAnalysisResult(result); triggerAutosave(true) }
+  // Called when Review completes
+  const handleReviewDone = () => { setReviewRevision(contentRevision); triggerAutosave(true) }
+  // Called when TOC is accepted
+  const handleTocAccepted = (toc: TocItem[], fromAnalysisRev: number) => {
+    setAppToc(toc); setTocRevision(r => r + 1); setTocGeneratedFromRev(fromAnalysisRev); setTocHumanModified(false); triggerAutosave(true)
+  }
+
+  // Stale detection helpers
+  const analysisStale = analysisRevision >= 0 && sourcesRevision > analysisRevision
+  const reviewStaleContent = reviewRevision >= 0 && contentRevision > reviewRevision
+  const tocAnalysisStale_diag = appToc.length > 0 && tocGeneratedFromRev >= 0 && analysisRevision >= 0 && analysisRevision > tocGeneratedFromRev
+
+  const displayName = projectName || 'Untitled Project'
+  const [publishBlocks, setPublishBlocks] = useState<DocBlock[]>([])
+
+  // Per-topic authored content — topicId → DocBlock[]
+  const [topicContent, setTopicContent] = useState<Record<string, DocBlock[]>>({})
+  const topicContentRef = useRef<Record<string, DocBlock[]>>({})
+
+  // Studio / Publish centralized state
+  const DEFAULT_CONDITION_GROUPS: ConditionGroup[] = [
+    { id: 'cg1', group: 'Audience', tags: ['Beginner', 'Advanced', 'Administrator'] },
+    { id: 'cg2', group: 'Platform', tags: ['Web', 'Mobile'] },
+    { id: 'cg3', group: 'Edition', tags: ['Standard', 'Enterprise'] },
+    { id: 'cg4', group: 'Language', tags: ['English', 'Arabic'] },
+  ]
+  const [snippets, setSnippets] = useState<Snippet[]>([])
+  const [conditionGroups, setConditionGroups] = useState<ConditionGroup[]>(DEFAULT_CONDITION_GROUPS)
+  const [docComments, setDocComments] = useState<DocComment[]>([])
+  const [publishConfig, setPublishConfig] = useState<PublishConfig>({ selectedFormats: [], activeVariant: '' })
+  const [navError, setNavError] = useState<string | null>(null)
+
+  // Shared ref so PublishScreen can read current doc blocks without lifting state
+  const sharedDocBlocksRef = useRef<DocBlock[]>([])
+
+  // Keep topicContentRef in sync with state for autosave snapshots
+  useEffect(() => { topicContentRef.current = topicContent }, [topicContent])
+
+  // ── Latest-build ref for autosave (avoids stale closures) ─────────────────
+  const latestBuildRef = useRef<() => ProjectRecord | null>(() => null)
+
+  // ── Build ProjectRecord snapshot from current state ───────────────────────
+  const buildProjectRecord = useCallback((): ProjectRecord | null => {
+    if (!projectId) return null
+    return {
+      projectId,
+      schemaVersion: SCHEMA_VERSION,
+      projectName,
+      documentType: projectMeta.contentType,
+      version: projectMeta.version,
+      createdAt: 0,
+      modifiedAt: Date.now(),
+      isDemoMode,
+      themes: themes as unknown[],
+      projectMeta: projectMeta as unknown,
+      activeStyleProfileId,
+      themeVariables: themeVariables as Record<string, unknown[]>,
+      pageLayouts: pageLayouts as unknown[],
+      htmlMasterPages: htmlMasterPages as unknown[],
+      sourceFileIds: sources.map(s => s.fileId),
+      sourcesRevision,
+      sourceExtractions: sourceExtractions as Record<string, unknown>,
+      analysisResult: analysisResult as unknown,
+      analysisRevision,
+      appToc: appToc as unknown[],
+      tocRevision,
+      tocGeneratedFromRev,
+      tocHumanModified,
+      masterAssignments: masterAssignments as Record<string, string>,
+      docBlocks: sharedDocBlocksRef.current as unknown[],
+      topicContent: topicContentRef.current as Record<string, unknown[]>,
+      contentRevision,
+      findingStatuses: findingStatuses as Record<number, string>,
+      aiReviewDone,
+      reviewStage,
+      reviewRevision,
+      snippets: snippets as unknown[],
+      conditionGroups: conditionGroups as unknown[],
+      docComments: docComments as unknown[],
+      publishConfig: publishConfig as unknown,
+    }
+  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, analysisResult, analysisRevision, appToc, tocRevision, tocGeneratedFromRev, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
+
+  // Keep latestBuildRef current on every render so autosave never sees stale state
+  latestBuildRef.current = buildProjectRecord
+
+  // ── Autosave ───────────────────────────────────────────────────────────────
+  const triggerAutosave = useCallback((immediate = false) => {
+    if (!projectId) return
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
+    const delay = immediate ? 0 : 800
+    autosaveTimer.current = setTimeout(async () => {
+      // Always call latestBuildRef.current — never a stale closure snapshot
+      const record = latestBuildRef.current()
+      if (!record) return
+      setSaveStatus('saving')
+      try {
+        const existing = await loadProject(projectId)
+        if (existing) record.createdAt = existing.createdAt
+        await saveProject(record)
+        setSaveStatus('saved')
+        setTimeout(() => setSaveStatus('idle'), 2000)
+      } catch {
+        setSaveStatus('error')
+      }
+    }, delay)
+  }, [projectId])
+
+  // ── Startup: check for active project or show dashboard ───────────────────
+  const [appLoading, setAppLoading] = useState(true)
+  const [appLoadError, setAppLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const activeId = getActiveProjectId()
+        if (activeId) {
+          const record = await loadProject(activeId)
+          if (record) {
+            await hydrateFromRecord(record)
+            setScreen('sources') // reopen to last meaningful screen
+          }
+        }
+      } catch (e) {
+        setAppLoadError(String(e))
+      } finally {
+        setAppLoading(false)
+      }
+    }
+    init()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Hydrate App state from a loaded ProjectRecord ─────────────────────────
+  // Always sets ALL fields — conditional hydration causes isolation bugs.
+  const hydrateFromRecord = async (record: ProjectRecord) => {
+    // Apply v1→v2 schema defaults for newly added fields
+    if (!record.snippets) record = { ...record, snippets: [] }
+    if (!record.conditionGroups) record = { ...record, conditionGroups: DEFAULT_CONDITION_GROUPS }
+    if (!record.docComments) record = { ...record, docComments: [] }
+    if (!record.publishConfig) record = { ...record, publishConfig: { selectedFormats: [], activeVariant: '' } }
+    if (!record.topicContent) record = { ...record, topicContent: {} }
+
+    setProjectId(record.projectId)
+    setProjectName(record.projectName ?? '')
+    setIsDemoMode(record.isDemoMode ?? false)
+    setThemes((record.themes as Theme[]) ?? INITIAL_THEMES)
+    setProjectMeta((record.projectMeta as ProjectMeta) ?? DEFAULT_PROJECT_META)
+    setActiveStyleProfileId(record.activeStyleProfileId ?? 'sp1')
+    setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
+    setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
+    setHtmlMasterPages((record.htmlMasterPages as HtmlMasterPage[]) ?? INITIAL_HTML_MASTER_PAGES)
+    setSourcesRevision(record.sourcesRevision ?? 0)
+    setAnalysisResult((record.analysisResult as AnalysisResult | null) ?? null)
+    setAnalysisRevision(record.analysisRevision ?? -1)
+    setAppToc((record.appToc as TocItem[]) ?? [])
+    setTocRevision(record.tocRevision ?? 0)
+    setTocGeneratedFromRev(record.tocGeneratedFromRev ?? -1)
+    setTocHumanModified(record.tocHumanModified ?? false)
+    setMasterAssignments((record.masterAssignments as Record<number, string>) ?? {})
+    sharedDocBlocksRef.current = (record.docBlocks as DocBlock[]) ?? []
+    const restoredTopicContent = (record.topicContent as Record<string, DocBlock[]>) ?? {}
+    topicContentRef.current = restoredTopicContent
+    setTopicContent(restoredTopicContent)
+    setContentRevision(record.contentRevision ?? 0)
+    setFindingStatuses((record.findingStatuses as Record<number, FindingStatus>) ?? {})
+    setAiReviewDone(record.aiReviewDone ?? false)
+    setReviewStage((record.reviewStage as 1 | 2) ?? 1)
+    setReviewRevision(record.reviewRevision ?? -1)
+    setSnippets((record.snippets as Snippet[]) ?? [])
+    setConditionGroups((record.conditionGroups as ConditionGroup[]) ?? DEFAULT_CONDITION_GROUPS)
+    setDocComments((record.docComments as DocComment[]) ?? [])
+    setPublishConfig((record.publishConfig as PublishConfig) ?? { selectedFormats: [], activeVariant: '' })
+    // Restore sourceExtractions (schema default for v1 records)
+    setSourceExtractions((record.sourceExtractions as Record<string, SourceExtraction>) ?? {})
+    // Restore source files from IndexedDB as stable ProjectSource[]
+    try {
+      const storedFiles = await loadProjectFiles(record.projectId)
+      const restoredSources: ProjectSource[] = storedFiles.map(sf => ({
+        fileId: sf.fileId,
+        file: new File([sf.blob], sf.name, { type: sf.type }),
+      }))
+      setSources(restoredSources)
+    } catch { setSources([]) }
+    setActiveProjectId(record.projectId)
+  }
+
+  // ── Project state reset ────────────────────────────────────────────────────
+  const resetProjectState = () => {
+    setProjectId(null)
+    setProjectName('')
+    setIsDemoMode(false)
+    setSources([])
+    setSourceExtractions({})
+    setSourcesRevision(0)
+    setAnalysisResult(null)
+    setAnalysisRevision(-1)
+    setAppToc([])
+    setTocRevision(0)
+    setTocGeneratedFromRev(-1)
+    setTocHumanModified(false)
+    setMasterAssignments({})
+    sharedDocBlocksRef.current = []
+    topicContentRef.current = {}
+    setTopicContent({})
+    setContentRevision(0)
+    setFindingStatuses({})
+    setAiReviewDone(false)
+    setReviewStage(1)
+    setReviewRevision(-1)
+    setThemes(INITIAL_THEMES)
+    setProjectMeta(DEFAULT_PROJECT_META)
+    setActiveStyleProfileId('sp1')
+    setPageLayouts(INITIAL_PAGE_LAYOUTS)
+    setHtmlMasterPages(INITIAL_HTML_MASTER_PAGES)
+    setThemeVariables(DEFAULT_THEME_VARIABLES)
+    setSnippets([])
+    setConditionGroups(DEFAULT_CONDITION_GROUPS)
+    setDocComments([])
+    setPublishConfig({ selectedFormats: [], activeVariant: '' })
+    setNavError(null)
+    setActiveProjectId(null)
+    if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null }
+  }
+
+  const startNewProject = () => {
+    resetProjectState()
+    setScreen('create')
+  }
+
+  // ── App-level project actions ──────────────────────────────────────────────
+  const handleOpenProject = async (record: ProjectRecord) => {
+    resetProjectState()
+    await hydrateFromRecord(record)
+    setScreen('sources')
+  }
+
+  const handleDeleteProject = async (pid: string) => {
+    await deleteProject(pid)
+    if (pid === projectId) {
+      // Reset state if active project deleted
+      setProjectId(null); setProjectName(''); setActiveProjectId(null)
+    }
+  }
+
+  const handleDuplicateProject = async (pid: string) => {
+    const source = await loadProject(pid)
+    if (!source) return
+    await duplicateProject(pid, `${source.projectName} Copy`)
+  }
+
+  // ── Project Diagnostics ────────────────────────────────────────────────────
+  const [diagOpen, setDiagOpen] = useState(false)
+
+  const renderScreen = () => {
+    switch (screen) {
+      case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
+      case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
+      case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onSetActiveStyleProfileId={handleActiveStyleProfileChange} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
+      case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} onRetryExtraction={handleRetryExtraction} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
+      case 'analysis':  return <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
+      case 'structure': return <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
+      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
+      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} />
+      case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
+      case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
+      default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
+    }
+  }
+
+  const activeThemeId = projectMeta.themeId
+  const activeTheme = themes.find(t => t.id === activeThemeId)
+  const activeProfileId = activeStyleProfileId
+
+  if (appLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#F4F2EE]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-[#5B5BD6]/30 border-t-[#5B5BD6] rounded-full animate-spin" />
+          <p className="text-[13px] text-[#6B6B7E] font-medium">Opening project…</p>
+          {appLoadError && <p className="text-[11px] text-[#DC2626] mt-1">{appLoadError}</p>}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="h-screen flex flex-col bg-[#F4F2EE] overflow-hidden">
+      <TopBar
+        screen={screen}
+        onNav={navigate}
+        projectName={displayName}
+        onDiagnostics={() => setDiagOpen(true)}
+        saveStatus={projectId ? saveStatus : undefined}
+        onRetrySave={() => triggerAutosave(true)}
+        stageStatuses={{
+          create:    projectId ? 'complete' : 'not-started',
+          branding:  themes.length > 0 ? 'complete' : 'not-started',
+          sources:   sources.length > 0 ? (analysisStale ? 'in-progress' : 'complete') : 'not-started',
+          analysis:  analysisResult ? (analysisStale ? 'stale' : 'complete') : (sources.length > 0 ? 'in-progress' : 'not-started'),
+          structure: appToc.length > 0 ? (analysisRevision > tocGeneratedFromRev && !tocHumanModified ? 'stale' : 'complete') : 'not-started',
+          studio:    contentRevision > 0 ? (reviewStaleContent ? 'in-progress' : 'complete') : 'not-started',
+          quality:   aiReviewDone ? (reviewStaleContent ? 'stale' : 'complete') : (contentRevision > 0 ? 'in-progress' : 'not-started'),
+          publish:   'not-started',
+        }}
+      />
+      {navError && (
+        <div className="bg-[#FEF2F2] border-b border-[#FCA5A5] px-4 py-2 flex items-center gap-3">
+          <span className="text-[12px] text-[#DC2626] flex-1">{navError}</span>
+          <button onClick={() => { triggerAutosave(true); setNavError(null) }} className="text-[11px] font-medium text-[#DC2626] border border-[#FCA5A5] rounded px-2 py-0.5 hover:bg-[#FEE2E2]">Retry</button>
+          <button onClick={() => setNavError(null)} className="text-[#9898AB] hover:text-[#6B6B7E] text-[14px]">✕</button>
+        </div>
+      )}
+      <main className="flex-1 flex overflow-hidden">
+        {renderScreen()}
+      </main>
+      {/* Project Diagnostics modal — Settings → Project Diagnostics */}
+      {diagOpen && (
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50" onClick={() => setDiagOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl border border-[#E2DED7] w-[520px] max-h-[80vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-[15px] font-semibold text-[#111218]">Project Pipeline Diagnostics</h2>
+                <p className="text-[11px] text-[#9898AB] mt-0.5">Internal state audit — not visible to end users</p>
+              </div>
+              <button onClick={() => setDiagOpen(false)} className="text-[#9898AB] hover:text-[#6B6B7E] text-[18px]">✕</button>
+            </div>
+            <div className="space-y-3">
+              {/* Project */}
+              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+                <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Project</p>
+                <DiagRow label="Name" value={displayName} status={projectName ? 'ok' : 'warn'} warnText="No name set" />
+                <DiagRow label="Document Type" value={projectMeta.contentType || '—'} status={projectMeta.contentType ? 'ok' : 'warn'} />
+                <DiagRow label="Version" value={projectMeta.version || '—'} status={projectMeta.version ? 'ok' : 'info'} />
+              </div>
+              {/* Theme */}
+              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+                <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Theme & Style</p>
+                <DiagRow label="Active Theme ID" value={activeThemeId} status="ok" />
+                <DiagRow label="Active Theme" value={activeTheme?.name ?? '—'} status={activeTheme ? 'ok' : 'error'} />
+                <DiagRow label="Style Profile ID" value={activeProfileId} status="ok" />
+                <DiagRow label="Variables" value={`${getThemeVars(activeThemeId).length} defined`} status={getThemeVars(activeThemeId).length > 0 ? 'ok' : 'info'} />
+              </div>
+              {/* Templates */}
+              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+                <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Templates</p>
+                <DiagRow label="Page Layouts" value={`${pageLayouts.length} layouts`} status="ok" />
+                <DiagRow label="HTML Master Pages" value={`${htmlMasterPages.length} masters`} status="ok" />
+              </div>
+              {/* Sources */}
+              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+                <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Sources</p>
+                <DiagRow label="Source Files" value={`${sources.length} files`} status={sources.length > 0 || isDemoMode ? 'ok' : 'info'} />
+                <DiagRow label="Sources Revision" value={String(sourcesRevision)} status="ok" />
+                {isDemoMode && <DiagRow label="Mode" value="Demo Mode active" status="warn" />}
+              </div>
+              {/* Analysis */}
+              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+                <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Analysis</p>
+                <DiagRow label="Analysis Revision" value={analysisRevision < 0 ? 'Never run' : String(analysisRevision)} status={analysisRevision >= 0 ? 'ok' : 'info'} />
+                <DiagRow label="Concepts Detected" value={analysisResult ? `${analysisResult.concepts.length}` : 'N/A'} status={analysisResult ? 'ok' : 'info'} />
+                <DiagRow label="Stale" value={analysisStale ? `Yes — sources at rev ${sourcesRevision}, analysis at ${analysisRevision}` : 'No'} status={analysisStale ? 'warn' : 'ok'} />
+              </div>
+              {/* TOC */}
+              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+                <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">TOC</p>
+                {(() => {
+                  let tocStatus = 'Not Generated'
+                  let tocStatusSt: 'ok' | 'warn' | 'info' = 'info'
+                  if (appToc.length > 0) {
+                    if (tocAnalysisStale_diag) { tocStatus = 'Analysis Changed'; tocStatusSt = 'warn' }
+                    else if (tocHumanModified) { tocStatus = 'Human Modified'; tocStatusSt = 'ok' }
+                    else { tocStatus = 'Current'; tocStatusSt = 'ok' }
+                  }
+                  return <>
+                    <DiagRow label="TOC Status" value={tocStatus} status={tocStatusSt} />
+                    <DiagRow label="Topics" value={appToc.length > 0 ? `${appToc.length} items` : 'None'} status={appToc.length > 0 ? 'ok' : 'info'} />
+                    <DiagRow label="Generated From Analysis Rev" value={tocGeneratedFromRev >= 0 ? String(tocGeneratedFromRev) : 'N/A'} status={tocGeneratedFromRev >= 0 ? 'ok' : 'info'} />
+                    <DiagRow label="Connected to Author" value="Via shared appToc state" status="ok" />
+                  </>
+                })()}
+              </div>
+              {/* Content */}
+              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+                <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Content</p>
+                <DiagRow label="Content Revision" value={String(contentRevision)} status="ok" />
+                <DiagRow label="Doc Blocks (in memory)" value={`${sharedDocBlocksRef.current.length} blocks`} status="ok" />
+              </div>
+              {/* Review */}
+              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+                <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Review</p>
+                <DiagRow label="Review Status" value={aiReviewDone ? 'Complete' : 'Not run'} status={aiReviewDone ? 'ok' : 'info'} />
+                <DiagRow label="Review Revision" value={reviewRevision < 0 ? 'Never' : String(reviewRevision)} status={reviewRevision >= 0 ? 'ok' : 'info'} />
+                <DiagRow label="Stale" value={reviewStaleContent ? `Yes — content at rev ${contentRevision}, reviewed at ${reviewRevision}` : 'No'} status={reviewStaleContent ? 'warn' : 'ok'} />
+              </div>
+            </div>
+            <div className="mt-4 pt-3 border-t border-[#F4F2EE] flex justify-end">
+              <button onClick={() => setDiagOpen(false)} className="px-4 py-2 bg-[#5B5BD6] text-white text-[12px] font-medium rounded-xl hover:bg-[#4A4AC4]">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DiagRow({ label, value, status, warnText }: { label: string; value: string; status: 'ok' | 'warn' | 'error' | 'info'; warnText?: string }) {
+  const dot = status === 'ok' ? 'bg-[#22C55E]' : status === 'warn' ? 'bg-[#F59E0B]' : status === 'error' ? 'bg-[#EF4444]' : 'bg-[#9898AB]'
+  return (
+    <div className="flex items-start gap-2">
+      <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${dot}`} />
+      <span className="text-[11px] text-[#6B6B7E] w-36 flex-shrink-0">{label}</span>
+      <span className="text-[11px] text-[#111218] font-medium flex-1">{value}</span>
+      {warnText && status !== 'ok' && <span className="text-[10px] text-[#F59E0B]">{warnText}</span>}
+    </div>
+  )
+}
