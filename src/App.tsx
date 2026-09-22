@@ -131,19 +131,7 @@ const INITIAL_THEMES: Theme[] = [
   {
     id: 'th1', name: 'Presight', description: 'Clean, modern documentation with Presight brand identity',
     brandProfiles: [{ id: 'bp1', name: 'Presight Brand', clientId: 'th1', primaryColor: '#0F172A', secondaryColor: '#1E293B', accentColor: '#6366F1', headingFont: 'Inter', bodyFont: 'Inter', logoLabel: 'PS' }],
-    styleProfiles: [{
-      id: 'sp1', name: 'Presight Documentation', clientId: 'th1', scope: 'client',
-      body: mkTypo('Inter', 11, '400', '#1E293B'), h1: { ...mkTypo('Inter', 22, '700', '#0F172A'), spaceBefore: 16, spaceAfter: 12, alignment: 'left' },
-      h2: { ...mkTypo('Inter', 16, '600', '#0F172A'), spaceBefore: 12, spaceAfter: 8, alignment: 'left' },
-      h3: { ...mkTypo('Inter', 13, '600', '#1E293B'), spaceBefore: 10, spaceAfter: 6, alignment: 'left' },
-      h4: { ...mkTypo('Inter', 12, '500', '#1E293B'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' },
-      caption: { ...mkTypo('Inter', 10, '400', '#64748B'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' },
-      code: { ...mkTypo('Courier New', 11, '400', '#0F172A'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' },
-      links: { color: '#6366F1', underline: false },
-      lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
-      tables: { headerFontWeight: '600', headerTextColor: '#FFFFFF', headerBgColor: '#0F172A', bodyTextColor: '#1E293B', borderColor: '#E2E8F0', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#F8FAFC', firstColEmphasis: false },
-      callouts: mkCallouts('#6366F1'),
-    }],
+    styleProfiles: [],
     outputTemplatePacks: [{
       id: 'tp1', name: 'Presight Standard Pack', clientId: 'th1',
       pdfPageSize: 'A4', pdfOrientation: 'portrait', pdfMarginTop: 25, pdfMarginBottom: 25, pdfMarginLeft: 25, pdfMarginRight: 25,
@@ -157,19 +145,7 @@ const INITIAL_THEMES: Theme[] = [
     id: 'th2', name: 'TechCorp Product Theme', description: 'Clean technical documentation with modern green accent',
     clientName: 'TechCorp',
     brandProfiles: [{ id: 'bp2', name: 'TechCorp Brand', clientId: 'th2', primaryColor: '#059669', secondaryColor: '#047857', accentColor: '#10B981', headingFont: 'Georgia', bodyFont: 'Georgia', logoLabel: 'TECHCORP' }],
-    styleProfiles: [{
-      id: 'sp2', name: 'TechCorp Documentation', clientId: 'th2', scope: 'client',
-      body: mkTypo('Georgia', 11, '400', '#111827'), h1: { ...mkTypo('Georgia', 22, '700', '#059669'), spaceBefore: 16, spaceAfter: 12, alignment: 'left' },
-      h2: { ...mkTypo('Georgia', 16, '700', '#065F46'), spaceBefore: 12, spaceAfter: 8, alignment: 'left' },
-      h3: { ...mkTypo('Georgia', 13, '600', '#065F46'), spaceBefore: 10, spaceAfter: 6, alignment: 'left' },
-      h4: { ...mkTypo('Georgia', 12, '600', '#374151'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' },
-      caption: { ...mkTypo('Georgia', 10, '400', '#6B7280'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' },
-      code: { ...mkTypo('Courier New', 11, '400', '#111827'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' },
-      links: { color: '#059669', underline: true },
-      lists: { orderedL1: '1.', orderedL2: '1.1', orderedL3: '1.1.1', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
-      tables: { headerFontWeight: '700', headerTextColor: '#FFFFFF', headerBgColor: '#059669', bodyTextColor: '#111827', borderColor: '#D1FAE5', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#ECFDF5', firstColEmphasis: false },
-      callouts: mkCallouts('#059669'),
-    }],
+    styleProfiles: [],
     outputTemplatePacks: [{
       id: 'tp2', name: 'TechCorp Standard Pack', clientId: 'th2',
       pdfPageSize: 'A4', pdfOrientation: 'portrait', pdfMarginTop: 20, pdfMarginBottom: 20, pdfMarginLeft: 25, pdfMarginRight: 25,
@@ -182,19 +158,7 @@ const INITIAL_THEMES: Theme[] = [
   {
     id: 'th3', name: 'Government Standard Theme', description: 'Formal government documentation — neutral, high-readability',
     brandProfiles: [{ id: 'bp3', name: 'Gov Standard Brand', clientId: 'th3', primaryColor: '#374151', secondaryColor: '#1F2937', accentColor: '#6B7280', headingFont: 'Calibri', bodyFont: 'Calibri', logoLabel: 'GOV' }],
-    styleProfiles: [{
-      id: 'sp3', name: 'Government Standard Style', clientId: 'th3', scope: 'client',
-      body: mkTypo('Calibri', 11, '400', '#1F2937'), h1: { ...mkTypo('Calibri', 20, '700', '#111827'), spaceBefore: 16, spaceAfter: 12, alignment: 'left' },
-      h2: { ...mkTypo('Calibri', 15, '700', '#374151'), spaceBefore: 12, spaceAfter: 8, alignment: 'left' },
-      h3: { ...mkTypo('Calibri', 13, '600', '#374151'), spaceBefore: 10, spaceAfter: 6, alignment: 'left' },
-      h4: { ...mkTypo('Calibri', 12, '600', '#4B5563'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' },
-      caption: { ...mkTypo('Calibri', 10, '400', '#6B7280'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' },
-      code: { ...mkTypo('Courier New', 10, '400', '#111827'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' },
-      links: { color: '#374151', underline: true },
-      lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
-      tables: { headerFontWeight: '700', headerTextColor: '#FFFFFF', headerBgColor: '#374151', bodyTextColor: '#1F2937', borderColor: '#D1D5DB', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#F9FAFB', firstColEmphasis: false },
-      callouts: mkCallouts('#374151'),
-    }],
+    styleProfiles: [],
     outputTemplatePacks: [{
       id: 'tp3', name: 'Government Standard Pack', clientId: 'th3',
       pdfPageSize: 'A4', pdfOrientation: 'portrait', pdfMarginTop: 30, pdfMarginBottom: 30, pdfMarginLeft: 30, pdfMarginRight: 25,
@@ -207,19 +171,7 @@ const INITIAL_THEMES: Theme[] = [
   {
     id: 'th4', name: 'Minimal Product Theme', description: 'Clean, spacious documentation for modern products',
     brandProfiles: [{ id: 'bp4', name: 'Minimal Brand', clientId: 'th4', primaryColor: '#5B5BD6', secondaryColor: '#4A4AC4', accentColor: '#8B5CF6', headingFont: 'Inter', bodyFont: 'Inter', logoLabel: 'MIN' }],
-    styleProfiles: [{
-      id: 'sp4', name: 'Minimal Product Style', clientId: 'th4', scope: 'client',
-      body: mkTypo('Inter', 11, '400', '#374151'), h1: { ...mkTypo('Inter', 24, '700', '#111827'), spaceBefore: 20, spaceAfter: 14, alignment: 'left' },
-      h2: { ...mkTypo('Inter', 17, '600', '#1F2937'), spaceBefore: 14, spaceAfter: 10, alignment: 'left' },
-      h3: { ...mkTypo('Inter', 14, '600', '#374151'), spaceBefore: 12, spaceAfter: 6, alignment: 'left' },
-      h4: { ...mkTypo('Inter', 12, '500', '#374151'), spaceBefore: 8, spaceAfter: 4, alignment: 'left' },
-      caption: { ...mkTypo('Inter', 10, '400', '#9CA3AF'), spaceBefore: 4, spaceAfter: 10, alignment: 'center' },
-      code: { ...mkTypo('Courier New', 11, '400', '#1F2937'), spaceBefore: 8, spaceAfter: 8, alignment: 'left' },
-      links: { color: '#5B5BD6', underline: false },
-      lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 6, indentation: 24 },
-      tables: { headerFontWeight: '600', headerTextColor: '#1F2937', headerBgColor: '#F3F4F6', bodyTextColor: '#374151', borderColor: '#E5E7EB', borderWidth: 1, cellPadding: 10, alternateRows: false, alternateRowColor: '#F9FAFB', firstColEmphasis: false },
-      callouts: mkCallouts('#5B5BD6'),
-    }],
+    styleProfiles: [],
     outputTemplatePacks: [{
       id: 'tp4', name: 'Minimal Pack', clientId: 'th4',
       pdfPageSize: 'A4', pdfOrientation: 'portrait', pdfMarginTop: 20, pdfMarginBottom: 20, pdfMarginLeft: 20, pdfMarginRight: 20,
@@ -1151,6 +1103,8 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
   }
 
   // New profile modal state
+  const [profSearch, setProfSearch] = useState('')
+  const [profDropOpen, setProfDropOpen] = useState(false)
   const [newProfOpen, setNewProfOpen] = useState(false)
   const [newProfName, setNewProfName] = useState('New Style Profile')
   const [newProfBase, setNewProfBase] = useState<'blank' | 'current' | string>('blank')
@@ -1391,16 +1345,31 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
     const getTsWeight = (rolePattern: RegExp) => typoStyles.find(t => rolePattern.test(t.role))?.fontWeight
     const getTsColor = (rolePattern: RegExp) => typoStyles.find(t => rolePattern.test(t.role))?.color
 
+    // Best detected font from extracted fonts list (highest-confidence, non-mono)
+    const detectedFonts = importExtractionResult?.fonts ?? []
+    const bestDetectedFont = detectedFonts
+      .filter(f => f.confidence === 'high' && !/(mono|courier|code|console|fixed)/i.test(f.family))
+      .sort((a, b) => (b.confidence === 'high' ? 1 : 0) - (a.confidence === 'high' ? 1 : 0))[0]?.family
+      ?? detectedFonts.filter(f => !/(mono|courier|code|console|fixed)/i.test(f.family))[0]?.family
+
+    // Any detected monospace font for code
+    const bestDetectedMono = detectedFonts.find(f => /(mono|courier|code|console|fixed)/i.test(f.family))?.family
+
+    // Also pick the most common fontFamily across all typography styles
+    const tsAllFonts = typoStyles.map(t => t.fontFamily).filter(Boolean) as string[]
+    const tsFontFreq = tsAllFonts.reduce<Record<string, number>>((m, f) => { m[f] = (m[f] ?? 0) + 1; return m }, {})
+    const topTsFont = Object.entries(tsFontFreq).sort((a, b) => b[1] - a[1])[0]?.[0]
+
     const headFont  = getFont('Heading Font') ?? getFont('Primary Font')
       ?? getTsFont(/heading\s*1|h1/i) ?? getTsFont(/heading/i)
-      ?? base?.h1?.fontFamily ?? 'Arial'
+      ?? topTsFont ?? bestDetectedFont ?? base?.h1?.fontFamily ?? 'Arial'
     const bodyFont_ = getFont('Body Font')
-      ?? getTsFont(/^body$/i)
-      ?? base?.body?.fontFamily ?? headFont
+      ?? getTsFont(/^body$/i) ?? getTsFont(/body\s*text/i)
+      ?? topTsFont ?? bestDetectedFont ?? base?.body?.fontFamily ?? headFont
     const fallFont  = getFont('Fallback Font') ?? base?.fallbackFont
     const codeFont_ = getFont('Code Font')
       ?? getTsFont(/code|mono/i)
-      ?? base?.code?.fontFamily ?? 'Courier New'
+      ?? bestDetectedMono ?? base?.code?.fontFamily ?? 'Courier New'
 
     // Primary font = heading font (brand default). All semantic styles inherit unless explicitly different.
     const primaryFont = headFont
@@ -1995,46 +1964,79 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                 </div>
               </div>
 
-              {/* Profile cards */}
-              <div className="space-y-2">
-                {localProfiles.map(p => {
-                  const isSelected = p.id === editId
-                  const isApplied = p.id === activeStyleProfileId
-                  const swatchColors = [p.primaryColor, p.secondaryColor, p.accentColor, p.bgColor].filter(Boolean) as string[]
-                  const displayFont = p.headingFont ?? p.primaryFont ?? p.bodyFont ?? ''
-                  return (
-                    <button key={p.id} onClick={() => setEditId(p.id)}
-                      className={`w-full text-left rounded-xl border transition-all overflow-hidden ${isSelected ? 'border-[#5B5BD6] shadow-sm bg-white' : 'border-[#E2DED7] bg-white hover:border-[#C8C6C0] hover:shadow-sm'}`}>
-                      {/* Color strip */}
-                      {swatchColors.length > 0 && (
-                        <div className="flex h-1.5">
-                          {swatchColors.map((c, i) => <div key={i} className="flex-1" style={{ backgroundColor: c }} />)}
-                        </div>
-                      )}
-                      <div className="p-2.5">
-                        <div className="flex items-start justify-between gap-1 mb-1">
-                          <p className="text-[12px] font-semibold text-[#111218] leading-tight truncate flex-1" style={{ fontFamily: displayFont || undefined }}>{p.name}</p>
-                          {isApplied && <span className="flex-shrink-0 text-[8px] font-bold uppercase tracking-wide bg-[#DCFCE7] text-[#16A34A] px-1.5 py-0.5 rounded-full">Applied</span>}
-                        </div>
-                        {/* Logo + font preview */}
-                        <div className="flex items-center gap-1.5">
-                          {p.logoDataUrl
-                            ? <img src={p.logoDataUrl} className="w-5 h-5 object-contain rounded flex-shrink-0" alt="" />
-                            : p.logoLabel && <div className="w-5 h-5 rounded flex items-center justify-center text-white text-[7px] font-bold flex-shrink-0" style={{ backgroundColor: p.primaryColor ?? '#5B5BD6' }}>{p.logoLabel.slice(0,2)}</div>
-                          }
-                          {displayFont && <span className="text-[10px] text-[#9898AB] truncate">{displayFont}</span>}
-                        </div>
-                        {/* Scope badge */}
-                        <div className="mt-1.5 flex items-center gap-1">
-                          <span className={`text-[8px] font-semibold uppercase tracking-wide px-1 py-0.5 rounded ${p.scope === 'client' ? 'bg-[#DBEAFE] text-[#1E40AF]' : 'bg-[#F3F4F6] text-[#6B7280]'}`}>
-                            {p.scope === 'client' ? 'Reusable' : 'Project'}
-                          </span>
-                        </div>
+              {/* Profile combobox */}
+              {(() => {
+                const query = profSearch.toLowerCase()
+                const filtered = localProfiles.filter(p => !query || p.name.toLowerCase().includes(query))
+                const selectedProf = localProfiles.find(p => p.id === editId)
+                return (
+                  <div className="relative">
+                    <div
+                      className={`flex items-center gap-2 bg-white border rounded-lg px-2.5 py-1.5 cursor-text transition-all ${profDropOpen ? 'border-[#5B5BD6] ring-1 ring-[#C7C5F4]' : 'border-[#E2DED7] hover:border-[#C8C6C0]'}`}
+                      onClick={() => { setProfDropOpen(true) }}
+                    >
+                      {selectedProf && !profDropOpen && (() => {
+                        const swatchColors = [selectedProf.primaryColor, selectedProf.secondaryColor, selectedProf.accentColor].filter(Boolean) as string[]
+                        return (
+                          <div className="flex gap-0.5 flex-shrink-0">
+                            {swatchColors.length > 0
+                              ? swatchColors.map((c, i) => <div key={i} className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: c }} />)
+                              : <div className="w-2.5 h-2.5 rounded-sm bg-[#E2DED7]" />
+                            }
+                          </div>
+                        )
+                      })()}
+                      <input
+                        className="flex-1 min-w-0 text-[12px] text-[#111218] bg-transparent outline-none placeholder:text-[#9898AB]"
+                        placeholder={localProfiles.length === 0 ? 'No profiles yet…' : 'Search profiles…'}
+                        value={profDropOpen ? profSearch : (selectedProf?.name ?? '')}
+                        onChange={e => { setProfSearch(e.target.value); setProfDropOpen(true) }}
+                        onFocus={() => { setProfSearch(''); setProfDropOpen(true) }}
+                        onBlur={() => { setTimeout(() => { setProfDropOpen(false); setProfSearch('') }, 150) }}
+                        readOnly={!profDropOpen}
+                      />
+                      <svg className={`flex-shrink-0 text-[#9898AB] transition-transform ${profDropOpen ? 'rotate-180' : ''}`} width="11" height="11" viewBox="0 0 12 12" fill="none">
+                        <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                    {profDropOpen && (
+                      <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-[#E2DED7] rounded-xl shadow-lg overflow-hidden" style={{ maxHeight: 280, overflowY: 'auto' }}>
+                        {filtered.length === 0 ? (
+                          <p className="text-[11px] text-[#9898AB] px-3 py-3 text-center">{query ? 'No matches' : 'No profiles yet'}</p>
+                        ) : filtered.map(p => {
+                          const isSelected = p.id === editId
+                          const isApplied = p.id === activeStyleProfileId
+                          const swatchColors = [p.primaryColor, p.secondaryColor, p.accentColor, p.bgColor].filter(Boolean) as string[]
+                          const displayFont = p.headingFont ?? p.primaryFont ?? p.bodyFont ?? ''
+                          return (
+                            <button key={p.id}
+                              className={`w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-[#F4F2EE] transition-colors border-b border-[#F4F2EE] last:border-0 ${isSelected ? 'bg-[#F5F4FF]' : ''}`}
+                              onMouseDown={e => { e.preventDefault(); setEditId(p.id); setProfDropOpen(false); setProfSearch('') }}
+                            >
+                              <div className="flex gap-0.5 flex-shrink-0">
+                                {swatchColors.length > 0
+                                  ? swatchColors.slice(0,3).map((c, i) => <div key={i} className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: c }} />)
+                                  : <div className="w-2.5 h-2.5 rounded-sm bg-[#E2DED7]" />
+                                }
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[12px] font-medium text-[#111218] truncate" style={{ fontFamily: displayFont || undefined }}>{p.name}</p>
+                                {displayFont && <p className="text-[10px] text-[#9898AB] truncate">{displayFont}</p>}
+                              </div>
+                              <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+                                {isApplied && <span className="text-[8px] font-bold uppercase tracking-wide bg-[#DCFCE7] text-[#16A34A] px-1 py-0.5 rounded-full">Applied</span>}
+                                <span className={`text-[8px] font-semibold uppercase tracking-wide px-1 py-0.5 rounded ${p.scope === 'client' ? 'bg-[#DBEAFE] text-[#1E40AF]' : 'bg-[#F3F4F6] text-[#6B7280]'}`}>
+                                  {p.scope === 'client' ? 'Reusable' : 'Project'}
+                                </span>
+                              </div>
+                            </button>
+                          )
+                        })}
                       </div>
-                    </button>
-                  )
-                })}
-              </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* New + Import buttons */}
               <div className="flex gap-1.5 mt-3">
@@ -2671,6 +2673,34 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
           {outputSubTab === 'layouts' && (
         <div className="grid grid-cols-5 gap-6">
           <div className="col-span-3 space-y-4">
+
+            {/* Brand color sync banner */}
+            {editProfile && brandColors.length > 0 && (
+              <div className="bg-[#F5F4FF] border border-[#C7C5F4] rounded-xl px-4 py-3 flex items-center gap-3">
+                <div className="flex gap-1 flex-shrink-0">
+                  {brandColors.slice(0, 4).map((c, i) => (
+                    <div key={i} className="w-3.5 h-3.5 rounded-sm border border-white/50 shadow-sm" style={{ backgroundColor: c }} />
+                  ))}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] font-semibold text-[#3D3D4E]">Brand colors from <span className="text-[#5B5BD6]">{editProfile.name}</span></p>
+                  <p className="text-[10px] text-[#9898AB]">Apply to all cover and content page backgrounds</p>
+                </div>
+                <button
+                  onClick={() => {
+                    const primaryCol = editProfile.primaryColor ?? brandColors[0]
+                    const bgCol = editProfile.bgColor ?? '#FFFFFF'
+                    onPageLayoutsChange(pageLayouts.map(pl => ({
+                      ...pl,
+                      bgColor: (pl.layoutType === 'cover' || pl.layoutType === 'chapter') ? primaryCol : bgCol,
+                    })))
+                  }}
+                  className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold text-[#5B5BD6] bg-white border border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF] transition-colors whitespace-nowrap">
+                  Sync All
+                </button>
+              </div>
+            )}
+
             {/* Layout selector with inline rename */}
             <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
               <label className="block text-[10px] text-[#9898AB] mb-1.5 uppercase tracking-wide">Page Layout</label>
@@ -2758,7 +2788,24 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                     ))}
                   </div>
                   <div>
-                    <label className="block text-[10px] text-[#9898AB] mb-1 uppercase tracking-wide">Background Color</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[10px] text-[#9898AB] uppercase tracking-wide">Background Color</label>
+                      {brandColors.length > 0 && (
+                        <div className="flex items-center gap-1">
+                          <span className="text-[9px] text-[#9898AB]">Brand:</span>
+                          {([
+                            [editProfile?.primaryColor, 'Primary'],
+                            [editProfile?.accentColor, 'Accent'],
+                            [editProfile?.bgColor, 'Bg'],
+                          ] as [string | undefined, string][]).filter(([c]) => !!c).map(([c, label]) => (
+                            <button key={label} title={`Use ${label} (${c})`}
+                              onClick={() => patchLayout({ bgColor: c! })}
+                              className={`w-4 h-4 rounded border-2 transition-all hover:scale-110 ${editLayout.bgColor === c ? 'border-[#5B5BD6] shadow-sm' : 'border-white shadow-sm'}`}
+                              style={{ backgroundColor: c }} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <ColorPicker value={editLayout.bgColor} onChange={v => patchLayout({ bgColor: v })} brandColors={brandColors} />
                   </div>
                 </div>
@@ -2968,9 +3015,9 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                   className={`relative group border-b border-[#F4F2EE] transition-all cursor-pointer ${isSelected ? 'ring-2 ring-[#5B5BD6] ring-inset' : 'hover:bg-[#FAFAF9]'} ${isHidden ? 'opacity-40' : ''} ${dragOverIdx === idx ? 'border-t-2 border-t-[#5B5BD6]' : ''}`}>
                   {/* Block content */}
                   {block.type === 'header' && (
-                    <div className="flex items-center gap-2 px-3 py-2 bg-[#5B5BD6]">
+                    <div className="flex items-center gap-2 px-3 py-2" style={{ backgroundColor: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6' }}>
                       {editHmp?.showLogo && <div className="w-5 h-5 bg-white/20 rounded text-white text-[8px] font-bold flex items-center justify-center">L</div>}
-                      <span className="text-white text-[10px] font-semibold flex-1">Documentation</span>
+                      <span className="text-[10px] font-semibold flex-1" style={{ color: (bp.textColor as string) || '#FFFFFF' }}>{(bp.siteTitle as string) || 'Documentation'}</span>
                       {editHmp?.showSearch && <div className="h-5 w-16 bg-white/20 rounded text-white/70 text-[8px] flex items-center px-1.5">Search…</div>}
                     </div>
                   )}
@@ -3025,7 +3072,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                     <div className="px-3 py-2">
                       {(bp as {title?: string}).title && <p className="text-[9px] font-semibold text-[#111218] mb-1.5">{(bp as {title: string}).title}</p>}
                       {((bp.links as Array<{id:string;label:string}>) || [{id:'l1',label:'Quick Start Guide'},{id:'l2',label:'API Authentication'},{id:'l3',label:'Release Notes'}]).map(l => (
-                        <div key={l.id} className="text-[8px] text-[#5B5BD6] py-0.5">→ {l.label}</div>
+                        <div key={l.id} className="text-[8px] py-0.5" style={{ color: (bp.accentColor as string) || editProfile?.accentColor || '#5B5BD6' }}>→ {l.label}</div>
                       ))}
                     </div>
                   )}
@@ -3075,7 +3122,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                   {block.type === 'progress-bar' && (
                     <div className="px-4 py-2">
                       <div className="flex justify-between mb-1"><span className="text-[8px] text-[#6B6B7E]">{(bp.label as string) || 'Progress'}</span>{!!bp.showPercent && <span className="text-[8px] font-semibold text-[#5B5BD6]">{(bp.value as number) || 0}%</span>}</div>
-                      <div className="bg-[#E5E5EA] rounded-full h-2 overflow-hidden"><div className="h-full bg-[#5B5BD6] rounded-full" style={{ width: `${(bp.value as number) || 0}%` }} /></div>
+                      <div className="bg-[#E5E5EA] rounded-full h-2 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${(bp.value as number) || 0}%`, backgroundColor: (bp.barColor as string) || editProfile?.primaryColor || '#5B5BD6' }} /></div>
                     </div>
                   )}
                   {block.type === 'recent-content' && (
@@ -3098,7 +3145,10 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                   )}
                   {block.type === 'button-/-cta' && (
                     <div className={`px-4 py-3 flex ${(bp.alignment as string) === 'right' ? 'justify-end' : (bp.alignment as string) === 'left' ? 'justify-start' : 'justify-center'}`}>
-                      <div className={`px-3 py-1.5 rounded-lg text-[9px] font-semibold ${(bp.variant as string) === 'secondary' ? 'border border-[#5B5BD6] text-[#5B5BD6]' : 'bg-[#5B5BD6] text-white'}`}>{(bp.label as string) || 'Learn More'}</div>
+                      <div className={`px-3 py-1.5 rounded-lg text-[9px] font-semibold ${(bp.variant as string) === 'secondary' ? 'border text-[#5B5BD6]' : (bp.variant as string) === 'ghost' ? 'text-[#5B5BD6]' : 'text-white'}`}
+                        style={(bp.variant as string) === 'secondary' ? { borderColor: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6', color: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6' } : (bp.variant as string) === 'ghost' ? { color: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6' } : { backgroundColor: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6' }}>
+                        {(bp.label as string) || 'Learn More'}
+                      </div>
                     </div>
                   )}
                   {block.type === 'image-+-text' && (
@@ -3116,8 +3166,8 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                     </div>
                   )}
                   {block.type === 'footer' && (
-                    <div className="px-3 py-2 bg-[#111218] text-center">
-                      <p className="text-[8px] text-[#9898AB]">© 2026 Organization · Privacy · Terms · Contact</p>
+                    <div className="px-3 py-2 text-center" style={{ backgroundColor: (bp.bgColor as string) || '#111218' }}>
+                      <p className="text-[8px]" style={{ color: (bp.textColor as string) || '#9898AB' }}>{(bp.copyrightText as string) || '© 2026 Organization · Privacy · Terms · Contact'}</p>
                     </div>
                   )}
                   {block.type === 'body' && (
@@ -3342,6 +3392,18 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                       <div className="flex gap-1">{[2,3,4].map(c => <button key={c} onClick={() => patch({ columns: c })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.columns as number) === c ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{c}</button>)}</div></div>}
                   </>}
                   {selectedBlock.type === 'header' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Site Title</label>
+                      <input value={(bp.siteTitle as string) || ''} placeholder="Documentation" onChange={e => patch({ siteTitle: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Header Background</label>
+                      <div className="flex gap-1.5 items-center">
+                        <input type="color" value={(bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6'} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        {brandColors.length > 0 && brandColors.slice(0,3).map((c, i) => (
+                          <button key={i} title={c} onClick={() => patch({ bgColor: c })}
+                            className={`w-5 h-5 rounded border-2 transition-all ${(bp.bgColor as string) === c ? 'border-[#5B5BD6]' : 'border-white shadow-sm'}`}
+                            style={{ backgroundColor: c }} />
+                        ))}
+                      </div>
+                    </div>
                     <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showLogo ?? true} onChange={e => patchHmp({ showLogo: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Show Logo</span></label>
                     <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showSearch ?? true} onChange={e => patchHmp({ showSearch: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Show Search</span></label>
                     <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.stickyNav ?? false} onChange={e => patchHmp({ stickyNav: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Sticky Header</span></label>
@@ -3364,13 +3426,76 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                       </div>
                     </div>
                   </>}
+                  {selectedBlock.type === 'footer' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Copyright Text</label>
+                      <input value={(bp.copyrightText as string) || ''} placeholder="© 2026 Organization · Privacy · Terms" onChange={e => patch({ copyrightText: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Footer Background</label>
+                      <div className="flex gap-1.5 items-center">
+                        <input type="color" value={(bp.bgColor as string) || '#111218'} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                      </div>
+                    </div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Text Color</label>
+                      <div className="flex gap-1.5 items-center">
+                        <input type="color" value={(bp.textColor as string) || '#9898AB'} onChange={e => patch({ textColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={!!(bp.showSocialLinks)} onChange={e => patch({ showSocialLinks: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" />
+                      <span className="text-[11px] text-[#3D3D4E]">Show social links</span>
+                    </label>
+                  </>}
+                  {selectedBlock.type === 'rich-text' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Content</label>
+                      <textarea value={(bp.content as string) || ''} onChange={e => patch({ content: e.target.value })} rows={5} placeholder="Enter your content here. Use **bold**, *italic* for formatting." className="w-full px-2 py-1.5 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] resize-none font-mono" /></div>
+                  </>}
+                  {selectedBlock.type === 'featured-links' && <>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Section Title</label>
+                      <input value={(bp.title as string) || ''} onChange={e => patch({ title: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div className="space-y-1">
+                      <label className="block text-[10px] text-[#9898AB] mb-1">Links</label>
+                      {((bp.links as Array<{id:string;label:string}>) || []).map((link, li) => (
+                        <div key={link.id} className="flex gap-1 items-center">
+                          <input value={link.label} onChange={e => { const links=[...((bp.links as Array<{id:string;label:string}>)||[])]; links[li]={...link,label:e.target.value}; patch({links}) }} className="flex-1 h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                          <button onClick={() => { const links=((bp.links as Array<{id:string;label:string}>)||[]).filter((_,i)=>i!==li); patch({links}) }} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>
+                        </div>
+                      ))}
+                      <button onClick={() => { const links=[...((bp.links as Array<{id:string;label:string}>)||[]),{id:`l${Date.now()}`,label:'New Link'}]; patch({links}) }} className="w-full py-1 text-[10px] text-[#5B5BD6] border border-dashed border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF]">+ Add Link</button>
+                    </div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Link Color</label>
+                      <div className="flex gap-1.5 items-center">
+                        <input type="color" value={(bp.accentColor as string) || editProfile?.accentColor || '#5B5BD6'} onChange={e => patch({ accentColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        {brandColors.slice(0,3).map((c, i) => (
+                          <button key={i} title={c} onClick={() => patch({ accentColor: c })}
+                            className={`w-5 h-5 rounded border-2 ${(bp.accentColor as string) === c ? 'border-[#5B5BD6]' : 'border-white shadow-sm'}`}
+                            style={{ backgroundColor: c }} />
+                        ))}
+                      </div>
+                    </div>
+                  </>}
                   {selectedBlock.type === 'button-/-cta' && <>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Label</label>
                       <input value={(bp.label as string) || ''} onChange={e => patch({ label: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Link URL</label>
+                      <input value={(bp.href as string) || ''} placeholder="#" onChange={e => patch({ href: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] font-mono" /></div>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Style</label>
-                      <div className="flex gap-1"><button onClick={() => patch({ variant: 'primary' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.variant as string) !== 'secondary' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Primary</button><button onClick={() => patch({ variant: 'secondary' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.variant as string) === 'secondary' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Outline</button></div></div>
+                      <div className="flex gap-1"><button onClick={() => patch({ variant: 'primary' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.variant as string) !== 'secondary' && (bp.variant as string) !== 'ghost' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Filled</button><button onClick={() => patch({ variant: 'secondary' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.variant as string) === 'secondary' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Outline</button><button onClick={() => patch({ variant: 'ghost' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.variant as string) === 'ghost' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Ghost</button></div></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Button Color</label>
+                      <div className="flex gap-1.5 items-center">
+                        <input type="color" value={(bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6'} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        {brandColors.slice(0,3).map((c, i) => (
+                          <button key={i} title={c} onClick={() => patch({ bgColor: c })}
+                            className={`w-5 h-5 rounded border-2 ${(bp.bgColor as string) === c ? 'border-[#5B5BD6]' : 'border-white shadow-sm'}`}
+                            style={{ backgroundColor: c }} />
+                        ))}
+                      </div>
+                    </div>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Alignment</label>
                       <div className="flex gap-1">{['left','center','right'].map(a => <button key={a} onClick={() => patch({ alignment: a })} className={`flex-1 py-1 rounded border text-[10px] capitalize ${(bp.alignment as string) === a ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{a}</button>)}</div></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Size</label>
+                      <div className="flex gap-1">{(['sm','md','lg'] as const).map(s => <button key={s} onClick={() => patch({ size: s })} className={`flex-1 py-1 rounded border text-[10px] uppercase ${(bp.size as string) === s || (!bp.size && s === 'md') ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{s}</button>)}</div></div>
+                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Corner Radius</label>
+                      <div className="flex gap-1">{(['none','sm','md','lg','full'] as const).map(r => <button key={r} onClick={() => patch({ borderRadius: r })} className={`flex-1 py-1 rounded border text-[9px] ${(bp.borderRadius as string) === r || (!bp.borderRadius && r === 'md') ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{r}</button>)}</div></div>
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!(bp.openInNewTab)} onChange={e => patch({ openInNewTab: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Open in new tab</span></label>
                   </>}
                   {selectedBlock.type === 'image-+-text' && <>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Heading</label>
@@ -3380,12 +3505,145 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Image Position</label>
                       <div className="flex gap-1"><button onClick={() => patch({ imagePosition: 'left' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.imagePosition as string) !== 'right' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Left</button><button onClick={() => patch({ imagePosition: 'right' })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.imagePosition as string) === 'right' ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>Right</button></div></div>
                   </>}
+                  {/* ── Common Appearance (all blocks) ── */}
+                  <div className="pt-2 mt-1 border-t border-[#F4F2EE] space-y-2">
+                    <p className="text-[10px] font-bold text-[#9898AB] uppercase tracking-wide">Appearance</p>
+                    {/* Background Color */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] text-[#9898AB]">Background</label>
+                        {brandColors.length > 0 && (
+                          <div className="flex gap-0.5">
+                            {brandColors.slice(0,3).map((c, i) => (
+                              <button key={i} title={c} onClick={() => patch({ bgColor: c })}
+                                className={`w-3.5 h-3.5 rounded-sm border-2 transition-all hover:scale-110 ${(bp.bgColor as string) === c ? 'border-[#5B5BD6]' : 'border-white shadow-sm'}`}
+                                style={{ backgroundColor: c }} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-1.5 items-center">
+                        <input type="color" value={(bp.bgColor as string) || '#FFFFFF'} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        <input value={(bp.bgColor as string) || ''} onChange={e => patch({ bgColor: e.target.value })} placeholder="Transparent" className="flex-1 h-7 px-2 text-[10px] border border-[#E2DED7] rounded-lg font-mono" />
+                        {bp.bgColor && <button onClick={() => patch({ bgColor: '' })} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>}
+                      </div>
+                    </div>
+                    {/* Text Color */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] text-[#9898AB]">Text Color</label>
+                      </div>
+                      <div className="flex gap-1.5 items-center">
+                        <input type="color" value={(bp.textColor as string) || '#111218'} onChange={e => patch({ textColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        <input value={(bp.textColor as string) || ''} onChange={e => patch({ textColor: e.target.value })} placeholder="Default" className="flex-1 h-7 px-2 text-[10px] border border-[#E2DED7] rounded-lg font-mono" />
+                        {bp.textColor && <button onClick={() => patch({ textColor: '' })} className="text-[#9898AB] hover:text-[#EF4444] text-[10px]">✕</button>}
+                      </div>
+                    </div>
+                    {/* Padding */}
+                    <div>
+                      <label className="block text-[10px] text-[#9898AB] mb-1">Padding</label>
+                      <div className="flex gap-1">
+                        {(['none','sm','md','lg','xl'] as const).map(sz => (
+                          <button key={sz} onClick={() => patch({ padding: sz })}
+                            className={`flex-1 py-1 rounded border text-[9px] ${(bp.padding as string) === sz || (!bp.padding && sz === 'md') ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>
+                            {sz}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Border Radius */}
+                    <div>
+                      <label className="block text-[10px] text-[#9898AB] mb-1">Corner Radius</label>
+                      <div className="flex gap-1">
+                        {(['none','sm','md','lg','full'] as const).map(r => (
+                          <button key={r} onClick={() => patch({ borderRadius: r })}
+                            className={`flex-1 py-1 rounded border text-[9px] ${(bp.borderRadius as string) === r ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>
+                            {r}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Border */}
+                    <div>
+                      <label className="block text-[10px] text-[#9898AB] mb-1">Border</label>
+                      <div className="flex gap-1.5 items-center">
+                        <select value={(bp.borderStyle as string) || 'none'} onChange={e => patch({ borderStyle: e.target.value })} className="h-7 px-1.5 text-[10px] border border-[#E2DED7] rounded-lg bg-white">
+                          <option value="none">None</option><option value="solid">Solid</option><option value="dashed">Dashed</option>
+                        </select>
+                        {(bp.borderStyle as string) && (bp.borderStyle as string) !== 'none' && (
+                          <input type="color" value={(bp.borderColor as string) || '#E2DED7'} onChange={e => patch({ borderColor: e.target.value })} className="w-7 h-7 rounded border border-[#E2DED7] p-0.5" />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  {/* ── Interactive Effects (for interactive blocks) ── */}
+                  {['button-/-cta','header','navigation-cards','featured-links','checklist','accordion-/-faq','tabs'].includes(selectedBlock.type) && (
+                    <div className="pt-2 mt-1 border-t border-[#F4F2EE] space-y-2">
+                      <p className="text-[10px] font-bold text-[#9898AB] uppercase tracking-wide">Hover & Focus</p>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[10px] text-[#9898AB]">Hover Background</label>
+                        </div>
+                        <div className="flex gap-1.5 items-center">
+                          <input type="color" value={(bp.hoverBgColor as string) || '#EEEEFF'} onChange={e => patch({ hoverBgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                          <input value={(bp.hoverBgColor as string) || ''} onChange={e => patch({ hoverBgColor: e.target.value })} placeholder="Auto" className="flex-1 h-7 px-2 text-[10px] border border-[#E2DED7] rounded-lg font-mono" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-[#9898AB] mb-1">Hover Text Color</label>
+                        <div className="flex gap-1.5 items-center">
+                          <input type="color" value={(bp.hoverTextColor as string) || '#5B5BD6'} onChange={e => patch({ hoverTextColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                          <input value={(bp.hoverTextColor as string) || ''} onChange={e => patch({ hoverTextColor: e.target.value })} placeholder="Auto" className="flex-1 h-7 px-2 text-[10px] border border-[#E2DED7] rounded-lg font-mono" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-[#9898AB] mb-1">Focus Ring Color</label>
+                        <div className="flex gap-1.5 items-center">
+                          <input type="color" value={(bp.focusRingColor as string) || '#5B5BD6'} onChange={e => patch({ focusRingColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                          <input value={(bp.focusRingColor as string) || ''} onChange={e => patch({ focusRingColor: e.target.value })} placeholder="Auto" className="flex-1 h-7 px-2 text-[10px] border border-[#E2DED7] rounded-lg font-mono" />
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={!!(bp.animateOnHover)} onChange={e => patch({ animateOnHover: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" />
+                        <span className="text-[11px] text-[#3D3D4E]">Animate on hover</span>
+                      </label>
+                    </div>
+                  )}
                 </div>
               )
             }
 
+            const syncBrandToHtml = () => {
+              const primary = editProfile?.primaryColor
+              const accent = editProfile?.accentColor
+              canvasBlocks.forEach(block => {
+                if (block.type === 'header') patchBlockProps(block.id, { bgColor: primary ?? '#5B5BD6', textColor: '#FFFFFF' })
+                else if (block.type === 'hero') patchBlockProps(block.id, { bgColor: primary ?? '#5B5BD6' })
+                else if (block.type === 'footer') patchBlockProps(block.id, { bgColor: '#111218', textColor: '#9898AB' })
+                else if (block.type === 'button-/-cta') patchBlockProps(block.id, { bgColor: accent ?? primary ?? '#5B5BD6' })
+                else if (block.type === 'progress-bar') patchBlockProps(block.id, { barColor: accent ?? primary ?? '#5B5BD6' })
+              })
+            }
+
             return (
               <div>
+                {editProfile && brandColors.length > 0 && (
+                  <div className="bg-[#F5F4FF] border border-[#C7C5F4] rounded-xl px-4 py-3 flex items-center gap-3 mb-4">
+                    <div className="flex gap-1 flex-shrink-0">
+                      {brandColors.slice(0, 4).map((c, i) => (
+                        <div key={i} className="w-3.5 h-3.5 rounded-sm border border-white/50 shadow-sm" style={{ backgroundColor: c }} />
+                      ))}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-semibold text-[#3D3D4E]">Brand colors from <span className="text-[#5B5BD6]">{editProfile.name}</span></p>
+                      <p className="text-[10px] text-[#9898AB]">Apply to header, hero, footer, and buttons</p>
+                    </div>
+                    <button onClick={syncBrandToHtml}
+                      className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold text-[#5B5BD6] bg-white border border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF] transition-colors whitespace-nowrap">
+                      Sync All
+                    </button>
+                  </div>
+                )}
                 {/* Master page selector bar */}
                 <div className="bg-white border border-[#E2DED7] rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap">
                   <div className="flex-1 min-w-48 relative group">
@@ -11863,9 +12121,15 @@ export default function App() {
     setProjectId(record.projectId)
     setProjectName(record.projectName ?? '')
     setIsDemoMode(record.isDemoMode ?? false)
-    setThemes((record.themes as Theme[]) ?? INITIAL_THEMES)
+    const SEED_PROFILE_IDS = new Set(['sp1', 'sp2', 'sp3', 'sp4'])
+    const restoredThemes = ((record.themes as Theme[]) ?? INITIAL_THEMES).map(t => ({
+      ...t,
+      styleProfiles: t.styleProfiles.filter(p => !SEED_PROFILE_IDS.has(p.id)),
+    }))
+    setThemes(restoredThemes)
     setProjectMeta((record.projectMeta as ProjectMeta) ?? DEFAULT_PROJECT_META)
-    setActiveStyleProfileId(record.activeStyleProfileId ?? 'sp1')
+    const restoredActiveId = record.activeStyleProfileId && !SEED_PROFILE_IDS.has(record.activeStyleProfileId as string) ? (record.activeStyleProfileId as string) : ''
+    setActiveStyleProfileId(restoredActiveId)
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
     setHtmlMasterPages((record.htmlMasterPages as HtmlMasterPage[]) ?? INITIAL_HTML_MASTER_PAGES)
