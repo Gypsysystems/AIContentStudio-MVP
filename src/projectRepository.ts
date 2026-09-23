@@ -6,6 +6,11 @@ import {
   remapEvidenceIndex,
   type EvidenceIndex,
 } from './evidenceIndex'
+import {
+  isConceptAnalysisFresh,
+  remapConceptAnalysis,
+  type ConceptAnalysis,
+} from './conceptAnalysis'
 import type { SourceExtraction } from './sourceExtractor'
 
 export const SCHEMA_VERSION = 2
@@ -51,6 +56,7 @@ export type ProjectRecord = {
   // Analysis
   analysisResult: unknown | null
   analysisRevision: number
+  conceptAnalysis: unknown | null
 
   // TOC
   appToc: unknown[]
@@ -196,6 +202,7 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     sourcesRevision: 0,
     analysisResult: null,
     analysisRevision: -1,
+    conceptAnalysis: null,
     appToc: [],
     tocRevision: 0,
     tocGeneratedFromRev: -1,
@@ -318,6 +325,13 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     newFileIdMap,
     copy.sourceExtractions as Record<string, SourceExtraction>,
     isEvidenceIndexFresh(sourceEvidenceIndex, sourceExtractions, source.sourcesRevision),
+  )
+  const sourceConceptAnalysis = source.conceptAnalysis as ConceptAnalysis | null
+  copy.conceptAnalysis = remapConceptAnalysis(
+    sourceConceptAnalysis,
+    newFileIdMap,
+    copy.evidenceIndex as EvidenceIndex | null,
+    isConceptAnalysisFresh(sourceConceptAnalysis, sourceEvidenceIndex),
   )
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     await put(ps, copy)

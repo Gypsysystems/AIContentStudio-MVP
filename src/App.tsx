@@ -17,6 +17,12 @@ import {
   type EvidenceIndex,
   type EvidenceItem,
 } from './evidenceIndex'
+import {
+  CONCEPT_ANALYSIS_METHOD,
+  buildConceptAnalysis,
+  isConceptAnalysisFresh,
+  type ConceptAnalysis,
+} from './conceptAnalysis'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -5210,6 +5216,251 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
 }
 
 // ── Screen: Analysis ──────────────────────────────────────────────────────────
+
+function EvidenceAnalysisScreen({
+  onNav,
+  evidenceIndex,
+  evidenceFresh,
+  analysis,
+  analysisFresh,
+  onRebuild,
+}: {
+  onNav: (s: Screen) => void
+  evidenceIndex: EvidenceIndex | null
+  evidenceFresh: boolean
+  analysis: ConceptAnalysis | null
+  analysisFresh: boolean
+  onRebuild: () => void
+}) {
+  const [expandedConcept, setExpandedConcept] = useState<string | null>(null)
+  const [expandedTerm, setExpandedTerm] = useState<string | null>(null)
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceItem | null>(null)
+  const evidenceById = new Map((evidenceIndex?.items ?? []).map(item => [item.id, item]))
+  const canBuild = !!evidenceIndex && evidenceFresh
+
+  useEffect(() => {
+    if (!analysis && canBuild) onRebuild()
+  }, [analysis, canBuild, onRebuild])
+
+  const renderEvidenceReferences = (evidenceIds: string[]) => (
+    <div className="space-y-2">
+      {evidenceIds.map(evidenceId => {
+        const item = evidenceById.get(evidenceId)
+        if (!item) {
+          return (
+            <div key={evidenceId} className="text-[11px] text-[#B45309]">
+              Evidence reference unavailable: {evidenceId}
+            </div>
+          )
+        }
+        return (
+          <button
+            type="button"
+            key={evidenceId}
+            onClick={() => setSelectedEvidence(item)}
+            data-testid="analysis-evidence-reference"
+            className="w-full text-left border border-[#E2DED7] bg-white hover:border-[#B9B9EA] rounded-lg px-3 py-2 transition-colors"
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-[11px] font-semibold text-[#5B5BD6]">{item.sourceFileName}</span>
+              <span className="text-[10px] text-[#9898AB]">{item.location}</span>
+            </div>
+            <p className="text-[11px] text-[#3D3D4E] leading-relaxed line-clamp-2">{item.text}</p>
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  return (
+    <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in">
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1.5">Source-backed Analysis</h1>
+          <p className="text-[13px] text-[#6B6B7E]">
+            Concepts and terminology derived only from the current Evidence Index.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {analysis && (
+            <span
+              data-testid="concept-analysis-freshness"
+              className={`text-[10px] font-semibold uppercase tracking-wide px-2 py-1 rounded-full ${
+                analysisFresh && evidenceFresh
+                  ? 'bg-[#DCFCE7] text-[#15803D]'
+                  : 'bg-[#FEF3C7] text-[#B45309]'
+              }`}
+            >
+              {analysisFresh && evidenceFresh ? 'Current' : 'Stale'}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onRebuild}
+            disabled={!canBuild}
+            data-testid="rebuild-concept-analysis"
+            className="text-[11px] font-semibold text-white bg-[#5B5BD6] hover:bg-[#4A4AC4] px-3 py-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {analysis ? 'Rebuild Analysis' : 'Build Analysis'}
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-5 flex items-center gap-3 bg-[#F4F2EE] border border-[#E2DED7] rounded-xl px-4 py-3">
+        <div className="w-2 h-2 rounded-full bg-[#6B6B7E] flex-shrink-0" />
+        <p className="text-[11px] text-[#6B6B7E]">
+          <span className="font-semibold text-[#3D3D4E]">Method:</span>{' '}
+          Conservative deterministic evidence heuristics ({CONCEPT_ANALYSIS_METHOD}). No AI or simulated findings are used.
+        </p>
+      </div>
+
+      {!evidenceIndex || !evidenceFresh ? (
+        <div className="bg-[#FFF7ED] border border-[#FED7AA] rounded-xl p-5">
+          <h2 className="text-[13px] font-semibold text-[#9A3412] mb-1">
+            A current Evidence Index is required
+          </h2>
+          <p className="text-[12px] text-[#9A3412] mb-3">
+            Rebuild evidence after all source extractions finish. Existing analysis remains visible as stale and cannot be rebuilt from outdated evidence.
+          </p>
+          <button
+            type="button"
+            onClick={() => onNav('sources')}
+            className="text-[11px] font-semibold text-[#9A3412] border border-[#FDBA74] px-3 py-1.5 rounded-lg hover:bg-[#FFEDD5]"
+          >
+            Return to Sources
+          </button>
+        </div>
+      ) : !analysis ? (
+        <div className="bg-white border border-[#E2DED7] rounded-xl p-10 text-center">
+          <div className="w-6 h-6 border-2 border-[#5B5BD6] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-[12px] text-[#6B6B7E]">Building deterministic source analysis…</p>
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {!analysisFresh && (
+            <div className="bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3 text-[12px] text-[#92400E]">
+              The Evidence Index changed after this analysis was built. Rebuild Analysis to use only the current evidence.
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <p className="text-[10px] uppercase tracking-wide text-[#9898AB] mb-1">Concepts</p>
+              <p data-testid="concept-count" className="text-xl font-semibold text-[#111218]">{analysis.concepts.length}</p>
+            </div>
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <p className="text-[10px] uppercase tracking-wide text-[#9898AB] mb-1">Terms</p>
+              <p data-testid="terminology-count" className="text-xl font-semibold text-[#111218]">{analysis.terminology.length}</p>
+            </div>
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <p className="text-[10px] uppercase tracking-wide text-[#9898AB] mb-1">Evidence items</p>
+              <p className="text-xl font-semibold text-[#111218]">{evidenceIndex.items.length}</p>
+            </div>
+          </div>
+
+          <section className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[#E2DED7]">
+              <h2 className="text-[13px] font-semibold text-[#111218]">Source-backed Concepts</h2>
+              <p className="text-[11px] text-[#9898AB] mt-0.5">Headings and repeated multi-word terminology with direct evidence references.</p>
+            </div>
+            {analysis.concepts.length === 0 ? (
+              <div className="px-5 py-8 text-center text-[11px] text-[#9898AB]">
+                No concepts met the conservative extraction threshold.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#F4F2EE]">
+                {analysis.concepts.map(concept => {
+                  const open = expandedConcept === concept.id
+                  return (
+                    <div key={concept.id} data-testid="grounded-concept" data-concept-id={concept.id}>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedConcept(open ? null : concept.id)}
+                        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-[#FAFAF8]"
+                      >
+                        <span className="flex-1 text-[13px] font-semibold text-[#111218]">{concept.label}</span>
+                        <span className="text-[10px] text-[#6B6B7E]">{concept.occurrenceCount} mentions</span>
+                        <span className="text-[10px] text-[#6B6B7E]">{concept.sourceCount} {concept.sourceCount === 1 ? 'source' : 'sources'}</span>
+                        <span className="text-[10px] text-[#9898AB]">{concept.evidenceIds.length} evidence</span>
+                      </button>
+                      {open && (
+                        <div className="px-5 py-4 bg-[#F9F8F6] border-t border-[#EEECE8]">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-1">Exact source terminology</p>
+                          <p className="text-[12px] text-[#3D3D4E] mb-3">{concept.exactTerms.join(' · ')}</p>
+                          {renderEvidenceReferences(concept.evidenceIds)}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[#E2DED7]">
+              <h2 className="text-[13px] font-semibold text-[#111218]">Terminology</h2>
+              <p className="text-[11px] text-[#9898AB] mt-0.5">Normalized labels are shown separately from exact source terms.</p>
+            </div>
+            {analysis.terminology.length === 0 ? (
+              <div className="px-5 py-8 text-center text-[11px] text-[#9898AB]">
+                No reliable terminology was detected.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#F4F2EE]">
+                {analysis.terminology.map(term => {
+                  const open = expandedTerm === term.id
+                  return (
+                    <div key={term.id} data-testid="grounded-term" data-term-id={term.id}>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedTerm(open ? null : term.id)}
+                        className="w-full grid grid-cols-[1fr_1.3fr_auto_auto] gap-3 items-center px-5 py-3 text-left hover:bg-[#FAFAF8]"
+                      >
+                        <span className="text-[12px] font-semibold text-[#111218]">{term.normalizedLabel}</span>
+                        <span className="text-[11px] text-[#6B6B7E] truncate">{term.exactTerms.join(' · ')}</span>
+                        <span className="text-[10px] text-[#6B6B7E]">{term.occurrenceCount} mentions</span>
+                        <span className="text-[10px] text-[#9898AB]">{term.evidenceIds.length} evidence</span>
+                      </button>
+                      {open && (
+                        <div className="px-5 py-4 bg-[#F9F8F6] border-t border-[#EEECE8]">
+                          {renderEvidenceReferences(term.evidenceIds)}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {selectedEvidence && (
+        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6" onClick={() => setSelectedEvidence(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Evidence text"
+            data-testid="analysis-evidence-dialog"
+            className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-5"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 mb-3">
+              <div>
+                <h3 className="text-[14px] font-semibold text-[#111218]">{selectedEvidence.sourceFileName}</h3>
+                <p className="text-[11px] text-[#9898AB]">{selectedEvidence.location} · {selectedEvidence.blockType}</p>
+              </div>
+              <button type="button" onClick={() => setSelectedEvidence(null)} className="text-[#9898AB] hover:text-[#111218]">×</button>
+            </div>
+            <p className="text-[12px] text-[#3D3D4E] whitespace-pre-wrap leading-relaxed">{selectedEvidence.text}</p>
+            <p className="text-[9px] text-[#9898AB] mt-4">Evidence ID: {selectedEvidence.id}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 type SupportLevel = 'Strong' | 'Partial' | 'Limited'
 type GapResolution = 'needs-info' | 'not-applicable' | 'resolved'
@@ -12506,6 +12757,7 @@ export default function App() {
 
   // ── Analysis result (shared with StructureScreen) ─────────────────────────
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
+  const [conceptAnalysis, setConceptAnalysis] = useState<ConceptAnalysis | null>(null)
 
   // ── Lifted TOC state ───────────────────────────────────────────────────────
   const [appToc, setAppToc] = useState<TocItem[]>([]) // empty until generated from analysis
@@ -12695,6 +12947,7 @@ export default function App() {
       evidenceIndex: evidenceIndex as unknown,
       analysisResult: analysisResult as unknown,
       analysisRevision,
+      conceptAnalysis: conceptAnalysis as unknown,
       appToc: appToc as unknown[],
       tocRevision,
       tocGeneratedFromRev,
@@ -12712,7 +12965,7 @@ export default function App() {
       docComments: docComments as unknown[],
       publishConfig: publishConfig as unknown,
     }
-  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, appToc, tocRevision, tocGeneratedFromRev, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
+  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, appToc, tocRevision, tocGeneratedFromRev, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
 
   // Keep latestBuildRef current on every render so autosave never sees stale state
   latestBuildRef.current = buildProjectRecord
@@ -12744,6 +12997,7 @@ export default function App() {
     return !!extraction && extraction.status !== 'extracting' && extraction.status !== 'not-extracted'
   })
   const evidenceFresh = isEvidenceIndexFresh(evidenceIndex, sourceExtractions, sourcesRevision)
+  const conceptAnalysisFresh = evidenceFresh && isConceptAnalysisFresh(conceptAnalysis, evidenceIndex)
   const handleRebuildEvidence = useCallback(() => {
     if (!canRebuildEvidence || isDemoMode) return
     setEvidenceIndex(buildEvidenceIndex(sourceExtractions, sourcesRevision))
@@ -12755,6 +13009,14 @@ export default function App() {
     setEvidenceIndex(buildEvidenceIndex(sourceExtractions, sourcesRevision))
     triggerAutosave()
   }, [canRebuildEvidence, evidenceIndex, isDemoMode, sourceExtractions, sourcesRevision, triggerAutosave])
+
+  const handleRebuildConceptAnalysis = useCallback(() => {
+    if (isDemoMode || !evidenceIndex || !evidenceFresh) return
+    setConceptAnalysis(buildConceptAnalysis(evidenceIndex))
+    // Use the normal debounce so React can publish the new analysis state
+    // before latestBuildRef is read for the persistence snapshot.
+    triggerAutosave()
+  }, [evidenceFresh, evidenceIndex, isDemoMode, triggerAutosave])
 
   // ── Startup: check for active project or show dashboard ───────────────────
   const [appLoading, setAppLoading] = useState(true)
@@ -12831,6 +13093,7 @@ export default function App() {
     setSourcesRevision(sourcesRevisionRef.current)
     setAnalysisResult((record.analysisResult as AnalysisResult | null) ?? null)
     setAnalysisRevision(record.analysisRevision ?? -1)
+    setConceptAnalysis((record.conceptAnalysis as ConceptAnalysis | null) ?? null)
     setAppToc((record.appToc as TocItem[]) ?? [])
     setTocRevision(record.tocRevision ?? 0)
     setTocGeneratedFromRev(record.tocGeneratedFromRev ?? -1)
@@ -12913,6 +13176,7 @@ export default function App() {
     setSourcesRevision(0)
     setAnalysisResult(null)
     setAnalysisRevision(-1)
+    setConceptAnalysis(null)
     setAppToc([])
     setTocRevision(0)
     setTocGeneratedFromRev(-1)
@@ -12977,7 +13241,9 @@ export default function App() {
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
-      case 'analysis':  return <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
+      case 'analysis':  return isDemoMode
+        ? <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
+        : <EvidenceAnalysisScreen onNav={navigate} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} analysis={conceptAnalysis} analysisFresh={conceptAnalysisFresh} onRebuild={handleRebuildConceptAnalysis} />
       case 'structure': return <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} />
@@ -13015,8 +13281,10 @@ export default function App() {
         stageStatuses={{
           create:    projectId ? 'complete' : 'not-started',
           branding:  themes.length > 0 ? 'complete' : 'not-started',
-          sources:   sources.length > 0 ? (analysisStale ? 'in-progress' : 'complete') : 'not-started',
-          analysis:  analysisResult ? (analysisStale ? 'stale' : 'complete') : (sources.length > 0 ? 'in-progress' : 'not-started'),
+          sources:   isDemoMode ? 'complete' : sources.length > 0 ? (evidenceFresh ? 'complete' : 'in-progress') : 'not-started',
+          analysis:  isDemoMode
+            ? analysisResult ? (analysisStale ? 'stale' : 'complete') : 'in-progress'
+            : conceptAnalysis ? (conceptAnalysisFresh ? 'complete' : 'stale') : (sources.length > 0 ? 'in-progress' : 'not-started'),
           structure: appToc.length > 0 ? (analysisRevision > tocGeneratedFromRev && !tocHumanModified ? 'stale' : 'complete') : 'not-started',
           studio:    contentRevision > 0 ? (reviewStaleContent ? 'in-progress' : 'complete') : 'not-started',
           quality:   aiReviewDone ? (reviewStaleContent ? 'stale' : 'complete') : (contentRevision > 0 ? 'in-progress' : 'not-started'),
@@ -13076,9 +13344,20 @@ export default function App() {
               {/* Analysis */}
               <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Analysis</p>
-                <DiagRow label="Analysis Revision" value={analysisRevision < 0 ? 'Never run' : String(analysisRevision)} status={analysisRevision >= 0 ? 'ok' : 'info'} />
-                <DiagRow label="Concepts Detected" value={analysisResult ? `${analysisResult.concepts.length}` : 'N/A'} status={analysisResult ? 'ok' : 'info'} />
-                <DiagRow label="Stale" value={analysisStale ? `Yes — sources at rev ${sourcesRevision}, analysis at ${analysisRevision}` : 'No'} status={analysisStale ? 'warn' : 'ok'} />
+                {isDemoMode ? (
+                  <>
+                    <DiagRow label="Analysis Revision" value={analysisRevision < 0 ? 'Never run' : String(analysisRevision)} status={analysisRevision >= 0 ? 'ok' : 'info'} />
+                    <DiagRow label="Concepts Detected" value={analysisResult ? `${analysisResult.concepts.length}` : 'N/A'} status={analysisResult ? 'ok' : 'info'} />
+                    <DiagRow label="Stale" value={analysisStale ? `Yes — sources at rev ${sourcesRevision}, analysis at ${analysisRevision}` : 'No'} status={analysisStale ? 'warn' : 'ok'} />
+                  </>
+                ) : (
+                  <>
+                    <DiagRow label="Method" value={conceptAnalysis?.method ?? 'Not run'} status={conceptAnalysis ? 'ok' : 'info'} />
+                    <DiagRow label="Concepts Detected" value={conceptAnalysis ? `${conceptAnalysis.concepts.length}` : 'N/A'} status={conceptAnalysis ? 'ok' : 'info'} />
+                    <DiagRow label="Terms Detected" value={conceptAnalysis ? `${conceptAnalysis.terminology.length}` : 'N/A'} status={conceptAnalysis ? 'ok' : 'info'} />
+                    <DiagRow label="Stale" value={conceptAnalysis && !conceptAnalysisFresh ? 'Yes — Evidence Index changed' : 'No'} status={conceptAnalysis && !conceptAnalysisFresh ? 'warn' : 'ok'} />
+                  </>
+                )}
               </div>
               {/* TOC */}
               <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">

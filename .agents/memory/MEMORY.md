@@ -1,3 +1,4 @@
 - [Style profile recovery](style-profile-recovery.md) — project metadata is primary; keep the legacy applied-profile ID synchronized during recovery.
 - [Layout and master brand inheritance](page-layout-brand-inheritance.md) — previews resolve applied-brand defaults dynamically while preserving explicit local overrides.
 - [HTML master topic destinations](html-master-topic-destinations.md) — navigation cards store central TOC IDs and resolve current titles and paths at preview time.
+- [Grounded analysis isolation](grounded-analysis-isolation.md) — real evidence analysis stays separate from demo and downstream generation state until later milestones.
