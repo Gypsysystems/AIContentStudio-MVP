@@ -153,6 +153,159 @@ test("persists an applied style profile and output template edits", async ({
   ).toBeVisible()
 })
 
+test("edits a duplicated profile independently and preserves both styles across reload", async ({
+  page,
+}) => {
+  test.setTimeout(60_000)
+  await createProject(page, `Independent Profiles ${Date.now()}`)
+  const originalName = "Original Styled Profile"
+  const copyName = "Independent Styled Copy"
+  const originalStyle = {
+    primaryColor: "#C2410C",
+    headingFont: "Georgia",
+    bodyFont: "Verdana",
+  }
+  const copyStyle = {
+    primaryColor: "#0369A1",
+    headingFont: "Arial",
+    bodyFont: "Tahoma",
+  }
+  const editStyle = async (style: typeof originalStyle) => {
+    await page.getByRole("button", { name: "Colors", exact: true }).click()
+    const primaryRow = page.getByText("Primary", { exact: true }).locator("..")
+    await primaryRow.getByRole("button").first().click()
+    await primaryRow.locator("input").fill(style.primaryColor)
+    await primaryRow.getByRole("button", { name: "Apply", exact: true }).click()
+    await page.getByRole("button", { name: "Save Colors" }).click()
+    await page.getByRole("button", { name: "Typography", exact: true }).click()
+    await chooseFont(page, "Heading Font", style.headingFont)
+    await chooseFont(page, "Body Font", style.bodyFont)
+    await page.getByRole("button", { name: "Save Typography" }).click()
+  }
+  const expectStyleInUI = async (style: typeof originalStyle) => {
+    await page.getByRole("button", { name: "Colors", exact: true }).click()
+    await expect(page.getByText("Primary", { exact: true }).locator(".."))
+      .toContainText(style.primaryColor)
+    await page.getByRole("button", { name: "Typography", exact: true }).click()
+    for (const [section, font] of [
+      ["Heading Font", style.headingFont],
+      ["Body Font", style.bodyFont],
+    ]) {
+      await expect(page.getByText(section, { exact: true }).locator("..").locator("..")
+        .getByRole("button").first()).toContainText(font)
+    }
+  }
+  const selectProfile = async (name: string, applied: boolean) => {
+    await expect(async () => {
+      await page.getByRole("textbox", { name: "Search profiles…" }).click()
+      await page.getByRole("button", {
+        name: `${name} ${name === originalName ? originalStyle.headingFont : copyStyle.headingFont}${applied ? " Applied" : ""} Reusable`, exact: true,
+      }).click({ timeout: 1_000 })
+    }).toPass({ timeout: 5_000 })
+    await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(name)
+    await expect(page.getByRole("button", {
+      name: applied ? "✓ Applied to Project" : "Apply to Project", exact: true,
+    })).toBeVisible()
+  }
+
+  await page.getByRole("button", { name: "+ New" }).click()
+  const createModal = page.getByRole("heading", {
+    name: "Create Brand & Style Profile",
+  }).locator("..")
+  await createModal.getByRole("textbox").fill(originalName)
+  await createModal.getByRole("button", { name: "Create", exact: true }).click()
+  await editStyle(originalStyle)
+  await page.getByRole("button", { name: "Apply to Project", exact: true }).click()
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    const original = stored.themes.flatMap(theme => theme.styleProfiles)
+      .find(profile => profile.name === originalName)
+    return !!original && stored.activeStyleProfileId === original.id
+      && stored.projectMeta?.styleProfileId === original.id
+  }).toBe(true)
+  const before = await readOnlyProject(page)
+  const original = before.themes.flatMap(theme => theme.styleProfiles)
+    .find(profile => profile.name === originalName)!
+  expect(original).toMatchObject(originalStyle)
+
+  await page.getByRole("button", { name: "Duplicate", exact: true }).click()
+  const duplicateModal = page.getByRole("heading", { name: "Duplicate Profile" }).locator("..")
+  await expect(duplicateModal.getByRole("textbox")).toHaveValue(`${originalName} — Copy`)
+  await duplicateModal.getByRole("textbox").fill(copyName)
+  await duplicateModal.getByRole("button", { name: "Duplicate", exact: true }).click()
+  await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(copyName)
+  await expect(page.getByRole("button", { name: "Apply to Project", exact: true })).toBeVisible()
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    return stored.themes.flatMap(theme => theme.styleProfiles)
+      .find(profile => profile.name === copyName)
+  }).toMatchObject({
+    ...original, id: expect.any(String), name: copyName, source: `Based on ${originalName}`,
+  })
+  const duplicated = (await readOnlyProject(page)).themes.flatMap(theme => theme.styleProfiles)
+    .find(profile => profile.name === copyName)!
+  expect(duplicated.id).not.toBe(original.id)
+  await expectStyleInUI(originalStyle)
+  await editStyle(copyStyle)
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    return stored.themes.flatMap(theme => theme.styleProfiles)
+      .find(profile => profile.id === duplicated.id)
+  }).toMatchObject({
+    ...copyStyle,
+    h1: expect.objectContaining({ fontFamily: copyStyle.headingFont }),
+    body: expect.objectContaining({ fontFamily: copyStyle.bodyFont }),
+  })
+  const editedCopy = (await readOnlyProject(page)).themes.flatMap(theme => theme.styleProfiles)
+    .find(profile => profile.id === duplicated.id)!
+
+  const expectStoredState = async (appliedId: unknown) => {
+    await expect.poll(async () => {
+      const stored = await readOnlyProject(page)
+      return {
+        profiles: stored.themes.flatMap(theme => theme.styleProfiles),
+        activeStyleProfileId: stored.activeStyleProfileId,
+        projectMeta: stored.projectMeta,
+      }
+    }).toEqual({
+      profiles: [...before.themes.flatMap(theme => theme.styleProfiles), editedCopy],
+      activeStyleProfileId: appliedId,
+      projectMeta: { ...before.projectMeta, styleProfileId: appliedId },
+    })
+  }
+  const reloadTheme = async () => {
+    await page.reload()
+    await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+    await page.getByRole("button", { name: /Theme$/ }).click()
+  }
+
+  await expectStoredState(original.id)
+  await selectProfile(originalName, true)
+  await expectStyleInUI(originalStyle)
+  await selectProfile(copyName, false)
+  await expectStyleInUI(copyStyle)
+  await expectStoredState(original.id)
+
+  await reloadTheme()
+  await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(originalName)
+  await selectProfile(originalName, true)
+  await expectStyleInUI(originalStyle)
+  await selectProfile(copyName, false)
+  await expectStyleInUI(copyStyle)
+  await expectStoredState(original.id)
+
+  await page.getByRole("button", { name: "Apply to Project", exact: true }).click()
+  await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
+  await expectStoredState(duplicated.id)
+  await reloadTheme()
+  await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(copyName)
+  await selectProfile(copyName, true)
+  await expectStyleInUI(copyStyle)
+  await selectProfile(originalName, false)
+  await expectStyleInUI(originalStyle)
+  await expectStoredState(duplicated.id)
+})
+
 test("clears a deleted applied profile until a remaining profile is explicitly applied", async ({
   page,
 }) => {
