@@ -44,6 +44,55 @@ export type AuthorTopicDraft = {
   blocks: AuthorDraftBlock[]
 }
 
+export type AuthorBlockState = 'generated' | 'manually-edited' | 'approved' | 'mixed' | 'legacy'
+
+export type AuthorAppliedBaseline = {
+  draftId: string
+  groundingContextId: string
+  contentFingerprint: string
+  blocks: Array<{
+    sourceBlockId: string
+    appliedBlockId: string
+    block: AuthorDraftBlock
+  }>
+}
+
+export type AuthorDraftDiffStatus =
+  | 'added'
+  | 'changed'
+  | 'removed'
+  | 'unchanged'
+  | 'manually-edited'
+  | 'protected'
+
+export type AuthorDraftDiff = {
+  id: string
+  status: AuthorDraftDiffStatus
+  selected: boolean
+  sourceBlockId?: string
+  currentBlock?: AuthorDraftBlock
+  proposedBlock?: AuthorDraftBlock
+  baselineBlock?: AuthorDraftBlock
+  protection: 'none' | 'manual' | 'approved' | 'legacy'
+}
+
+export type AuthorRegenerationProposal = {
+  version: 1
+  proposalId: string
+  baseDraftId: string | null
+  proposedDraftId: string
+  groundingContextId: string
+  currentContentFingerprint: string
+  diffs: AuthorDraftDiff[]
+}
+
+export type AuthorComparableBlock = {
+  id: string
+  type: string
+  content: string
+  calloutVariant?: string
+}
+
 function stableHash(value: string): string {
   let hash = 2166136261
   for (let index = 0; index < value.length; index++) {
@@ -51,6 +100,168 @@ function stableHash(value: string): string {
     hash = Math.imul(hash, 16777619)
   }
   return (hash >>> 0).toString(36)
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function blockFingerprint(block: AuthorComparableBlock): string {
+  return stableHash(stableStringify({
+    type: block.type,
+    content: block.content,
+    calloutVariant: block.calloutVariant ?? '',
+  }))
+}
+
+export function authorContentFingerprint(blocks: AuthorComparableBlock[]): string {
+  return stableHash(stableStringify(blocks.map(block => ({
+    type: block.type,
+    content: block.content,
+    calloutVariant: block.calloutVariant ?? '',
+  }))))
+}
+
+function draftAsComparable(block: AuthorDraftBlock): AuthorComparableBlock {
+  return {
+    id: block.id,
+    type: block.type,
+    content: block.content,
+    calloutVariant: block.calloutVariant,
+  }
+}
+
+function contentAsDraft(block: AuthorComparableBlock): AuthorDraftBlock {
+  return {
+    id: block.id,
+    type: block.type as AuthorDraftBlock['type'],
+    content: block.content,
+    ...(block.calloutVariant ? { calloutVariant: block.calloutVariant as 'note' | 'warning' } : {}),
+    evidenceIds: [],
+  }
+}
+
+function isSameBlock(left: AuthorComparableBlock | undefined, right: AuthorComparableBlock | undefined): boolean {
+  return !!left && !!right && blockFingerprint(left) === blockFingerprint(right)
+}
+
+export function buildAuthorRegenerationProposal(
+  proposedDraft: AuthorTopicDraft,
+  currentBlocks: AuthorComparableBlock[],
+  baseline: AuthorAppliedBaseline | null,
+  topicApproved: boolean,
+  blockStates: Record<string, AuthorBlockState> = {},
+): AuthorRegenerationProposal {
+  const baselineBySource = new Map((baseline?.blocks ?? []).map(item => [item.sourceBlockId, item]))
+  const currentById = new Map(currentBlocks.map(block => [block.id, block]))
+  const matchedCurrent = new Set<string>()
+  const diffs: AuthorDraftDiff[] = []
+
+  for (const proposed of proposedDraft.blocks) {
+    const baselineEntry = baselineBySource.get(proposed.id)
+    const baselineBlock = baselineEntry?.block
+    const currentBlock = baselineEntry
+      ? currentById.get(baselineEntry.appliedBlockId)
+      : currentBlocks.find(block =>
+          !matchedCurrent.has(block.id) && isSameBlock(block, proposed))
+
+    if (currentBlock) matchedCurrent.add(currentBlock.id)
+    const state = currentBlock
+      ? blockStates[currentBlock.id]
+      : undefined
+    const manual = !!baselineBlock && !!currentBlock && !isSameBlock(currentBlock, baselineBlock)
+    const approved = !!baselineBlock
+      && !!currentBlock
+      && !manual
+      && (topicApproved || state === 'approved')
+
+    let status: AuthorDraftDiffStatus
+    let protection: AuthorDraftDiff['protection']
+    let selected: boolean
+    if (manual) {
+      status = 'manually-edited'
+      protection = state === 'legacy' ? 'legacy' : 'manual'
+      selected = false
+    } else if (approved && !isSameBlock(currentBlock, proposed)) {
+      status = 'protected'
+      protection = 'approved'
+      selected = false
+    } else if (currentBlock && isSameBlock(currentBlock, proposed)) {
+      status = 'unchanged'
+      protection = approved ? 'approved' : 'none'
+      selected = false
+    } else if (baselineBlock) {
+      status = 'changed'
+      protection = 'none'
+      selected = true
+    } else {
+      status = 'added'
+      protection = 'none'
+      selected = true
+    }
+    diffs.push({
+      id: `diff-${proposed.id}`,
+      status,
+      selected,
+      sourceBlockId: proposed.id,
+      currentBlock: currentBlock ? contentAsDraft(currentBlock) : undefined,
+      proposedBlock: proposed,
+      baselineBlock,
+      protection,
+    })
+  }
+
+  for (const baselineEntry of baseline?.blocks ?? []) {
+    if (proposedDraft.blocks.some(block => block.id === baselineEntry.sourceBlockId)) continue
+    const currentBlock = currentById.get(baselineEntry.appliedBlockId)
+    if (!currentBlock) continue
+    const manual = !isSameBlock(currentBlock, baselineEntry.block)
+    const state = blockStates[currentBlock.id]
+    diffs.push({
+      id: `diff-removed-${baselineEntry.sourceBlockId}`,
+      status: manual ? 'manually-edited' : 'removed',
+      selected: !manual && !topicApproved && state !== 'approved',
+      sourceBlockId: baselineEntry.sourceBlockId,
+      currentBlock: contentAsDraft(currentBlock),
+      baselineBlock: baselineEntry.block,
+      protection: manual ? (state === 'legacy' ? 'legacy' : 'manual') : (topicApproved || state === 'approved' ? 'approved' : 'none'),
+    })
+    matchedCurrent.add(currentBlock.id)
+  }
+
+  for (const current of currentBlocks) {
+    if (matchedCurrent.has(current.id)) continue
+    diffs.push({
+      id: `diff-manual-${current.id}`,
+      status: 'manually-edited',
+      selected: false,
+      currentBlock: contentAsDraft(current),
+      protection: blockStates[current.id] === 'legacy' ? 'legacy' : 'manual',
+    })
+  }
+
+  const snapshot = {
+    baseDraftId: baseline?.draftId ?? null,
+    proposedDraftId: proposedDraft.draftId,
+    groundingContextId: proposedDraft.groundingContextId,
+    diffs,
+  }
+  return {
+    version: 1,
+    proposalId: `author-proposal-${stableHash(JSON.stringify(snapshot))}`,
+    baseDraftId: baseline?.draftId ?? null,
+    proposedDraftId: proposedDraft.draftId,
+    groundingContextId: proposedDraft.groundingContextId,
+    currentContentFingerprint: authorContentFingerprint(currentBlocks),
+    diffs,
+  }
 }
 
 function applyApprovedVariables(
