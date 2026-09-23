@@ -633,7 +633,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     reviewModel: createEmptyReviewModel(stored.projectId),
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await page.getByRole('button', { name: 'Analysis' }).click()
   await expect.poll(async () => {
     const project = await readProject(page, projectName)
     return (project.unsupportedAnalysis as UnsupportedAnalysis | null)?.findings.length ?? 0
