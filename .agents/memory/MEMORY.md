@@ -8,3 +8,4 @@
 - [Author real-source isolation](author-real-source-isolation.md) — real Author context is stable-ID-backed; never fall back to demo filenames, excerpts, references, or AI output.
 - [Author grounding context](author-grounding-context.md) — cache deterministic per-topic context separately from content; stale inputs invalidate context without rewriting authored blocks.
 - [Author draft review boundary](author-draft-review-boundary.md) — drafts and regeneration diffs stay separate; confirmed selected changes preserve manual and approved content.
+- [Author project search](author-project-search.md) — index persisted topic content by stable TOC ID; real projects never use demo search fallback.

@@ -26,6 +26,7 @@ const IGNORED_KEYS = new Set([
   'type',
   'mediaType',
   'conditions',
+  'calloutVariant',
   'startFresh',
   'level',
   'hasHeader',
@@ -108,7 +109,21 @@ export function searchAuthorTopicContent(
     // Stable topic IDs are authoritative. The numeric key is retained only for
     // legacy records that predate stable topic IDs.
     const blocks = topicContent[topicId] ?? topicContent[String(topic.id)] ?? []
-    return blocks.flatMap((rawBlock, blockIndex) => {
+    const firstBlock = blocks[0] as SearchableBlock | undefined
+    const titleMatchCount = countMatches(topic.title, normalizedQuery)
+    const titleResults: AuthorSearchResult[] = titleMatchCount > 0 ? [{
+      topicId,
+      topicTitle: topic.title,
+      blockId: typeof firstBlock?.id === 'string' && firstBlock.id
+        ? firstBlock.id
+        : `${topicId}-block-0`,
+      blockIndex: 0,
+      field: 'topic title',
+      excerpt: excerptAround(topic.title, normalizedQuery),
+      matchContext: 'topic title',
+      matchCount: titleMatchCount,
+    }] : []
+    const blockResults = blocks.flatMap((rawBlock, blockIndex) => {
       if (!rawBlock || typeof rawBlock !== 'object') return []
       const block = rawBlock as SearchableBlock
       const blockId = typeof block.id === 'string' && block.id ? block.id : `${topicId}-block-${blockIndex}`
@@ -127,5 +142,6 @@ export function searchAuthorTopicContent(
         }]
       })
     })
+    return [...titleResults, ...blockResults]
   })
 }

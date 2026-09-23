@@ -8692,6 +8692,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const [replaceQuery, setReplaceQuery] = useState('')
   const [findScope, setFindScope] = useState<'topic' | 'project'>('topic')
   const [findMatchIndex, setFindMatchIndex] = useState(0)
+  const [pendingSearchNavigation, setPendingSearchNavigation] = useState<AuthorSearchResult | null>(null)
   const [showVarsModal, setShowVarsModal] = useState(false)
   const [showSnippetsModal, setShowSnippetsModal] = useState(false)
   const [showCommentPanel, setShowCommentPanel] = useState(false)
@@ -9133,6 +9134,30 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const activeGeneratedFreshnessReason = activeAuthorMetadata?.generatedFreshnessReason
     ? freshnessReasonText[activeAuthorMetadata.generatedFreshnessReason]
     : null
+
+  const openProjectSearchResult = (result: AuthorSearchResult) => {
+    const topic = studioToc.find(candidate => stableAuthorTopicId(candidate) === result.topicId)
+    if (!topic) return
+    setPendingSearchNavigation(result)
+    openTopic(topic.id, topic.title)
+  }
+
+  useEffect(() => {
+    if (!pendingSearchNavigation || !activeTopic) return
+    if (stableAuthorTopicId(activeTopic) !== pendingSearchNavigation.topicId) return
+    const frame = requestAnimationFrame(() => {
+      const block = document.getElementById(pendingSearchNavigation.blockId)
+      const target = block ?? canvasRef.current
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (block) {
+        setFocusedBlockId(pendingSearchNavigation.blockId)
+        const editable = block.querySelector('[contenteditable]') as HTMLElement | null
+        editable?.focus({ preventScroll: true })
+      }
+      setPendingSearchNavigation(null)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [activeTopic, docBlocks, pendingSearchNavigation])
   const availableAuthorSources: AuthorProjectSource[] = isDemoMode
     ? SOURCE_FILES.map(source => ({ fileId: `demo-source-${source.id}`, name: source.name }))
     : (projectSources ?? [])
@@ -9998,7 +10023,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
           }) : []
           const totalTopicMatches = topicMatches.reduce((s, m) => s + m.matchCount, 0)
 
-          // ── Mock project-wide search content ──────────────────────────────
+          // Demo search content is available only in explicit demo mode.
           const DEMO_PROJECT_CONTENT: Array<{ topicId: number; title: string; excerpt: string }> = [
             { topicId: 1, title: 'Introduction', excerpt: 'The Nexus Platform is an enterprise-grade project management and collaboration solution designed for distributed teams working on complex, multi-stakeholder initiatives.' },
             { topicId: 2, title: 'System Requirements', excerpt: 'Minimum system requirements for Windows 10/11, macOS 12+, Ubuntu 20.04+. Browser: Chrome 108+, Firefox 110+, or Edge 108+. Memory: 8 GB RAM minimum.' },
@@ -10011,16 +10036,26 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
             { topicId: 9, title: 'API Reference', excerpt: 'The Nexus REST API uses OAuth 2.0 for authentication. Base URL: https://api.nexus.example.com/v1. All responses are JSON. Rate limit: 1000 req/min.' },
             { topicId: 10, title: 'Troubleshooting', excerpt: 'If you cannot log in, check that your SSO provider is configured correctly. Clear browser cache and cookies. Contact support@nexus.example.com for assistance.' },
           ]
-          const projectResults = q ? (isDemoMode ? DEMO_PROJECT_CONTENT.filter(p =>
-            p.title.toLowerCase().includes(q) || p.excerpt.toLowerCase().includes(q)
-          ) : (toc ?? []).filter(t =>
-            t.title.toLowerCase().includes(q)
-          ).map(t => ({
-            topicId: t.id,
-            title: t.title,
-            excerpt: ((topicContent ?? {})[String(t.id)]?.[0]?.content ?? '').slice(0, 120) || '(no content yet)',
-          })).filter(r => r.title.toLowerCase().includes(q) || r.excerpt.toLowerCase().includes(q))
-          ) : []
+          const projectResults: AuthorSearchResult[] = q
+            ? isDemoMode
+              ? DEMO_PROJECT_CONTENT.flatMap(item => {
+                  const matchCount = (item.title.toLowerCase().includes(q) ? 1 : 0)
+                    + (item.excerpt.toLowerCase().includes(q) ? 1 : 0)
+                  if (!matchCount) return []
+                  const topic = studioToc.find(candidate => candidate.id === item.topicId)
+                  return [{
+                    topicId: topic ? stableAuthorTopicId(topic) : `legacy-${item.topicId}`,
+                    topicTitle: item.title,
+                    blockId: `demo-search-${item.topicId}`,
+                    blockIndex: 0,
+                    field: 'demo content',
+                    excerpt: item.excerpt,
+                    matchContext: 'demo content',
+                    matchCount,
+                  }]
+                })
+              : searchAuthorTopicContent(studioToc, topicContent ?? {}, findQuery)
+            : []
 
           // Current matched block for navigation
           const currentMatchBlock = topicMatches[findMatchIndex % Math.max(topicMatches.length, 1)]
@@ -10131,19 +10166,30 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                   ) : (
                     <div>
                       <div className="px-4 py-1.5 bg-[#F9F8F6] text-[10px] text-[#9898AB] font-medium uppercase tracking-wider border-b border-[#E2DED7]">
-                        {projectResults.length} topic{projectResults.length !== 1 ? 's' : ''} with matches
+                        {projectResults.length} match{projectResults.length !== 1 ? 'es' : ''} in {new Set(projectResults.map(result => result.topicId)).size} topic{new Set(projectResults.map(result => result.topicId)).size !== 1 ? 's' : ''}
                       </div>
-                      {projectResults.map(r => {
+                      {projectResults.map((r, resultIndex) => {
                         const idx = r.excerpt.toLowerCase().indexOf(q)
                         const snippet = idx >= 0
                           ? r.excerpt.slice(Math.max(0, idx - 30), Math.min(r.excerpt.length, idx + q.length + 60))
                           : r.excerpt.slice(0, 90)
                         const highlightStart = Math.max(0, idx - Math.max(0, idx - 30))
                         return (
-                          <button key={r.topicId} className="w-full text-left px-4 py-2.5 border-b border-[#F4F2EE] last:border-0 hover:bg-[#F9F8F6] transition-colors group">
+                          <button
+                            key={`${r.topicId}-${r.blockId}-${r.field}-${resultIndex}`}
+                            type="button"
+                            data-testid="author-project-search-result"
+                            data-topic-id={r.topicId}
+                            data-block-id={r.blockId}
+                            data-block-index={r.blockIndex}
+                            onClick={() => openProjectSearchResult(r)}
+                            className="w-full text-left px-4 py-2.5 border-b border-[#F4F2EE] last:border-0 hover:bg-[#F9F8F6] transition-colors group"
+                          >
                             <div className="flex items-center gap-2 mb-0.5">
                               <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="text-[#9898AB] flex-shrink-0"><rect x="1" y="1" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.2"/><path d="M3 4h4M3 6h2.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                              <span className="text-[12px] font-medium text-[#111218]">{r.title}</span>
+                              <span className="text-[12px] font-medium text-[#111218]">{r.topicTitle}</span>
+                              <span className="text-[9px] text-[#9898AB] font-mono truncate">{r.topicId}</span>
+                              <span className="ml-auto text-[9px] text-[#9898AB]">{r.matchContext}</span>
                             </div>
                             <p className="text-[11px] text-[#6B6B7E] leading-relaxed line-clamp-2">
                               {snippet.slice(0, highlightStart)}
