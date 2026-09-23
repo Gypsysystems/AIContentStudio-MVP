@@ -660,6 +660,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
 
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(1)
   await page.reload()
+  await page.getByRole('button', { name: 'Analysis' }).click()
   await page.getByRole('button', { name: 'Review', exact: true }).click()
   await expect(page.getByTestId('review-run-provenance')).toBeVisible()
   await page.getByTestId('run-grounded-review').click()
