@@ -11,6 +11,12 @@ import {
   extractFromFile, isExtractionFresh, searchExtractions,
   type SourceExtraction,
 } from './sourceExtractor'
+import {
+  buildEvidenceIndex,
+  isEvidenceIndexFresh,
+  type EvidenceIndex,
+  type EvidenceItem,
+} from './evidenceIndex'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -4443,7 +4449,140 @@ const DEMO_SOURCE_NAMES = [
   'Support_Ticket_Analysis_Oct.pdf',
 ]
 
-function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtractions, sourcesRevision, onRetryExtraction, isDemoMode, onSetDemoMode }: {
+function EvidenceIndexPanel({
+  evidenceIndex,
+  isFresh,
+  canRebuild,
+  onRebuild,
+}: {
+  evidenceIndex: EvidenceIndex | null
+  isFresh: boolean
+  canRebuild: boolean
+  onRebuild: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('all')
+  const items = evidenceIndex?.items ?? []
+  const sources = Array.from(new Map(
+    items.map(item => [item.fileId, item.sourceFileName]),
+  ).entries())
+  const normalizedQuery = query.trim().toLowerCase()
+  const visibleItems = items.filter(item =>
+    (sourceFilter === 'all' || item.fileId === sourceFilter)
+    && (!normalizedQuery
+      || item.text.toLowerCase().includes(normalizedQuery)
+      || item.sourceFileName.toLowerCase().includes(normalizedQuery)
+      || item.location.toLowerCase().includes(normalizedQuery)))
+
+  return (
+    <div data-testid="evidence-index-panel" className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-[#E2DED7] flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="text-[13px] font-semibold text-[#111218]">Evidence Index</h2>
+            {evidenceIndex ? (
+              <span
+                data-testid="evidence-freshness"
+                className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                  isFresh ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEF3C7] text-[#B45309]'
+                }`}
+              >
+                {isFresh ? 'Current' : 'Stale'}
+              </span>
+            ) : (
+              <span data-testid="evidence-freshness" className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[#F4F2EE] text-[#6B6B7E]">
+                Not built
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-[#9898AB] mt-0.5">
+            Exact source blocks prepared for traceable analysis · {items.length} {items.length === 1 ? 'item' : 'items'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRebuild}
+          disabled={!canRebuild}
+          data-testid="rebuild-evidence-index"
+          className="text-[11px] font-semibold text-[#5B5BD6] border border-[#C4C4F0] px-2.5 py-1.5 rounded-lg hover:bg-[#EEEEFF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+        >
+          {evidenceIndex ? 'Rebuild Evidence' : 'Build Evidence'}
+        </button>
+      </div>
+
+      {evidenceIndex && !isFresh && (
+        <div className="px-4 py-2.5 bg-[#FFF7ED] border-b border-[#FED7AA] text-[11px] text-[#9A3412]">
+          Source extractions changed after this index was built. Review the changes, then rebuild evidence.
+        </div>
+      )}
+
+      {!evidenceIndex ? (
+        <div className="px-4 py-8 text-center">
+          <p className="text-[12px] font-medium text-[#6B6B7E]">Waiting for source extraction</p>
+          <p className="text-[11px] text-[#9898AB] mt-1">Evidence is created only from successfully extracted source blocks.</p>
+        </div>
+      ) : (
+        <>
+          <div className="px-4 py-3 bg-[#FAFAFE] border-b border-[#E2DED7] grid grid-cols-[180px_1fr] gap-2">
+            <select
+              value={sourceFilter}
+              onChange={event => setSourceFilter(event.target.value)}
+              aria-label="Filter evidence by source"
+              data-testid="evidence-source-filter"
+              className="h-8 px-2 text-[11px] bg-white border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]"
+            >
+              <option value="all">All sources</option>
+              {sources.map(([fileId, fileName]) => (
+                <option key={fileId} value={fileId}>{fileName}</option>
+              ))}
+            </select>
+            <input
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder="Search evidence text or location…"
+              data-testid="evidence-search-input"
+              className="h-8 px-3 text-[11px] bg-white border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] placeholder-[#C8C6C0]"
+            />
+          </div>
+          <div className="max-h-[28rem] overflow-y-auto divide-y divide-[#F4F2EE]">
+            {visibleItems.length === 0 ? (
+              <div className="px-4 py-8 text-center text-[11px] text-[#9898AB]">No evidence matches these filters.</div>
+            ) : visibleItems.map((item: EvidenceItem) => (
+              <div
+                key={item.id}
+                data-testid="evidence-item"
+                data-evidence-id={item.id}
+                data-source-id={item.sourceId}
+                data-block-id={item.blockId}
+                className="px-4 py-3"
+              >
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-[10px] font-semibold text-[#5B5BD6] truncate max-w-[180px]">{item.sourceFileName}</span>
+                  <span className="text-[9px] font-semibold uppercase tracking-wide bg-[#F4F2EE] text-[#6B6B7E] px-1.5 py-0.5 rounded">{item.blockType}</span>
+                  <span className="text-[10px] text-[#9898AB]">{item.location}</span>
+                  <span className="ml-auto text-[9px] text-[#C8C6C0]">#{item.order + 1}</span>
+                </div>
+                <p className="text-[11px] text-[#3D3D4E] leading-relaxed whitespace-pre-wrap">{item.text}</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[9px] text-[#9898AB]">
+                  <span>fileId: {item.fileId}</span>
+                  <span>blockId: {item.blockId}</span>
+                  {item.page != null && <span>page: {item.page}</span>}
+                  {item.listLevel != null && <span>{item.orderedList ? 'ordered' : 'unordered'} list · level {item.listLevel}</span>}
+                  {item.tableData && <span>table: {item.tableData.length} rows</span>}
+                  {item.links?.map((link, index) => (
+                    <span key={`${link.url}-${index}`} className="text-[#5B5BD6]">link: {link.text || link.url} → {link.url}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtractions, sourcesRevision, onRetryExtraction, evidenceIndex, evidenceFresh, canRebuildEvidence, onRebuildEvidence, isDemoMode, onSetDemoMode }: {
   onNav: (s: Screen) => void
   sources?: ProjectSource[]
   onSourceAdd?: (file: File) => Promise<string>
@@ -4451,6 +4590,10 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
   sourceExtractions?: Record<string, SourceExtraction>
   sourcesRevision: number
   onRetryExtraction?: (fileId: string, file: File) => void
+  evidenceIndex: EvidenceIndex | null
+  evidenceFresh: boolean
+  canRebuildEvidence: boolean
+  onRebuildEvidence: () => void
   isDemoMode: boolean
   onSetDemoMode: (v: boolean) => void
 }) {
@@ -4763,7 +4906,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                         const after = hit.text.slice(hit.matchEnd)
                         const snippet = (before.length > 60 ? '…' + before.slice(-60) : before) + match + (after.length > 80 ? after.slice(0, 80) + '…' : after)
                         return (
-                          <div key={i} className="bg-white border border-[#E2DED7] rounded-lg px-3 py-2">
+                          <div key={i} data-testid="source-search-result" className="bg-white border border-[#E2DED7] rounded-lg px-3 py-2">
                             <div className="flex items-baseline gap-2 mb-0.5">
                               <span className="text-[10px] font-semibold text-[#5B5BD6] truncate max-w-[140px]">{hit.fileName}</span>
                               <span className="text-[10px] text-[#9898AB] flex-shrink-0">{hit.location}</span>
@@ -4981,6 +5124,15 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                 )
               })}
             </div>
+          )}
+
+          {!isDemoMode && readyEntries.length > 0 && (
+            <EvidenceIndexPanel
+              evidenceIndex={evidenceIndex}
+              isFresh={evidenceFresh}
+              canRebuild={canRebuildEvidence}
+              onRebuild={onRebuildEvidence}
+            />
           )}
         </div>
 
@@ -12276,6 +12428,7 @@ export default function App() {
   const [projectName, setProjectName] = useState('')
   const [sources, setSources] = useState<ProjectSource[]>([])
   const [sourceExtractions, setSourceExtractions] = useState<Record<string, SourceExtraction>>({})
+  const [evidenceIndex, setEvidenceIndex] = useState<EvidenceIndex | null>(null)
   const [isDemoMode, setIsDemoMode] = useState(false)
   const [reviewContext, setReviewContext] = useState<ReviewContext>(null)
   const [findingStatuses, setFindingStatuses] = useState<Record<number, FindingStatus>>({})
@@ -12441,6 +12594,9 @@ export default function App() {
     sourcesRevisionRef.current = sourceRevision
     setSources(prev => prev.filter(s => s.fileId !== fileId))
     setSourceExtractions(prev => { const next = { ...prev }; delete next[fileId]; return next })
+    setEvidenceIndex(prev => prev
+      ? { ...prev, items: prev.items.filter(item => item.fileId !== fileId && item.sourceId !== fileId) }
+      : null)
     setSourcesRevision(sourceRevision)
     try { await removeFile(fileId) } catch { /* best effort */ }
     triggerAutosave()
@@ -12536,6 +12692,7 @@ export default function App() {
       sourceFileIds: sources.map(s => s.fileId),
       sourcesRevision,
       sourceExtractions: sourceExtractions as Record<string, unknown>,
+      evidenceIndex: evidenceIndex as unknown,
       analysisResult: analysisResult as unknown,
       analysisRevision,
       appToc: appToc as unknown[],
@@ -12555,7 +12712,7 @@ export default function App() {
       docComments: docComments as unknown[],
       publishConfig: publishConfig as unknown,
     }
-  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, analysisResult, analysisRevision, appToc, tocRevision, tocGeneratedFromRev, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
+  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, appToc, tocRevision, tocGeneratedFromRev, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
 
   // Keep latestBuildRef current on every render so autosave never sees stale state
   latestBuildRef.current = buildProjectRecord
@@ -12581,6 +12738,23 @@ export default function App() {
       }
     }, delay)
   }, [projectId])
+
+  const canRebuildEvidence = sources.length > 0 && sources.every(source => {
+    const extraction = sourceExtractions[source.fileId]
+    return !!extraction && extraction.status !== 'extracting' && extraction.status !== 'not-extracted'
+  })
+  const evidenceFresh = isEvidenceIndexFresh(evidenceIndex, sourceExtractions, sourcesRevision)
+  const handleRebuildEvidence = useCallback(() => {
+    if (!canRebuildEvidence || isDemoMode) return
+    setEvidenceIndex(buildEvidenceIndex(sourceExtractions, sourcesRevision))
+    triggerAutosave()
+  }, [canRebuildEvidence, isDemoMode, sourceExtractions, sourcesRevision, triggerAutosave])
+
+  useEffect(() => {
+    if (isDemoMode || evidenceIndex || !canRebuildEvidence) return
+    setEvidenceIndex(buildEvidenceIndex(sourceExtractions, sourcesRevision))
+    triggerAutosave()
+  }, [canRebuildEvidence, evidenceIndex, isDemoMode, sourceExtractions, sourcesRevision, triggerAutosave])
 
   // ── Startup: check for active project or show dashboard ───────────────────
   const [appLoading, setAppLoading] = useState(true)
@@ -12703,6 +12877,15 @@ export default function App() {
             }
       }
       setSourceExtractions(restoredExtractions)
+      const persistedEvidenceIndex = (record.evidenceIndex as EvidenceIndex | null) ?? null
+      const storedFileIds = new Set(storedFiles.map(file => file.fileId))
+      setEvidenceIndex(persistedEvidenceIndex
+        ? {
+            ...persistedEvidenceIndex,
+            items: persistedEvidenceIndex.items.filter(item =>
+              storedFileIds.has(item.fileId) && storedFileIds.has(item.sourceId)),
+          }
+        : null)
       const restoredSources: ProjectSource[] = storedFiles.map(sf => ({
         fileId: sf.fileId,
         file: new File([sf.blob], sf.name, { type: sf.type }),
@@ -12710,6 +12893,7 @@ export default function App() {
       setSources(restoredSources)
     } catch {
       setSourceExtractions({})
+      setEvidenceIndex(null)
       setSources([])
     }
     setActiveProjectId(record.projectId)
@@ -12722,6 +12906,7 @@ export default function App() {
     setIsDemoMode(false)
     setSources([])
     setSourceExtractions({})
+    setEvidenceIndex(null)
     sourcesRevisionRef.current = 0
     extractionRunRef.current = {}
     removedSourceIdsRef.current = new Set()
@@ -12791,7 +12976,7 @@ export default function App() {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
-      case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
+      case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
       case 'analysis':  return <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
       case 'structure': return <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />

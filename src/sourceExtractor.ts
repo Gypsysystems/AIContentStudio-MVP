@@ -66,16 +66,6 @@ export type SourceExtraction = {
   parser?: string
 }
 
-export type EvidenceItem = {
-  id: string
-  sourceId: string
-  blockId: string
-  text: string
-  location: string
-  sectionPath?: string[]
-  page?: number
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function stableHash(value: string): string {
@@ -91,32 +81,9 @@ function mkId(sourceId: string, order: number, type: ExtractedBlockType, text: s
   return `blk-${stableHash(`${sourceId}|${order}|${type}|${text}`)}`
 }
 
-function mkEvidenceId(sourceId: string, blockId: string): string {
-  return `ev-${stableHash(`${sourceId}|${blockId}`)}`
-}
-
 function markdownLinks(text: string): ExtractedLink[] {
   return Array.from(text.matchAll(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g))
     .map(match => ({ text: match[1], url: match[2] }))
-}
-
-export function buildEvidence(extraction: SourceExtraction): EvidenceItem[] {
-  return extraction.blocks
-    .filter(b => b.text.trim().length > 10)
-    .map(b => ({
-      id: mkEvidenceId(b.sourceId, b.id),
-      sourceId: b.sourceId,
-      blockId: b.id,
-      text: b.text,
-      location:
-        b.page != null
-          ? `p. ${b.page}${b.sectionPath?.length ? ' · ' + b.sectionPath.join(' › ') : ''}`
-          : b.sectionPath?.length
-          ? b.sectionPath.join(' › ')
-          : extraction.fileName,
-      sectionPath: b.sectionPath,
-      page: b.page,
-    }))
 }
 
 // ── DOCX extraction (mammoth) ──────────────────────────────────────────────

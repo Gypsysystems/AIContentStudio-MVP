@@ -1,6 +1,13 @@
 // ProjectRepository — IndexedDB-backed persistence for DocFlow projects
 // All project state flows through here; individual screens never write directly.
 
+import {
+  isEvidenceIndexFresh,
+  remapEvidenceIndex,
+  type EvidenceIndex,
+} from './evidenceIndex'
+import type { SourceExtraction } from './sourceExtractor'
+
 export const SCHEMA_VERSION = 2
 const DB_NAME = 'docflow-db'
 const DB_VERSION = 2
@@ -54,6 +61,7 @@ export type ProjectRecord = {
 
   // Source extractions
   sourceExtractions: Record<string, unknown>
+  evidenceIndex: unknown | null
 
   // Content
   docBlocks: unknown[]
@@ -194,6 +202,7 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     tocHumanModified: false,
     masterAssignments: {},
     sourceExtractions: {},
+    evidenceIndex: null,
     docBlocks: [],
     topicContent: {},
     contentRevision: 0,
@@ -301,6 +310,14 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
         remapExtractionFileReferences(extraction, newFileIdMap),
       ]]
     }),
+  )
+  const sourceExtractions = source.sourceExtractions as Record<string, SourceExtraction>
+  const sourceEvidenceIndex = source.evidenceIndex as EvidenceIndex | null
+  copy.evidenceIndex = remapEvidenceIndex(
+    sourceEvidenceIndex,
+    newFileIdMap,
+    copy.sourceExtractions as Record<string, SourceExtraction>,
+    isEvidenceIndexFresh(sourceEvidenceIndex, sourceExtractions, source.sourcesRevision),
   )
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     await put(ps, copy)

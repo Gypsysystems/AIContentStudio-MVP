@@ -166,7 +166,7 @@ test("persists real extraction, structured blocks, and search results across rel
   await search.fill("Quartz falcons")
   await expect(page.getByText("1 match across sources")).toBeVisible()
   await expect(page.getByText("field-notes.txt").last()).toBeVisible()
-  await expect(page.getByText(distinctive, { exact: false })).toBeVisible()
+  await expect(page.getByTestId("source-search-result").getByText(distinctive, { exact: false })).toBeVisible()
 
   await search.fill("Nexus authentication")
   await expect(page.getByText("No matches found.")).toBeVisible()
@@ -210,7 +210,7 @@ test("persists real extraction, structured blocks, and search results across rel
   search = await openSearch(page)
   await search.fill("Quartz falcons")
   await expect(page.getByText("1 match across sources")).toBeVisible()
-  await expect(page.getByText(distinctive, { exact: false })).toBeVisible()
+  await expect(page.getByTestId("source-search-result").getByText(distinctive, { exact: false })).toBeVisible()
 
   const afterReload = (await readStoredState(page)).project
   expect(Object.fromEntries(Object.entries(afterReload.sourceExtractions)
@@ -462,7 +462,7 @@ test("duplicates extracted sources with copied file IDs and preserves searchable
   const search = await openSearch(page)
   await search.fill("amber-orbit")
   await expect(page.getByText("1 match across sources")).toBeVisible()
-  await expect(page.getByText(searchableText, { exact: false })).toBeVisible()
+  await expect(page.getByTestId("source-search-result").getByText(searchableText, { exact: false })).toBeVisible()
 
   const reloadedState = await readAllStoredState(page)
   const reloadedDuplicate = reloadedState.projects.find(project => project.projectId === duplicate.projectId)!
