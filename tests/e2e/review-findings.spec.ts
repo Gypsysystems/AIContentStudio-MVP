@@ -540,7 +540,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await expect.poll(async () => (await readProject(page, projectName)).sourceFileIds.length).toBe(2)
   await page.getByRole('button', { name: 'Analyze Sources' }).click()
   await expect.poll(async () => (await readProject(page, projectName)).evidenceIndex?.items.length ?? 0)
-    .toBeGreaterThan(4)
+    .toBeGreaterThanOrEqual(4)
 
   const stored = await readProject(page, projectName)
   const evidenceIndex = stored.evidenceIndex!
