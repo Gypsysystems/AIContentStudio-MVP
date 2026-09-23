@@ -34,7 +34,10 @@ export type ReviewEvidenceReference = {
   sourceId?: string
   fileId?: string
   sourceFileName?: string
+  blockId?: string
   location?: string
+  sectionPath?: string[]
+  excerpt?: string
 }
 
 export type ReviewStyleReference = {
@@ -73,7 +76,9 @@ export type ReviewFreshness = {
 
 export type ReviewFinding = {
   findingId: string
+  findingKey: string
   reviewRunId: string
+  inputSnapshotId: string
   projectId: string
   topicId: string | null
   blockId: string | null
@@ -82,6 +87,7 @@ export type ReviewFinding = {
   required: boolean
   originalText: string | null
   claimFingerprint: string | null
+  rationale: string
   sourceReferences: ReviewSourceReference[]
   evidenceReferences: ReviewEvidenceReference[]
   styleReferences: ReviewStyleReference[]
@@ -99,6 +105,7 @@ export type ReviewFinding = {
 
 export type ReviewRun = {
   reviewRunId: string
+  inputSnapshotId: string
   projectId: string
   findingIds: string[]
   inputProvenance: ReviewInputProvenance
@@ -163,6 +170,7 @@ export function hydrateReviewModel(value: unknown, projectId: string): ReviewMod
     runs: runs.map(run => ({
       ...run,
       projectId,
+      inputSnapshotId: typeof run.inputSnapshotId === 'string' ? run.inputSnapshotId : '',
       findingIds: (run.findingIds ?? []).filter(findingId => findingIds.has(findingId)),
       inputProvenance: {
         ...run.inputProvenance,
@@ -173,6 +181,9 @@ export function hydrateReviewModel(value: unknown, projectId: string): ReviewMod
     findings: findings.map(finding => ({
       ...finding,
       projectId,
+      findingKey: typeof finding.findingKey === 'string' ? finding.findingKey : finding.findingId,
+      inputSnapshotId: typeof finding.inputSnapshotId === 'string' ? finding.inputSnapshotId : '',
+      rationale: typeof finding.rationale === 'string' ? finding.rationale : '',
       sourceReferences: (finding.sourceReferences ?? []).map(reference => ({
         ...reference,
         projectId,
@@ -181,6 +192,7 @@ export function hydrateReviewModel(value: unknown, projectId: string): ReviewMod
       evidenceReferences: (finding.evidenceReferences ?? []).map(reference => ({
         ...reference,
         projectId,
+        sectionPath: reference.sectionPath ? [...reference.sectionPath] : undefined,
       })),
       styleReferences: (finding.styleReferences ?? []).map(reference => ({ ...reference })),
       suggestion: finding.suggestion
@@ -254,6 +266,7 @@ export function remapReviewModelForDuplicate(
         projectId: copiedProjectId,
         sourceId: reference.sourceId ? remapFileId(reference.sourceId, fileIdMap) : undefined,
         fileId: reference.fileId ? remapFileId(reference.fileId, fileIdMap) : undefined,
+        sectionPath: reference.sectionPath ? [...reference.sectionPath] : undefined,
       })),
       styleReferences: finding.styleReferences.map(reference => ({ ...reference })),
       suggestion: finding.suggestion

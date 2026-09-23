@@ -70,12 +70,17 @@ import {
   createEmptyReviewModel,
   hydrateReviewModel,
   reconcileReviewModelTopics,
+  type ReviewFindingStatus,
   type ReviewModel,
 } from './reviewModel'
 import {
   buildReviewInputSnapshot,
   type ReviewInputSnapshot,
 } from './reviewInput'
+import {
+  buildGroundedReviewRun,
+  markReviewHistoryFreshness,
+} from './reviewFindings'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -12217,6 +12222,236 @@ function KnowledgeMapScreen({ onNav, onBack }: { onNav: (s: Screen) => void; onB
 // ── Screen: Quality Review ────────────────────────────────────────────────────
 const DISMISS_REASONS = ['Intentional', 'Not applicable', 'False positive', 'Approved exception', 'Other']
 
+function RealReviewFindingsPanel({
+  reviewModel,
+  snapshot,
+  onRun,
+  onSetStatus,
+}: {
+  reviewModel: ReviewModel
+  snapshot: ReviewInputSnapshot | null
+  onRun: () => string | null
+  onSetStatus: (findingId: string, status: ReviewFindingStatus) => void
+}) {
+  const [categoryFilter, setCategoryFilter] = useState('All')
+  const [statusFilter, setStatusFilter] = useState('active')
+  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null)
+  const [viewRunId, setViewRunId] = useState<string | null>(reviewModel.activeReviewRunId)
+  const [runError, setRunError] = useState<string | null>(null)
+  useEffect(() => {
+    setViewRunId(reviewModel.activeReviewRunId)
+    setSelectedFindingId(null)
+  }, [reviewModel.activeReviewRunId])
+
+  const selectedRunId = viewRunId ?? reviewModel.activeReviewRunId
+  const run = reviewModel.runs.find(item => item.reviewRunId === selectedRunId) ?? null
+  const runFindings = run
+    ? run.findingIds.flatMap(id => {
+        const finding = reviewModel.findings.find(item => item.findingId === id)
+        return finding ? [finding] : []
+      })
+    : []
+  const categories = ['All', 'Unsupported Claim', 'Source Gap', 'Conflict', 'Terminology']
+  const visibleFindings = runFindings.filter(finding =>
+    (categoryFilter === 'All' || finding.category === categoryFilter)
+    && (statusFilter === 'all'
+      || (statusFilter === 'active'
+        ? finding.status === 'open' || finding.status === 'in-review'
+        : finding.status === statusFilter)))
+  const selectedFinding = reviewModel.findings.find(item => item.findingId === selectedFindingId) ?? null
+  const categoryClass: Record<string, string> = {
+    'Unsupported Claim': 'bg-[#FEF3C7] text-[#92400E]',
+    'Source Gap': 'bg-[#FEE2E2] text-[#991B1B]',
+    Conflict: 'bg-[#FCE7F3] text-[#9D174D]',
+    Terminology: 'bg-[#E0E7FF] text-[#3730A3]',
+  }
+  const canRun = snapshot?.readiness === 'ready'
+  const handleRun = () => {
+    const error = onRun()
+    setRunError(error)
+  }
+
+  return (
+    <div data-testid="real-review-findings">
+      <div className="mb-5 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-[#111218]">Grounded Review</h2>
+          <p className="mt-1 text-[13px] text-[#6B6B7E]">
+            Unsupported claims, source-backed gaps, evidence-backed conflicts, and grounded terminology only.
+          </p>
+        </div>
+        <button
+          data-testid="run-grounded-review"
+          type="button"
+          disabled={!canRun}
+          onClick={handleRun}
+          className="shrink-0 rounded-lg bg-[#5B5BD6] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {reviewModel.activeReviewRunId ? 'Run Review Again' : 'Run Grounded Review'}
+        </button>
+      </div>
+
+      {!canRun && (
+        <div data-testid="review-run-blocked" className="mb-5 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-4 text-[12px] text-[#92400E]">
+          A new current Review run is blocked because project inputs are missing or stale. Resolve the input diagnostics above; no findings will be fabricated.
+        </div>
+      )}
+      {runError && (
+        <div className="mb-5 rounded-xl border border-[#FECACA] bg-[#FEF2F2] p-4 text-[12px] text-[#991B1B]">
+          {runError}
+        </div>
+      )}
+
+      {reviewModel.runs.length === 0 ? (
+        <div className="rounded-xl border border-[#E2DED7] bg-[#F9F8F6] p-8 text-center">
+          <p className="text-[14px] font-semibold text-[#111218]">No grounded Review run yet</p>
+          <p className="mt-1 text-[12px] text-[#6B6B7E]">Current inputs must be ready before findings can be generated.</p>
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 grid gap-3 rounded-xl border border-[#E2DED7] bg-[#F9F8F6] p-3 sm:grid-cols-3">
+            <label className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">
+              Review run
+              <select
+                data-testid="review-run-filter"
+                value={selectedRunId ?? ''}
+                onChange={event => setViewRunId(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
+              >
+                {[...reviewModel.runs].reverse().map((item, index) => (
+                  <option key={item.reviewRunId} value={item.reviewRunId}>
+                    {item.reviewRunId === reviewModel.activeReviewRunId ? 'Current' : `History ${index}`} · {item.status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">
+              Category
+              <select
+                data-testid="review-category-filter"
+                value={categoryFilter}
+                onChange={event => setCategoryFilter(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
+              >
+                {categories.map(category => <option key={category}>{category}</option>)}
+              </select>
+            </label>
+            <label className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">
+              Status
+              <select
+                data-testid="review-status-filter"
+                value={statusFilter}
+                onChange={event => setStatusFilter(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
+              >
+                <option value="active">Open / In Review</option>
+                <option value="all">All</option>
+                <option value="resolved">Resolved</option>
+                <option value="dismissed">Dismissed</option>
+                <option value="retired">Retired</option>
+              </select>
+            </label>
+          </div>
+
+          {run && (
+            <div data-testid="review-run-provenance" className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-[#9898AB]">
+              <span className="font-mono">{run.reviewRunId}</span>
+              <span>Snapshot <span className="font-mono">{run.inputSnapshotId}</span></span>
+              <span>Content revision {run.inputProvenance.contentRevision}</span>
+              <span>Analysis revision {run.inputProvenance.analysisRevision ?? 'N/A'}</span>
+              <span>{run.findingIds.length} findings</span>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {visibleFindings.length === 0 && (
+              <div className="rounded-xl border border-[#E2DED7] bg-white p-6 text-center text-[12px] text-[#9898AB]">
+                No findings match these filters.
+              </div>
+            )}
+            {visibleFindings.map(finding => (
+              <article data-testid="grounded-review-finding" key={finding.findingId} className="rounded-xl border border-[#E2DED7] bg-white p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${categoryClass[finding.category] ?? 'bg-[#F4F2EE] text-[#6B6B7E]'}`}>
+                        {finding.category}
+                      </span>
+                      <span className="text-[10px] font-semibold uppercase text-[#6B6B7E]">{finding.severity}</span>
+                      <span className="text-[10px] text-[#9898AB]">{finding.required ? 'Required' : 'Optional'}</span>
+                      <span className="text-[10px] text-[#9898AB]">{finding.status}</span>
+                      {finding.freshness.status === 'stale' && <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-semibold text-[#92400E]">Stale history</span>}
+                    </div>
+                    <p className="text-[13px] font-medium text-[#111218]">{finding.originalText ?? finding.rationale}</p>
+                    <p className="mt-1 font-mono text-[10px] text-[#9898AB]">
+                      {finding.topicId ?? 'project'}{finding.blockId ? ` / ${finding.blockId}` : ''} · {finding.findingId}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFindingId(selectedFindingId === finding.findingId ? null : finding.findingId)}
+                    className="shrink-0 rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] hover:bg-[#EEEEFF]"
+                  >
+                    {selectedFindingId === finding.findingId ? 'Close' : 'Inspect'}
+                  </button>
+                </div>
+
+                {selectedFindingId === finding.findingId && selectedFinding && (
+                  <div data-testid="review-finding-inspector" className="mt-4 border-t border-[#F4F2EE] pt-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Rationale</p>
+                    <p className="mt-1 text-[12px] text-[#3D3D4E]">{selectedFinding.rationale}</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <div className="rounded-lg bg-[#F9F8F6] p-3 text-[10px] text-[#6B6B7E]">
+                        <p><span className="font-semibold">Finding key:</span> <span className="font-mono">{selectedFinding.findingKey}</span></p>
+                        <p className="mt-1"><span className="font-semibold">Claim fingerprint:</span> <span className="font-mono">{selectedFinding.claimFingerprint}</span></p>
+                        <p className="mt-1"><span className="font-semibold">Snapshot:</span> <span className="font-mono">{selectedFinding.inputSnapshotId}</span></p>
+                      </div>
+                      <div className="rounded-lg bg-[#F9F8F6] p-3 text-[10px] text-[#6B6B7E]">
+                        <p><span className="font-semibold">Topic:</span> <span className="font-mono">{selectedFinding.topicId ?? 'Project context'}</span></p>
+                        <p className="mt-1"><span className="font-semibold">Block:</span> <span className="font-mono">{selectedFinding.blockId ?? 'No precise block'}</span></p>
+                        <p className="mt-1"><span className="font-semibold">Created from content revision:</span> {selectedFinding.inputProvenance.contentRevision}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Supporting evidence</p>
+                      {selectedFinding.evidenceReferences.length === 0 ? (
+                        <p className="mt-1 text-[11px] text-[#9898AB]">No near-match evidence exists for this unsupported claim.</p>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {selectedFinding.evidenceReferences.map(reference => (
+                            <div key={reference.evidenceId} className="rounded-lg border border-[#E2DED7] bg-[#FCFBFA] p-3">
+                              <p className="text-[11px] font-medium text-[#111218]">{reference.sourceFileName} · {reference.location}</p>
+                              <p className="mt-0.5 font-mono text-[9px] text-[#9898AB]">{reference.evidenceId} · {reference.blockId}</p>
+                              {reference.excerpt && <p className="mt-1 text-[11px] text-[#6B6B7E]">“{reference.excerpt}”</p>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {selectedFinding.status !== 'retired' && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedFinding.status !== 'resolved' && (
+                          <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'resolved')} className="rounded-lg border border-[#86EFAC] bg-[#F0FDF4] px-3 py-1.5 text-[11px] font-medium text-[#15803D]">Mark resolved</button>
+                        )}
+                        {selectedFinding.status !== 'dismissed' && (
+                          <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'dismissed')} className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E]">Dismiss</button>
+                        )}
+                        {(selectedFinding.status === 'resolved' || selectedFinding.status === 'dismissed') && (
+                          <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'open')} className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6]">Reopen</button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function QualityScreen({
   onNav,
   findingStatuses,
@@ -12229,6 +12464,9 @@ function QualityScreen({
   reviewStaleContent,
   isDemoMode,
   reviewInputSnapshot,
+  reviewModel,
+  onRunGroundedReview,
+  onSetGroundedFindingStatus,
 }: {
   onNav: (s: Screen) => void
   findingStatuses: Record<number, FindingStatus>
@@ -12241,6 +12479,9 @@ function QualityScreen({
   reviewStaleContent?: boolean
   isDemoMode?: boolean
   reviewInputSnapshot?: ReviewInputSnapshot | null
+  reviewModel: ReviewModel
+  onRunGroundedReview: () => string | null
+  onSetGroundedFindingStatus: (findingId: string, status: ReviewFindingStatus) => void
 }) {
   const stage = reviewStage
   const setStage = onSetReviewStage
@@ -12713,7 +12954,14 @@ function QualityScreen({
     </div>
   )
 
-  const renderStage1 = () => (
+  const renderStage1 = () => !isDemoMode ? (
+    <RealReviewFindingsPanel
+      reviewModel={reviewModel}
+      snapshot={reviewInputSnapshot ?? null}
+      onRun={onRunGroundedReview}
+      onSetStatus={onSetGroundedFindingStatus}
+    />
+  ) : (
     <div>
       <div className="mb-6">
         <h2 className="text-xl font-semibold text-[#111218] mb-1">AI Review</h2>
@@ -14742,12 +14990,17 @@ export default function App() {
   ])
   useEffect(() => {
     if (appLoading || isDemoMode || !currentReviewInputSnapshot) return
-    if (reviewModel.inputSnapshot?.snapshotId === currentReviewInputSnapshot.snapshotId) return
-    setReviewModel(current => ({
+    const alreadyCurrent = reviewModel.inputSnapshot?.snapshotId === currentReviewInputSnapshot.snapshotId
+      && reviewModel.findings.every(finding =>
+        finding.freshness.status === (finding.inputSnapshotId === currentReviewInputSnapshot.snapshotId ? 'current' : 'stale'))
+      && reviewModel.runs.every(run =>
+        run.inputSnapshotId === currentReviewInputSnapshot.snapshotId || run.status === 'stale')
+    if (alreadyCurrent) return
+    setReviewModel(current => markReviewHistoryFreshness({
       ...current,
       inputSnapshot: currentReviewInputSnapshot,
       updatedAt: currentReviewInputSnapshot.capturedAt,
-    }))
+    }, currentReviewInputSnapshot, currentReviewInputSnapshot.capturedAt))
     triggerAutosave()
   }, [
     appLoading,
@@ -14756,6 +15009,62 @@ export default function App() {
     reviewModel.inputSnapshot?.snapshotId,
     triggerAutosave,
   ])
+  const handleRunGroundedReview = useCallback((): string | null => {
+    if (isDemoMode) return 'Grounded Review runs are not created from demo data.'
+    const result = buildGroundedReviewRun(
+      reviewModel,
+      currentReviewInputSnapshot,
+      evidenceIndex,
+      conceptAnalysis,
+      unsupportedAnalysis,
+    )
+    if (!result.ok) return result.reason
+    setReviewModel(result.model)
+    setAiReviewDone(true)
+    setReviewRevision(contentRevision)
+    triggerAutosave(true)
+    return null
+  }, [
+    conceptAnalysis,
+    contentRevision,
+    currentReviewInputSnapshot,
+    evidenceIndex,
+    isDemoMode,
+    reviewModel,
+    triggerAutosave,
+    unsupportedAnalysis,
+  ])
+  const handleSetGroundedFindingStatus = useCallback((
+    findingId: string,
+    status: ReviewFindingStatus,
+  ) => {
+    const at = Date.now()
+    setReviewModel(current => {
+      let changed = false
+      const findings = current.findings.map(finding => {
+        if (finding.findingId !== findingId || finding.status === status) return finding
+        changed = true
+        return {
+          ...finding,
+          status,
+          dismissalReason: status === 'dismissed' ? 'Dismissed in Review' : null,
+          updatedAt: at,
+          resolutionHistory: [
+            ...finding.resolutionHistory,
+            {
+              eventId: `review-history-${findingId}-${at}`,
+              status,
+              reason: status === 'dismissed' ? 'Dismissed in Review' : undefined,
+              actor: 'user' as const,
+              at,
+            },
+          ],
+        }
+      })
+      return changed ? { ...current, findings, updatedAt: at } : current
+    })
+    triggerAutosave()
+  }, [triggerAutosave])
   const groundingTheme = themes.find(theme => theme.id === projectMeta.themeId)
   const buildGroundingInput = useCallback((topic: TocItem): TopicGroundingBuildInput => {
     const topicId = stableAuthorTopicId(topic)
@@ -15545,7 +15854,7 @@ export default function App() {
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
-      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} />
+      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
       case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
       default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
