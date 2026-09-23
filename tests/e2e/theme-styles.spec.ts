@@ -189,10 +189,10 @@ test("falls back safely when the persisted style profile ID is missing or invali
     await expect(
       page.getByRole("heading", { name: "Theme & Style Profiles" }),
     ).toBeVisible()
-    await expect(
+    await expect.soft(
       page.getByRole("textbox", { name: "Search profiles…" }),
     ).toHaveValue(profileName)
-    await expect(
+    await expect.soft(
       page.getByRole("button", { name: "Apply to Project" }),
     ).toBeVisible()
     await page.getByRole("button", { name: "Sources", exact: true }).click()
