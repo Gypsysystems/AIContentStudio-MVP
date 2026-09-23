@@ -1,2 +1,2 @@
 - [Style profile recovery](style-profile-recovery.md) — project metadata is primary; keep the legacy applied-profile ID synchronized during recovery.
-- [Page layout brand inheritance](page-layout-brand-inheritance.md) — layout previews resolve applied-brand defaults dynamically while preserving explicit legacy overrides.
+- [Layout and master brand inheritance](page-layout-brand-inheritance.md) — previews resolve applied-brand defaults dynamically while preserving explicit local overrides.

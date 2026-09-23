@@ -294,6 +294,42 @@ const resolvePageLayoutPresentation = (
   }
 }
 
+type ResolvedHtmlMasterPresentation = {
+  pageBgColor: string
+  surfaceColor: string
+  headerBgColor: string
+  headerTextColor: string
+  footerBgColor: string
+  headingColor: string
+  bodyColor: string
+  linkColor: string
+  accentColor: string
+  borderColor: string
+  headingFont: string
+  bodyFont: string
+  logoDataUrl?: string
+  logoLabel: string
+}
+
+const resolveHtmlMasterPresentation = (
+  profile: StyleProfile,
+): ResolvedHtmlMasterPresentation => ({
+  pageBgColor: profile.bgColor ?? '#FFFFFF',
+  surfaceColor: profile.surfaceColor ?? '#F9F8F6',
+  headerBgColor: profile.primaryColor ?? '#5B5BD6',
+  headerTextColor: profile.surfaceColor ?? '#FFFFFF',
+  footerBgColor: profile.secondaryColor ?? profile.primaryColor ?? '#111218',
+  headingColor: profile.headingTextColor ?? profile.h1.color,
+  bodyColor: profile.bodyTextColor ?? profile.body.color,
+  linkColor: profile.linkColor ?? profile.links.color,
+  accentColor: profile.accentColor ?? profile.primaryColor ?? '#5B5BD6',
+  borderColor: profile.borderColorToken ?? profile.tables.borderColor,
+  headingFont: profile.headingFont ?? profile.h1.fontFamily,
+  bodyFont: profile.bodyFont ?? profile.body.fontFamily,
+  logoDataUrl: profile.logoDataUrl,
+  logoLabel: profile.logoLabel ?? profile.name.slice(0, 6).toUpperCase(),
+})
+
 const INITIAL_THEMES: Theme[] = [
   {
     id: 'th1', name: 'Presight', description: 'Clean, modern documentation with Presight brand identity',
@@ -1379,8 +1415,10 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
   ]
   const getMasterBlocks = (id: string, type: string): MasterBlock[] =>
     htmlMasterPages.find(p => p.id === id)?.blocks ?? (type === 'home' ? defaultHomeBlocks : defaultTopicBlocks)
-  const setMasterBlocks = (id: string, blocks: MasterBlock[]) =>
+  const setMasterBlocks = (id: string, blocks: MasterBlock[]) => {
     onHtmlMasterPagesChange(htmlMasterPages.map(p => p.id === id ? { ...p, blocks } : p))
+    triggerHmpSave()
+  }
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
   const [responsiveView, setResponsiveView] = useState<'desktop' | 'tablet' | 'mobile'>('desktop')
@@ -1406,6 +1444,17 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
     const blocks = getMasterBlocks(editHmpId, editHmp?.masterType ?? 'topic')
     setMasterBlocks(editHmpId, blocks.map(b => b.id === blockId ? { ...b, props: { ...(b.props ?? {}), ...patch } } : b))
   }
+  const resetBlockPropsToBrand = (blockId: string, keys: string[]) => {
+    const blocks = getMasterBlocks(editHmpId, editHmp?.masterType ?? 'topic')
+    setMasterBlocks(editHmpId, blocks.map(block => {
+      if (block.id !== blockId) return block
+      const nextProps = { ...(block.props ?? {}) }
+      keys.forEach(key => delete nextProps[key])
+      return { ...block, props: nextProps }
+    }))
+    triggerHmpSave()
+  }
+  const htmlMasterPresentation = resolveHtmlMasterPresentation(effectiveStyleProfile)
 
   // Profile patching helpers
   const patchProfile = (patch: Partial<StyleProfile>) => setLocalProfiles(prev => prev.map(p => p.id === editId ? { ...p, ...patch } : p))
@@ -3198,8 +3247,8 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
               patchBlockProps(newBlock.id, getDefaultProps(newBlock.type))
             }
             const getDefaultProps = (type: string): Record<string, unknown> => {
-              if (type === 'hero') return { heading: 'Welcome to Our Documentation', description: 'Find guides, tutorials, and reference materials.', bgColor: '#5B5BD6', height: 'Standard', alignment: 'center', showSearch: true, showCta: true, ctaLabel: 'Get Started' }
-              if (type === 'welcome-text') return { heading: 'Welcome', body: 'Find guidance, tutorials, and reference information.', bgColor: '', fontSize: 'Standard' }
+              if (type === 'hero') return { heading: 'Welcome to Our Documentation', description: 'Find guides, tutorials, and reference materials.', height: 'Standard', alignment: 'center', showSearch: true, showCta: true, ctaLabel: 'Get Started' }
+              if (type === 'welcome-text') return { heading: 'Welcome', body: 'Find guidance, tutorials, and reference information.', fontSize: 'Standard' }
               if (type === 'navigation-cards') return { title: 'Browse by Category', columns: 3, cards: [{id:'c1',title:'Getting Started',desc:'Begin here',icon:'🚀'},{id:'c2',title:'API Reference',desc:'Technical docs',icon:'📖'},{id:'c3',title:'Tutorials',desc:'Step by step',icon:'🎓'},{id:'c4',title:'FAQ',desc:'Common questions',icon:'❓'},{id:'c5',title:'Community',desc:'Join the discussion',icon:'💬'},{id:'c6',title:'Release Notes',desc:'What\'s new',icon:'📋'}] }
               if (type === 'announcement-banner') return { variant: 'info', text: 'Welcome to the documentation portal!', dismissible: true }
               if (type === 'accordion-/-faq') return { title: 'Frequently Asked Questions', items: [{id:'a1',q:'What is this?',a:'This is a documentation portal.'},{id:'a2',q:'How do I get started?',a:'See the Getting Started guide.'},{id:'a3',q:'Where can I find support?',a:'Visit our community forum.'}], mode: 'single' }
@@ -3242,25 +3291,28 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   className={`relative group border-b border-[#F4F2EE] transition-all cursor-pointer ${isSelected ? 'ring-2 ring-[#5B5BD6] ring-inset' : 'hover:bg-[#FAFAF9]'} ${isHidden ? 'opacity-40' : ''} ${dragOverIdx === idx ? 'border-t-2 border-t-[#5B5BD6]' : ''}`}>
                   {/* Block content */}
                   {block.type === 'header' && (
-                    <div className="flex items-center gap-2 px-3 py-2" style={{ backgroundColor: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6' }}>
-                      {editHmp?.showLogo && <div className="w-5 h-5 bg-white/20 rounded text-white text-[8px] font-bold flex items-center justify-center">L</div>}
-                      <span className="text-[10px] font-semibold flex-1" style={{ color: (bp.textColor as string) || '#FFFFFF' }}>{(bp.siteTitle as string) || 'Documentation'}</span>
+                    <div className="flex items-center gap-2 px-3 py-2" data-testid="html-master-header"
+                      style={{ backgroundColor: (bp.bgColor as string) || htmlMasterPresentation.headerBgColor }}>
+                      {editHmp?.showLogo && (htmlMasterPresentation.logoDataUrl
+                        ? <img src={htmlMasterPresentation.logoDataUrl} alt={htmlMasterPresentation.logoLabel} className="h-5 max-w-16 object-contain" />
+                        : <div className="min-w-5 h-5 px-1 bg-white/20 rounded text-[8px] font-bold flex items-center justify-center" style={{ color: (bp.textColor as string) || htmlMasterPresentation.headerTextColor }}>{htmlMasterPresentation.logoLabel}</div>)}
+                      <span className="text-[10px] font-semibold flex-1" style={{ color: (bp.textColor as string) || htmlMasterPresentation.headerTextColor, fontFamily: htmlMasterPresentation.headingFont }}>{(bp.siteTitle as string) || 'Documentation'}</span>
                       {editHmp?.showSearch && <div className="h-5 w-16 bg-white/20 rounded text-white/70 text-[8px] flex items-center px-1.5">Search…</div>}
                     </div>
                   )}
                   {block.type === 'hero' && (
                     <div className="px-4 py-5 text-center relative overflow-hidden"
-                      style={{ background: (bp.bgColor as string) || '#5B5BD6' }}>
-                      <p className="text-white font-bold text-[11px] mb-1">{(bp.heading as string) || 'Welcome to Our Documentation'}</p>
-                      <p className="text-white/75 text-[8px] mb-2">{(bp.description as string) || 'Find guides and tutorials'}</p>
+                      style={{ background: (bp.bgColor as string) || htmlMasterPresentation.headerBgColor }}>
+                      <p className="font-bold text-[11px] mb-1" style={{ color: htmlMasterPresentation.headerTextColor, fontFamily: htmlMasterPresentation.headingFont }}>{(bp.heading as string) || 'Welcome to Our Documentation'}</p>
+                      <p className="text-[8px] mb-2 opacity-80" style={{ color: htmlMasterPresentation.headerTextColor, fontFamily: htmlMasterPresentation.bodyFont }}>{(bp.description as string) || 'Find guides and tutorials'}</p>
                       {!!bp.showSearch && <div className="inline-flex bg-white/20 rounded-full px-3 py-1 text-white text-[8px] mb-2">🔍 Search documentation…</div>}
-                      {!!bp.showCta && <div className="inline-flex bg-white text-[#5B5BD6] rounded px-2 py-0.5 text-[8px] font-semibold ml-1">{(bp.ctaLabel as string) || 'Get Started'}</div>}
+                      {!!bp.showCta && <div className="inline-flex rounded px-2 py-0.5 text-[8px] font-semibold ml-1" style={{ backgroundColor: htmlMasterPresentation.pageBgColor, color: htmlMasterPresentation.accentColor }}>{(bp.ctaLabel as string) || 'Get Started'}</div>}
                     </div>
                   )}
                   {block.type === 'welcome-text' && (
-                    <div className="px-4 py-3" style={{ background: (bp.bgColor as string) || 'transparent' }}>
-                      {!!bp.heading && <p className="text-[10px] font-bold text-[#111218] mb-1">{bp.heading as string}</p>}
-                      <p className="text-[9px] text-[#6B6B7E]">{(bp.body as string) || 'Welcome text goes here.'}</p>
+                    <div className="px-4 py-3" style={{ background: (bp.bgColor as string) || htmlMasterPresentation.pageBgColor }}>
+                      {!!bp.heading && <p className="text-[10px] font-bold mb-1" style={{ color: htmlMasterPresentation.headingColor, fontFamily: htmlMasterPresentation.headingFont }}>{bp.heading as string}</p>}
+                      <p className="text-[9px]" style={{ color: htmlMasterPresentation.bodyColor }}>{(bp.body as string) || 'Welcome text goes here.'}</p>
                     </div>
                   )}
                   {block.type === 'rich-text' && (
@@ -3274,7 +3326,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   )}
                   {block.type === 'heading' && (
                     <div className="px-4 py-2">
-                      <p className="font-bold text-[#111218]" style={{ fontSize: (bp.level as number) === 2 ? 12 : (bp.level as number) === 3 ? 10 : 14 }}>{(bp.text as string) || 'Section Heading'}</p>
+                      <p className="font-bold" style={{ fontSize: (bp.level as number) === 2 ? 12 : (bp.level as number) === 3 ? 10 : 14, color: htmlMasterPresentation.headingColor, fontFamily: htmlMasterPresentation.headingFont }}>{(bp.text as string) || 'Section Heading'}</p>
                     </div>
                   )}
                   {block.type === 'search' && (
@@ -3299,7 +3351,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                     <div className="px-3 py-2">
                       {(bp as {title?: string}).title && <p className="text-[9px] font-semibold text-[#111218] mb-1.5">{(bp as {title: string}).title}</p>}
                       {((bp.links as Array<{id:string;label:string}>) || [{id:'l1',label:'Quick Start Guide'},{id:'l2',label:'API Authentication'},{id:'l3',label:'Release Notes'}]).map(l => (
-                        <div key={l.id} className="text-[8px] py-0.5" style={{ color: (bp.accentColor as string) || editProfile?.accentColor || '#5B5BD6' }}>→ {l.label}</div>
+                        <div key={l.id} className="text-[8px] py-0.5" style={{ color: (bp.accentColor as string) || htmlMasterPresentation.linkColor }}>→ {l.label}</div>
                       ))}
                     </div>
                   )}
@@ -3349,7 +3401,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   {block.type === 'progress-bar' && (
                     <div className="px-4 py-2">
                       <div className="flex justify-between mb-1"><span className="text-[8px] text-[#6B6B7E]">{(bp.label as string) || 'Progress'}</span>{!!bp.showPercent && <span className="text-[8px] font-semibold text-[#5B5BD6]">{(bp.value as number) || 0}%</span>}</div>
-                      <div className="bg-[#E5E5EA] rounded-full h-2 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${(bp.value as number) || 0}%`, backgroundColor: (bp.barColor as string) || editProfile?.primaryColor || '#5B5BD6' }} /></div>
+                      <div className="rounded-full h-2 overflow-hidden" style={{ backgroundColor: htmlMasterPresentation.surfaceColor }}><div className="h-full rounded-full" style={{ width: `${(bp.value as number) || 0}%`, backgroundColor: (bp.barColor as string) || htmlMasterPresentation.accentColor }} /></div>
                     </div>
                   )}
                   {block.type === 'recent-content' && (
@@ -3373,7 +3425,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   {block.type === 'button-/-cta' && (
                     <div className={`px-4 py-3 flex ${(bp.alignment as string) === 'right' ? 'justify-end' : (bp.alignment as string) === 'left' ? 'justify-start' : 'justify-center'}`}>
                       <div className={`px-3 py-1.5 rounded-lg text-[9px] font-semibold ${(bp.variant as string) === 'secondary' ? 'border text-[#5B5BD6]' : (bp.variant as string) === 'ghost' ? 'text-[#5B5BD6]' : 'text-white'}`}
-                        style={(bp.variant as string) === 'secondary' ? { borderColor: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6', color: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6' } : (bp.variant as string) === 'ghost' ? { color: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6' } : { backgroundColor: (bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6' }}>
+                        style={(bp.variant as string) === 'secondary' ? { borderColor: (bp.bgColor as string) || htmlMasterPresentation.accentColor, color: (bp.bgColor as string) || htmlMasterPresentation.accentColor } : (bp.variant as string) === 'ghost' ? { color: (bp.bgColor as string) || htmlMasterPresentation.accentColor } : { backgroundColor: (bp.bgColor as string) || htmlMasterPresentation.accentColor }}>
                         {(bp.label as string) || 'Learn More'}
                       </div>
                     </div>
@@ -3393,8 +3445,8 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                     </div>
                   )}
                   {block.type === 'footer' && (
-                    <div className="px-3 py-2 text-center" style={{ backgroundColor: (bp.bgColor as string) || '#111218' }}>
-                      <p className="text-[8px]" style={{ color: (bp.textColor as string) || '#9898AB' }}>{(bp.copyrightText as string) || '© 2026 Organization · Privacy · Terms · Contact'}</p>
+                    <div className="px-3 py-2 text-center" style={{ backgroundColor: (bp.bgColor as string) || htmlMasterPresentation.footerBgColor }}>
+                      <p className="text-[8px]" style={{ color: (bp.textColor as string) || htmlMasterPresentation.headerTextColor }}>{(bp.copyrightText as string) || '© 2026 Organization · Privacy · Terms · Contact'}</p>
                     </div>
                   )}
                   {block.type === 'body' && (
@@ -3503,8 +3555,14 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                       <input value={(bp.heading as string) || ''} onChange={e => patch({ heading: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Description</label>
                       <textarea value={(bp.description as string) || ''} onChange={e => patch({ description: e.target.value })} rows={2} className="w-full px-2 py-1 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6] resize-none" /></div>
-                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Background Color</label>
-                      <input type="color" value={(bp.bgColor as string) || '#5B5BD6'} onChange={e => patch({ bgColor: e.target.value })} className="w-full h-7 rounded border border-[#E2DED7]" /></div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] text-[#9898AB]">Background Color</label>
+                        <span className="text-[9px] text-[#9898AB]">{bp.bgColor ? 'Block override' : 'Inherited from Brand'}</span>
+                      </div>
+                      <input type="color" value={(bp.bgColor as string) || htmlMasterPresentation.headerBgColor} onChange={e => patch({ bgColor: e.target.value })} className="w-full h-7 rounded border border-[#E2DED7]" />
+                      {!!bp.bgColor && <button onClick={() => resetBlockPropsToBrand(selectedBlock.id, ['bgColor'])} className="mt-1 text-[9px] font-semibold text-[#5B5BD6] hover:text-[#4A4AC4]">Reset to Brand</button>}
+                    </div>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Alignment</label>
                       <div className="flex gap-1">{['left','center','right'].map(a => <button key={a} onClick={() => patch({ alignment: a })} className={`flex-1 py-1 rounded border text-[10px] capitalize ${(bp.alignment as string) === a ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{a}</button>)}</div></div>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Height</label>
@@ -3621,15 +3679,20 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   {selectedBlock.type === 'header' && <>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Site Title</label>
                       <input value={(bp.siteTitle as string) || ''} placeholder="Documentation" onChange={e => patch({ siteTitle: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
-                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Header Background</label>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] text-[#9898AB]">Header Background</label>
+                        <span data-testid="html-header-background-source" className="text-[9px] text-[#9898AB]">{bp.bgColor ? 'Block override' : 'Inherited from Brand'}</span>
+                      </div>
                       <div className="flex gap-1.5 items-center">
-                        <input type="color" value={(bp.bgColor as string) || editProfile?.primaryColor || '#5B5BD6'} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        <input data-testid="html-header-background-input" type="color" value={(bp.bgColor as string) || htmlMasterPresentation.headerBgColor} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
                         {brandColors.length > 0 && brandColors.slice(0,3).map((c, i) => (
                           <button key={i} title={c} onClick={() => patch({ bgColor: c })}
                             className={`w-5 h-5 rounded border-2 transition-all ${(bp.bgColor as string) === c ? 'border-[#5B5BD6]' : 'border-white shadow-sm'}`}
                             style={{ backgroundColor: c }} />
                         ))}
                       </div>
+                      {!!bp.bgColor && <button onClick={() => resetBlockPropsToBrand(selectedBlock.id, ['bgColor'])} className="mt-1 text-[9px] font-semibold text-[#5B5BD6] hover:text-[#4A4AC4]">Reset to Brand</button>}
                     </div>
                     <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showLogo ?? true} onChange={e => patchHmp({ showLogo: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Show Logo</span></label>
                     <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editHmp?.showSearch ?? true} onChange={e => patchHmp({ showSearch: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" /><span className="text-[11px] text-[#3D3D4E]">Show Search</span></label>
@@ -3656,15 +3719,17 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   {selectedBlock.type === 'footer' && <>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Copyright Text</label>
                       <input value={(bp.copyrightText as string) || ''} placeholder="© 2026 Organization · Privacy · Terms" onChange={e => patch({ copyrightText: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
-                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Footer Background</label>
+                    <div><div className="flex items-center justify-between mb-1"><label className="text-[10px] text-[#9898AB]">Footer Background</label><span className="text-[9px] text-[#9898AB]">{bp.bgColor ? 'Block override' : 'Inherited from Brand'}</span></div>
                       <div className="flex gap-1.5 items-center">
-                        <input type="color" value={(bp.bgColor as string) || '#111218'} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        <input type="color" value={(bp.bgColor as string) || htmlMasterPresentation.footerBgColor} onChange={e => patch({ bgColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
                       </div>
+                      {!!bp.bgColor && <button onClick={() => resetBlockPropsToBrand(selectedBlock.id, ['bgColor'])} className="mt-1 text-[9px] font-semibold text-[#5B5BD6]">Reset to Brand</button>}
                     </div>
-                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Text Color</label>
+                    <div><div className="flex items-center justify-between mb-1"><label className="text-[10px] text-[#9898AB]">Text Color</label><span className="text-[9px] text-[#9898AB]">{bp.textColor ? 'Block override' : 'Inherited from Brand'}</span></div>
                       <div className="flex gap-1.5 items-center">
-                        <input type="color" value={(bp.textColor as string) || '#9898AB'} onChange={e => patch({ textColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        <input type="color" value={(bp.textColor as string) || htmlMasterPresentation.headerTextColor} onChange={e => patch({ textColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
                       </div>
+                      {!!bp.textColor && <button onClick={() => resetBlockPropsToBrand(selectedBlock.id, ['textColor'])} className="mt-1 text-[9px] font-semibold text-[#5B5BD6]">Reset to Brand</button>}
                     </div>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={!!(bp.showSocialLinks)} onChange={e => patch({ showSocialLinks: e.target.checked })} className="w-3.5 h-3.5 rounded accent-[#5B5BD6]" />
@@ -3688,15 +3753,16 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                       ))}
                       <button onClick={() => { const links=[...((bp.links as Array<{id:string;label:string}>)||[]),{id:`l${Date.now()}`,label:'New Link'}]; patch({links}) }} className="w-full py-1 text-[10px] text-[#5B5BD6] border border-dashed border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF]">+ Add Link</button>
                     </div>
-                    <div><label className="block text-[10px] text-[#9898AB] mb-1">Link Color</label>
+                    <div><div className="flex items-center justify-between mb-1"><label className="text-[10px] text-[#9898AB]">Link Color</label><span className="text-[9px] text-[#9898AB]">{bp.accentColor ? 'Block override' : 'Inherited from Brand'}</span></div>
                       <div className="flex gap-1.5 items-center">
-                        <input type="color" value={(bp.accentColor as string) || editProfile?.accentColor || '#5B5BD6'} onChange={e => patch({ accentColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
+                        <input type="color" value={(bp.accentColor as string) || htmlMasterPresentation.linkColor} onChange={e => patch({ accentColor: e.target.value })} className="w-8 h-7 rounded border border-[#E2DED7] cursor-pointer p-0.5" />
                         {brandColors.slice(0,3).map((c, i) => (
                           <button key={i} title={c} onClick={() => patch({ accentColor: c })}
                             className={`w-5 h-5 rounded border-2 ${(bp.accentColor as string) === c ? 'border-[#5B5BD6]' : 'border-white shadow-sm'}`}
                             style={{ backgroundColor: c }} />
                         ))}
                       </div>
+                      {!!bp.accentColor && <button onClick={() => resetBlockPropsToBrand(selectedBlock.id, ['accentColor'])} className="mt-1 text-[9px] font-semibold text-[#5B5BD6]">Reset to Brand</button>}
                     </div>
                   </>}
                   {selectedBlock.type === 'button-/-cta' && <>
@@ -3961,7 +4027,16 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                         </div>
                       </div>
                       <div className="flex-1 overflow-y-auto p-3">
-                        <div className={`bg-white rounded-lg border border-[#E2DED7] overflow-hidden mx-auto transition-all ${responsiveView === 'mobile' ? 'max-w-[320px]' : responsiveView === 'tablet' ? 'max-w-[600px]' : 'w-full'}`}>
+                        <div data-testid="html-master-preview"
+                          data-header-background={((canvasBlocks.find(block => block.type === 'header')?.props?.bgColor as string) || htmlMasterPresentation.headerBgColor)}
+                          data-heading-color={htmlMasterPresentation.headingColor}
+                          data-body-color={htmlMasterPresentation.bodyColor}
+                          data-link-color={htmlMasterPresentation.linkColor}
+                          data-border-color={htmlMasterPresentation.borderColor}
+                          data-heading-font={htmlMasterPresentation.headingFont}
+                          data-body-font={htmlMasterPresentation.bodyFont}
+                          className={`rounded-lg border overflow-hidden mx-auto transition-all ${responsiveView === 'mobile' ? 'max-w-[320px]' : responsiveView === 'tablet' ? 'max-w-[600px]' : 'w-full'}`}
+                          style={{ backgroundColor: htmlMasterPresentation.pageBgColor, borderColor: htmlMasterPresentation.borderColor, color: htmlMasterPresentation.bodyColor, fontFamily: htmlMasterPresentation.bodyFont }}>
                           {canvasBlocks.length === 0 ? (
                             <div className="p-8 text-center">
                               <p className="text-[12px] text-[#9898AB] mb-2">No blocks yet</p>
