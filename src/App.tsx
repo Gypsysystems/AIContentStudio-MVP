@@ -45,6 +45,11 @@ import {
   type AuthorTopicMetadata,
   type AuthorTopicMetadataMap,
 } from './authorMetadata'
+import {
+  buildTopicGroundingContext,
+  isTopicGroundingContextFresh,
+  type TopicGroundingBuildInput,
+} from './authorGroundingContext'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -8533,7 +8538,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [outlineOpen, setOutlineOpen] = useState(true)
   const [tocWidth, setTocWidth] = useState(260)
@@ -8669,6 +8674,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const [aiResult, setAiResult] = useState<string | null>(null)
   const [aiResultUnavailable, setAiResultUnavailable] = useState(false)
   const [sourceRef, setSourceRef] = useState(false)
+  const [groundingOpen, setGroundingOpen] = useState(false)
   // New-topic AI assistance
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([])
   const [titleSugLoading, setTitleSugLoading] = useState(false)
@@ -9108,6 +9114,10 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const activeAuthorMetadata = activeStableTopicId
     ? authorTopicMetadata?.[activeStableTopicId]
     : undefined
+  const activeGroundingContext = activeAuthorMetadata?.groundingContext ?? null
+  const activeGroundingFresh = activeStableTopicId
+    ? groundingFreshnessByTopic?.[activeStableTopicId] ?? false
+    : false
   const availableAuthorSources: AuthorProjectSource[] = isDemoMode
     ? SOURCE_FILES.map(source => ({ fileId: `demo-source-${source.id}`, name: source.name }))
     : (projectSources ?? [])
@@ -9465,6 +9475,19 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.2"/><circle cx="6" cy="6" r="1.5" fill="currentColor"/></svg>
               Style
             </button>
+            {!isDemoMode && (
+              <button
+                type="button"
+                data-testid="author-grounding-toggle"
+                data-topic-id={activeStableTopicId ?? ''}
+                data-context-id={activeGroundingContext?.contextId ?? ''}
+                onClick={() => setGroundingOpen(open => !open)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${groundingOpen ? 'bg-[#EEF6FF] text-[#2563EB]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
+              >
+                Grounding
+                <span className={`w-1.5 h-1.5 rounded-full ${activeGroundingFresh ? 'bg-[#16A34A]' : activeGroundingContext ? 'bg-[#D97706]' : 'bg-[#C8C6C0]'}`} />
+              </button>
+            )}
             <button
               onClick={() => setSourceRef(!sourceRef)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${sourceRef ? 'bg-[#F3F0FF] text-[#7C3AED]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
@@ -11024,6 +11047,116 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
             </button>
           </div>
         </div>
+      )}
+
+      {groundingOpen && !isDemoMode && (
+        <aside data-testid="author-grounding-inspector" className="fixed right-4 top-24 bottom-4 z-40 w-[390px] bg-white border border-[#D8D4CE] rounded-2xl popover-shadow overflow-hidden flex flex-col">
+          <div className="px-4 py-3 border-b border-[#E2DED7] flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-[13px] font-semibold text-[#111218]">Topic grounding</h2>
+                <span data-testid="author-grounding-freshness" className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded ${activeGroundingFresh ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEF3C7] text-[#B45309]'}`}>
+                  {activeGroundingFresh ? 'Current' : activeGroundingContext ? 'Stale' : 'Not built'}
+                </span>
+              </div>
+              <p className="text-[10px] text-[#9898AB] mt-1 truncate">{activeTopic?.title ?? 'No topic selected'}</p>
+            </div>
+            <button type="button" onClick={() => setGroundingOpen(false)} className="text-[#9898AB]">×</button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            {!activeGroundingContext ? (
+              <div className="py-10 text-center">
+                <p className="text-[12px] font-semibold text-[#111218]">Grounding context is not built</p>
+                <p className="text-[11px] text-[#9898AB] mt-1">Build a read-only context from the current project evidence.</p>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                <section>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Committed topic</p>
+                  <p className="text-[12px] font-semibold text-[#111218] mt-1">{activeGroundingContext.topic.title}</p>
+                  <p className="text-[11px] text-[#6B6B7E] leading-relaxed mt-1">{activeGroundingContext.topic.rationale}</p>
+                  <p className="text-[10px] text-[#9898AB] mt-1">{activeGroundingContext.topic.proposalKind} · H{activeGroundingContext.topic.level}</p>
+                </section>
+                <section data-testid="grounding-required-evidence">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Required evidence</p>
+                  {activeGroundingContext.requiredEvidence.length > 0 ? (
+                    <div className="space-y-2">
+                      {activeGroundingContext.requiredEvidence.map(item => (
+                        <div key={item.evidenceId} data-evidence-id={item.evidenceId} data-source-id={item.fileId} className="border border-[#E2DED7] rounded-lg p-2.5">
+                          <p className="text-[11px] font-semibold text-[#5B5BD6]">{item.sourceFileName}</p>
+                          <p className="text-[9px] text-[#9898AB]">{item.location}</p>
+                          <p className="text-[10px] text-[#3D3D4E] mt-1 line-clamp-3">{item.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-[#B45309] bg-[#FFF7ED] border border-[#FED7AA] rounded-lg p-2.5">No supporting evidence is committed for this topic.</p>
+                  )}
+                </section>
+                <section data-testid="grounding-optional-evidence">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Optional supporting evidence</p>
+                  {activeGroundingContext.optionalSupportingEvidence.length > 0
+                    ? activeGroundingContext.optionalSupportingEvidence.map(item => (
+                        <p key={item.evidenceId} data-evidence-id={item.evidenceId} className="text-[10px] text-[#6B6B7E] mb-1">{item.sourceFileName} · {item.location}</p>
+                      ))
+                    : <p className="text-[10px] text-[#9898AB]">None selected by the deterministic topic match.</p>}
+                </section>
+                {activeGroundingContext.conflicts.length > 0 && (
+                  <section data-testid="grounding-conflicts">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[#B45309] mb-2">Conflicts</p>
+                    {activeGroundingContext.conflicts.map(item => (
+                      <div key={item.id} className="bg-[#FFF7ED] border border-[#FED7AA] rounded-lg p-2.5 mb-2">
+                        <p className="text-[11px] font-semibold text-[#9A3412]">{item.title}</p>
+                        <p className="text-[10px] text-[#9A3412] mt-1">{item.rationale}</p>
+                      </div>
+                    ))}
+                  </section>
+                )}
+                {activeGroundingContext.gaps.length > 0 && (
+                  <section data-testid="grounding-gaps">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[#B45309] mb-2">Gaps</p>
+                    {activeGroundingContext.gaps.map(item => (
+                      <div key={item.id} className="bg-[#FFFBEB] border border-[#FDE68A] rounded-lg p-2.5 mb-2">
+                        <p className="text-[11px] font-semibold text-[#92400E]">{item.title}</p>
+                        <p className="text-[10px] text-[#92400E] mt-1">{item.rationale}</p>
+                      </div>
+                    ))}
+                  </section>
+                )}
+                <section>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Concepts and terminology</p>
+                  <div className="flex flex-wrap gap-1">
+                    {[...activeGroundingContext.concepts, ...activeGroundingContext.terminology]
+                      .filter((item, index, all) => all.findIndex(candidate => candidate.id === item.id) === index)
+                      .map(item => <span key={item.id} className="text-[9px] bg-[#F3F0FF] text-[#6D28D9] px-1.5 py-0.5 rounded">{item.label}</span>)}
+                  </div>
+                </section>
+                <section data-testid="grounding-writing-guidance">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Writing context</p>
+                  <p className="text-[10px] text-[#6B6B7E]">Content type: {activeGroundingContext.writingGuidance.contentType}</p>
+                  <p className="text-[10px] text-[#6B6B7E]">Language: {activeGroundingContext.writingGuidance.language}</p>
+                  <p className="text-[10px] text-[#6B6B7E]">Style: {activeGroundingContext.writingGuidance.styleProfileName}</p>
+                  {Object.entries(activeGroundingContext.writingGuidance.variables).map(([name, value]) => (
+                    <p key={name} className="text-[10px] text-[#6B6B7E]">{name}: {value}</p>
+                  ))}
+                </section>
+                {activeGroundingContext.unavailableInformation.length > 0 && (
+                  <section data-testid="grounding-unavailable">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Unavailable information</p>
+                    {activeGroundingContext.unavailableInformation.map(message => (
+                      <p key={message} className="text-[10px] text-[#6B6B7E] bg-[#F9F8F6] border border-[#E2DED7] rounded-lg p-2 mb-1">{message}</p>
+                    ))}
+                  </section>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="p-3 border-t border-[#E2DED7] bg-[#F9F8F6]">
+            <button type="button" data-testid="refresh-author-grounding" disabled={!activeStableTopicId} onClick={() => activeStableTopicId && onRefreshTopicGrounding?.(activeStableTopicId)} className="w-full text-[11px] font-semibold text-[#5B5BD6] border border-[#B9B9EA] bg-white rounded-lg py-2 disabled:opacity-40">
+              {activeGroundingContext ? 'Refresh grounding context' : 'Build grounding context'}
+            </button>
+          </div>
+        </aside>
       )}
 
       {/* AI Action Result Modal */}
@@ -13524,6 +13657,8 @@ const DEFAULT_THEME_VARIABLES: Record<string, Variable[]> = {
 export default function App() {
   // v2.1 — stable ProjectSource model
   const [screen, setScreen] = useState<Screen>('dashboard')
+  const [appLoading, setAppLoading] = useState(true)
+  const [appLoadError, setAppLoadError] = useState<string | null>(null)
   const [projectId, setProjectId] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -13953,6 +14088,139 @@ export default function App() {
       || tocGeneratedFromConceptBuiltAt !== conceptAnalysis.builtAt
       || tocGeneratedFromContentType !== projectMeta.contentType
     )
+  const groundingStyleProfile = resolveEffectiveStyleProfile({
+    themes,
+    projectMeta,
+    activeStyleProfileId,
+  })
+  const groundingTheme = themes.find(theme => theme.id === projectMeta.themeId)
+  const buildGroundingInput = useCallback((topic: TocItem): TopicGroundingBuildInput => {
+    const topicId = stableAuthorTopicId(topic)
+    const proposalTopic = tocProposal?.items.find(item => item.topicId === topicId)
+    const metadata = authorTopicMetadataRef.current[topicId]
+    return {
+      topic: {
+        topicId,
+        title: topic.title,
+        level: topic.level,
+        rationale: topic.rationale ?? proposalTopic?.rationale,
+        supportingEvidenceIds: topic.supportingEvidenceIds ?? proposalTopic?.supportingEvidenceIds,
+        sourceSectionPaths: topic.sourceSectionPaths ?? proposalTopic?.sourceSectionPaths,
+        proposalKind: topic.proposalKind ?? proposalTopic?.proposalKind,
+        hasGap: topic.hasGap ?? proposalTopic?.hasGap,
+      },
+      evidenceIndex,
+      sourceExtractions,
+      sourcesRevision,
+      conceptAnalysis,
+      analysisRevision,
+      tocRevision,
+      contentType: projectMeta.contentType,
+      variables: getThemeVars(projectMeta.themeId),
+      selectedSourceFileIds: metadata?.sourceFileIds ?? [],
+      writingGuidance: {
+        language: projectMeta.language,
+        styleProfileId: groundingStyleProfile.id,
+        styleProfileName: groundingStyleProfile.name,
+        styleProfileScope: groundingStyleProfile.scope,
+        brandNames: [
+          groundingTheme?.clientName,
+          groundingTheme?.organizationName,
+          groundingTheme?.productName,
+        ].filter((value): value is string => !!value),
+      },
+    }
+  }, [
+    analysisRevision,
+    conceptAnalysis,
+    evidenceIndex,
+    groundingStyleProfile.id,
+    groundingStyleProfile.name,
+    groundingStyleProfile.scope,
+    groundingTheme?.clientName,
+    groundingTheme?.organizationName,
+    groundingTheme?.productName,
+    projectMeta.contentType,
+    projectMeta.language,
+    projectMeta.themeId,
+    sourceExtractions,
+    sourcesRevision,
+    themeVariables,
+    tocProposal,
+    tocRevision,
+  ])
+
+  const storeTopicGrounding = useCallback((topic: TocItem) => {
+    if (isDemoMode) return
+    const topicId = stableAuthorTopicId(topic)
+    const context = buildTopicGroundingContext(buildGroundingInput(topic))
+    setAuthorTopicMetadata(current => {
+      const base = current[topicId] ?? createManualAuthorTopicMetadata(
+        topicId,
+        authorMetadataContext(),
+        false,
+      )
+      const next = {
+        ...current,
+        [topicId]: { ...base, groundingContext: context },
+      }
+      authorTopicMetadataRef.current = next
+      return next
+    })
+    triggerAutosave()
+  }, [authorMetadataContext, buildGroundingInput, isDemoMode, triggerAutosave])
+
+  const handleRefreshTopicGrounding = useCallback((topicId: string) => {
+    const topic = appToc.find(candidate => stableAuthorTopicId(candidate) === topicId)
+    if (topic) storeTopicGrounding(topic)
+  }, [appToc, storeTopicGrounding])
+
+  const groundingFreshnessByTopic = Object.fromEntries(appToc.map(topic => {
+    const topicId = stableAuthorTopicId(topic)
+    return [
+      topicId,
+      isTopicGroundingContextFresh(
+        authorTopicMetadata[topicId]?.groundingContext,
+        buildGroundingInput(topic),
+      ),
+    ]
+  }))
+
+  useEffect(() => {
+    if (appLoading || isDemoMode || appToc.length === 0) return
+    const missingTopics = appToc.filter(topic =>
+      !authorTopicMetadataRef.current[stableAuthorTopicId(topic)]?.groundingContext)
+    if (missingTopics.length === 0) return
+    setAuthorTopicMetadata(current => {
+      let next = current
+      for (const topic of missingTopics) {
+        const topicId = stableAuthorTopicId(topic)
+        const base = next[topicId] ?? createManualAuthorTopicMetadata(
+          topicId,
+          authorMetadataContext(),
+          false,
+        )
+        next = {
+          ...next,
+          [topicId]: {
+            ...base,
+            groundingContext: buildTopicGroundingContext(buildGroundingInput(topic)),
+          },
+        }
+      }
+      authorTopicMetadataRef.current = next
+      return next
+    })
+    triggerAutosave()
+  }, [
+    appToc,
+    appLoading,
+    authorMetadataContext,
+    buildGroundingInput,
+    isDemoMode,
+    triggerAutosave,
+  ])
+
   const handleRebuildEvidence = useCallback(() => {
     if (!canRebuildEvidence || isDemoMode) return
     setEvidenceIndex(buildEvidenceIndex(sourceExtractions, sourcesRevision))
@@ -14024,9 +14292,6 @@ export default function App() {
   }, [triggerAutosave])
 
   // ── Startup: check for active project or show dashboard ───────────────────
-  const [appLoading, setAppLoading] = useState(true)
-  const [appLoadError, setAppLoadError] = useState<string | null>(null)
-
   useEffect(() => {
     const init = async () => {
       try {
@@ -14287,7 +14552,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
+      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
       case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />

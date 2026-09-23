@@ -1,4 +1,8 @@
 import { expect, test, type Page } from "@playwright/test"
+import { buildTopicGroundingContext } from "../../src/authorGroundingContext"
+import type { ConceptAnalysis } from "../../src/conceptAnalysis"
+import type { EvidenceIndex } from "../../src/evidenceIndex"
+import type { SourceExtraction } from "../../src/sourceExtractor"
 
 test.describe.configure({ mode: "serial" })
 
@@ -18,6 +22,7 @@ type AuthorTopicMetadata = {
   evidenceIds: string[]
   sourcePaths: string[][]
   sourceFileIds: string[]
+  groundingContext: unknown | null
   provenance: {
     sourcesRevision: number | null
     evidenceExtractionRevision: string | null
@@ -42,22 +47,12 @@ type StoredProject = {
   topicContent: Record<string, unknown[]>
   authorTopicMetadata?: Record<string, AuthorTopicMetadata>
   sourceFileIds: string[]
+  sourceExtractions: Record<string, SourceExtraction>
   sourcesRevision: number
-  evidenceIndex: {
-    sourcesRevision: number
-    extractionRevision: string
-    items: Array<{
-      id: string
-      fileId: string
-      sourceId: string
-      sourceFileName: string
-      location: string
-      text: string
-      sectionPath?: string[]
-    }>
-  } | null
-  conceptAnalysis: { builtAt: number } | null
+  evidenceIndex: EvidenceIndex | null
+  conceptAnalysis: ConceptAnalysis | null
   analysisRevision: number
+  tocRevision?: number
 }
 
 function metadata(
@@ -71,6 +66,7 @@ function metadata(
     evidenceIds: [],
     sourcePaths: [],
     sourceFileIds: [],
+    groundingContext: null,
     provenance: {
       sourcesRevision: null,
       evidenceExtractionRevision: null,
@@ -298,6 +294,33 @@ test("duplicates Author metadata and remaps copied source provenance consistentl
       variableSnapshot: { product: "Orbital Console" },
     },
   })
+  generated.groundingContext = buildTopicGroundingContext({
+    topic: {
+      topicId: "topic-grounded",
+      title: "Grounded",
+      level: 1,
+      rationale: "Evidence-backed test topic.",
+      supportingEvidenceIds: [evidence.id],
+      sourceSectionPaths: [evidence.sectionPath ?? ["Author Grounding"]],
+      proposalKind: "evidence-backed",
+    },
+    evidenceIndex: original.evidenceIndex,
+    sourceExtractions: original.sourceExtractions,
+    sourcesRevision: original.sourcesRevision,
+    conceptAnalysis: original.conceptAnalysis,
+    analysisRevision: original.analysisRevision,
+    tocRevision: original.tocRevision ?? 0,
+    contentType: original.projectMeta.contentType,
+    variables: [],
+    selectedSourceFileIds: [originalFileId],
+    writingGuidance: {
+      language: "English",
+      styleProfileId: "",
+      styleProfileName: "Default",
+      styleProfileScope: "project",
+      brandNames: [],
+    },
+  })
   await patchProject(page, projectName, {
     appToc: [{ id: 1, topicId: "topic-grounded", title: "Grounded", level: 1, words: 100 }],
     topicContent: {
@@ -326,6 +349,9 @@ test("duplicates Author metadata and remaps copied source provenance consistentl
   expect(copied.provenance.evidenceExtractionRevision).toBe(duplicate.evidenceIndex!.extractionRevision)
   expect(copied.provenance.analysisBuiltAt).toBe(duplicate.conceptAnalysis!.builtAt)
   expect(copied.provenance.variableSnapshot).toEqual({ product: "Orbital Console" })
+  expect((copied.groundingContext as any).requiredEvidence[0].fileId).toBe(copiedFileId)
+  expect((copied.groundingContext as any).sourceExtractions[0].fileId).toBe(copiedFileId)
+  expect((copied.groundingContext as any).contextId).not.toBe((generated.groundingContext as any).contextId)
   expect(copied.generatedFreshness).toBe("current")
   expect(duplicate.topicContent).toEqual(originalWithMetadata.topicContent)
   expect(duplicate.evidenceIndex!.items.every(item =>

@@ -1,5 +1,9 @@
 import type { ConceptAnalysis } from './conceptAnalysis'
 import type { EvidenceIndex } from './evidenceIndex'
+import {
+  remapTopicGroundingContext,
+  type TopicGroundingContext,
+} from './authorGroundingContext'
 
 export type AuthorGenerationStatus = 'not-generated' | 'draft' | 'generated' | 'failed'
 export type AuthorContentOrigin = 'manual' | 'generated' | 'mixed' | 'approved'
@@ -12,6 +16,7 @@ export type AuthorTopicMetadata = {
   evidenceIds: string[]
   sourcePaths: string[][]
   sourceFileIds: string[]
+  groundingContext: TopicGroundingContext | null
   provenance: {
     sourcesRevision: number | null
     evidenceExtractionRevision: string | null
@@ -65,6 +70,7 @@ export function createManualAuthorTopicMetadata(
     evidenceIds: [],
     sourcePaths: [],
     sourceFileIds: [],
+    groundingContext: null,
     provenance: {
       sourcesRevision: null,
       evidenceExtractionRevision: null,
@@ -100,6 +106,9 @@ export function hydrateAuthorTopicMetadata(
           evidenceIds: [...(metadata.evidenceIds ?? [])],
           sourcePaths: (metadata.sourcePaths ?? []).map(path => [...path]),
           sourceFileIds: [...(metadata.sourceFileIds ?? [])],
+          groundingContext: metadata.groundingContext
+            ? structuredClone(metadata.groundingContext)
+            : null,
           provenance: {
             sourcesRevision: provenance?.sourcesRevision ?? null,
             evidenceExtractionRevision: provenance?.evidenceExtractionRevision ?? null,
@@ -169,6 +178,12 @@ export function remapAuthorTopicMetadata(
           sourcePaths: (item.sourcePaths ?? []).map(path => [...path]),
           sourceFileIds: (item.sourceFileIds ?? []).flatMap(fileId =>
             fileIdMap[fileId] ? [fileIdMap[fileId]] : []),
+          groundingContext: remapTopicGroundingContext(
+            item.groundingContext,
+            fileIdMap,
+            copiedEvidenceIndex,
+            copiedConceptAnalysis,
+          ),
           provenance: {
             ...item.provenance,
             ...(wasCurrent && copiedEvidenceIndex && copiedConceptAnalysis
