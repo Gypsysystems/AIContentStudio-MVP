@@ -12,6 +12,13 @@ type StoredProject = {
   }>
   pageLayouts: Array<Record<string, unknown>>
   htmlMasterPages: Array<Record<string, unknown>>
+  appToc?: Array<{
+    id: number
+    title: string
+    level: 1 | 2 | 3 | 4
+    words: number
+    parentId?: number
+  }>
 }
 
 async function createProject(page: Page, projectName: string) {
@@ -793,4 +800,121 @@ test("HTML masters inherit applied Brand styling and preserve resettable block o
   await page.getByRole("button", { name: /Theme$/ }).click()
   await openHtmlMasters()
   await expectMasterPreview(profiles[0], profiles[0].primaryColor)
+})
+
+test("navigation cards bind to stable central TOC topic IDs and report missing topics", async ({
+  page,
+}) => {
+  test.setTimeout(90_000)
+  await createProject(page, `Navigation Card Topics ${Date.now()}`)
+
+  const legacyCards = [
+    { id: "c1", title: "Start Here", desc: "Legacy introduction card", icon: "🚀" },
+    { id: "c2", title: "API Reference", desc: "Legacy API description", icon: "📖" },
+  ]
+  await updateOnlyProject(page, project => ({
+    ...project,
+    appToc: [
+      { id: 101, title: "Getting Started", level: 1, words: 300 },
+      { id: 202, title: "Install the Product", level: 2, words: 180, parentId: 101 },
+    ],
+    htmlMasterPages: project.htmlMasterPages.map(master => master.masterType === "home"
+      ? {
+          ...master,
+          blocks: [
+            { id: "header", type: "header", label: "Header" },
+            {
+              id: "cards",
+              type: "cards",
+              label: "Navigation Cards",
+              props: { title: "Browse Documentation", columns: 2, cards: legacyCards },
+            },
+            { id: "footer", type: "footer", label: "Footer" },
+          ],
+        }
+      : master),
+  }))
+
+  const openHtmlMasters = async () => {
+    await page.getByRole("button", { name: "Output Templates", exact: true }).click()
+    await page.getByRole("button", { name: "HTML Master Pages", exact: true }).click()
+  }
+
+  await page.reload()
+  await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+  await page.getByRole("button", { name: /Theme$/ }).click()
+  await openHtmlMasters()
+
+  const legacyPreview = page.getByTestId("navigation-card-preview-c2")
+  await expect(legacyPreview).toContainText("API Reference")
+  await expect(legacyPreview).toContainText("Legacy API description")
+  await expect(legacyPreview).toHaveAttribute("data-destination-type", "none")
+  await expect(legacyPreview).toHaveAttribute("data-link-state", "valid")
+
+  await page.getByTestId("navigation-cards-block").click()
+  await page.getByLabel("Card 1 destination type").selectOption("topic")
+  await page.getByLabel("Card 1 topic").selectOption("202")
+
+  const linkedPreview = page.getByTestId("navigation-card-preview-c1")
+  await expect(linkedPreview).toHaveAttribute("data-topic-id", "202")
+  await expect(linkedPreview).toHaveAttribute("data-link-state", "valid")
+  await expect(linkedPreview).toContainText("Getting Started › Install the Product")
+  await expect(linkedPreview).toContainText("Start Here")
+  await expect(linkedPreview).toContainText("Legacy introduction card")
+
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    const home = stored.htmlMasterPages.find(master => master.masterType === "home")
+    const blocks = home?.blocks as Array<{ id: string; type: string; props?: { cards?: Array<Record<string, unknown>> } }> | undefined
+    const cardBlock = blocks?.find(block => block.id === "cards")
+    return {
+      blockType: cardBlock?.type,
+      first: cardBlock?.props?.cards?.[0],
+      second: cardBlock?.props?.cards?.[1],
+    }
+  }).toEqual({
+    blockType: "navigation-cards",
+    first: {
+      ...legacyCards[0],
+      destinationType: "topic",
+      topicId: 202,
+    },
+    second: legacyCards[1],
+  })
+
+  await updateOnlyProject(page, project => ({
+    ...project,
+    appToc: project.appToc?.map(item => item.id === 202
+      ? { ...item, title: "Install and Configure" }
+      : item),
+  }))
+  await page.reload()
+  await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+  await page.getByRole("button", { name: /Theme$/ }).click()
+  await openHtmlMasters()
+  await expect(page.getByTestId("navigation-card-preview-c1")).toContainText("Getting Started › Install and Configure")
+  await expect(page.getByTestId("navigation-card-preview-c1")).toHaveAttribute("data-topic-id", "202")
+
+  await updateOnlyProject(page, project => ({
+    ...project,
+    appToc: project.appToc?.filter(item => item.id !== 202),
+  }))
+  await page.reload()
+  await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+  await page.getByRole("button", { name: /Theme$/ }).click()
+  await openHtmlMasters()
+
+  const brokenPreview = page.getByTestId("navigation-card-preview-c1")
+  await expect(brokenPreview).toHaveAttribute("data-link-state", "broken")
+  await expect(brokenPreview).toContainText("Broken link")
+  await expect(brokenPreview).toContainText("Missing topic (ID 202)")
+  await page.getByTestId("navigation-cards-block").click()
+  await expect(page.getByTestId("navigation-card-broken-c1")).toContainText("Referenced topic ID 202 no longer exists")
+
+  const stored = await readOnlyProject(page)
+  const home = stored.htmlMasterPages.find(master => master.masterType === "home")
+  const blocks = home?.blocks as Array<{ id: string; props?: { cards?: Array<Record<string, unknown>> } }> | undefined
+  const cards = blocks?.find(block => block.id === "cards")?.props?.cards
+  expect(cards?.[0]).toEqual({ ...legacyCards[0], destinationType: "topic", topicId: 202 })
+  expect(cards?.[1]).toEqual(legacyCards[1])
 })

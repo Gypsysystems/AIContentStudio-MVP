@@ -91,6 +91,17 @@ type PageLayout = {
   headerZone: PageLayoutZoneElement[]; footerZone: PageLayoutZoneElement[]
 }
 type MasterBlock = { id: string; type: string; label: string; props?: Record<string, unknown> }
+type NavigationCardDestinationType = 'topic' | 'external-url' | 'file' | 'none'
+type NavigationCard = {
+  id: string
+  title: string
+  desc: string
+  icon: string
+  destinationType?: NavigationCardDestinationType
+  topicId?: number
+  url?: string
+  fileName?: string
+}
 type HtmlMasterPage = {
   id: string; name: string; clientId: string; masterType: 'home' | 'topic' | 'landing' | 'custom'
   showHeader: boolean; showLogo: boolean; showSearch: boolean; showBreadcrumb: boolean
@@ -406,6 +417,15 @@ const INITIAL_PAGE_LAYOUTS: PageLayout[] = [
   },
 ]
 
+const DEFAULT_NAVIGATION_CARDS: NavigationCard[] = [
+  { id: 'c1', title: 'Getting Started', desc: 'Begin here', icon: '🚀' },
+  { id: 'c2', title: 'API Reference', desc: 'Technical docs', icon: '📖' },
+  { id: 'c3', title: 'Tutorials', desc: 'Step by step', icon: '🎓' },
+  { id: 'c4', title: 'FAQ', desc: 'Common questions', icon: '❓' },
+  { id: 'c5', title: 'Community', desc: 'Join the discussion', icon: '💬' },
+  { id: 'c6', title: 'Release Notes', desc: 'What\'s new', icon: '📋' },
+]
+
 const INITIAL_HTML_MASTER_PAGES: HtmlMasterPage[] = [
   {
     id: 'hmp1', name: 'Home Page Master', clientId: 'th1', masterType: 'home',
@@ -422,6 +442,16 @@ const INITIAL_HTML_MASTER_PAGES: HtmlMasterPage[] = [
     showHero: false, showNavCards: false, showFeaturedLinks: false, showRecentContent: false,
   },
 ]
+
+const normalizeHtmlMasterPages = (masters: HtmlMasterPage[]): HtmlMasterPage[] =>
+  masters.map(master => !master.blocks
+    ? master
+    : {
+        ...master,
+        blocks: master.blocks.map(block => block.type === 'cards'
+          ? { ...block, type: 'navigation-cards', label: block.label || 'Navigation Cards' }
+          : block),
+      })
 
 type ListItem = { id: string; text: string; level: number; type: 'bullet' | 'ordered'; startFresh?: boolean }
 type DocBlock = {
@@ -1216,7 +1246,7 @@ function ZoneEditor({ title, elements, availableElements, onUpdate }: {
 
 const ALL_PAGE_ELEMENTS = ['Logo', 'Secondary Logo', 'Document Title', 'Subtitle', 'Client Name', 'Product Name', 'Version', 'Date', 'Confidentiality', 'Chapter Title', 'Topic Title', 'Page Number', 'Copyright', 'Custom Text', 'Divider']
 
-function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStyleProfile, onProjectMetaChange, activeStyleProfileId, onApplyStyleProfile, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, themeVariables, onThemeVarsChange }: {
+function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStyleProfile, onProjectMetaChange, activeStyleProfileId, onApplyStyleProfile, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, toc, themeVariables, onThemeVarsChange }: {
   onNav: (s: Screen) => void
   returnTo?: Screen
   themes: Theme[]
@@ -1231,6 +1261,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
   onPageLayoutsChange: (pls: PageLayout[]) => void
   htmlMasterPages: HtmlMasterPage[]
   onHtmlMasterPagesChange: (hmps: HtmlMasterPage[]) => void
+  toc: TocItem[]
   themeVariables: Record<string, Variable[]>
   onThemeVarsChange: (themeId: string, vars: Variable[] | ((p: Variable[]) => Variable[])) => void
 }) {
@@ -1403,7 +1434,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
     { id: 'header', type: 'header', label: 'Header' },
     { id: 'hero', type: 'hero', label: 'Hero' },
     { id: 'search', type: 'search', label: 'Search' },
-    { id: 'cards', type: 'cards', label: 'Navigation Cards' },
+    { id: 'cards', type: 'navigation-cards', label: 'Navigation Cards' },
     { id: 'footer', type: 'footer', label: 'Footer' },
   ]
   const defaultTopicBlocks: MasterBlock[] = [
@@ -1440,6 +1471,22 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
   const [colDragStartWidth, setColDragStartWidth] = useState(0)
   const [libSearch, setLibSearch] = useState('')
   const getBlockProps = (blockId: string) => getMasterBlocks(editHmpId, editHmp?.masterType ?? 'topic').find(b => b.id === blockId)?.props ?? {}
+  const getNavigationCards = (props: Record<string, unknown>): NavigationCard[] =>
+    Array.isArray(props.cards) ? props.cards as NavigationCard[] : DEFAULT_NAVIGATION_CARDS
+  const getTopicPath = (topicId: number | undefined): { topic?: TocItem; path?: string } => {
+    if (topicId === undefined) return {}
+    const topic = toc.find(item => item.id === topicId)
+    if (!topic) return {}
+    const ancestors: TocItem[] = []
+    let current: TocItem | undefined = topic
+    const visited = new Set<number>()
+    while (current && !visited.has(current.id)) {
+      ancestors.unshift(current)
+      visited.add(current.id)
+      current = current.parentId === undefined ? undefined : toc.find(item => item.id === current?.parentId)
+    }
+    return { topic, path: ancestors.map(item => item.title).join(' › ') }
+  }
   const patchBlockProps = (blockId: string, patch: Record<string, unknown>) => {
     const blocks = getMasterBlocks(editHmpId, editHmp?.masterType ?? 'topic')
     setMasterBlocks(editHmpId, blocks.map(b => b.id === blockId ? { ...b, props: { ...(b.props ?? {}), ...patch } } : b))
@@ -3249,7 +3296,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
             const getDefaultProps = (type: string): Record<string, unknown> => {
               if (type === 'hero') return { heading: 'Welcome to Our Documentation', description: 'Find guides, tutorials, and reference materials.', height: 'Standard', alignment: 'center', showSearch: true, showCta: true, ctaLabel: 'Get Started' }
               if (type === 'welcome-text') return { heading: 'Welcome', body: 'Find guidance, tutorials, and reference information.', fontSize: 'Standard' }
-              if (type === 'navigation-cards') return { title: 'Browse by Category', columns: 3, cards: [{id:'c1',title:'Getting Started',desc:'Begin here',icon:'🚀'},{id:'c2',title:'API Reference',desc:'Technical docs',icon:'📖'},{id:'c3',title:'Tutorials',desc:'Step by step',icon:'🎓'},{id:'c4',title:'FAQ',desc:'Common questions',icon:'❓'},{id:'c5',title:'Community',desc:'Join the discussion',icon:'💬'},{id:'c6',title:'Release Notes',desc:'What\'s new',icon:'📋'}] }
+              if (type === 'navigation-cards') return { title: 'Browse by Category', columns: 3, cards: DEFAULT_NAVIGATION_CARDS.map(card => ({ ...card })) }
               if (type === 'announcement-banner') return { variant: 'info', text: 'Welcome to the documentation portal!', dismissible: true }
               if (type === 'accordion-/-faq') return { title: 'Frequently Asked Questions', items: [{id:'a1',q:'What is this?',a:'This is a documentation portal.'},{id:'a2',q:'How do I get started?',a:'See the Getting Started guide.'},{id:'a3',q:'Where can I find support?',a:'Visit our community forum.'}], mode: 'single' }
               if (type === 'checklist') return { title: 'Getting Started Checklist', items: [{id:'i1',text:'Read the introduction',done:false},{id:'i2',text:'Install the software',done:false},{id:'i3',text:'Configure your environment',done:false},{id:'i4',text:'Run your first command',done:false}], showProgress: true }
@@ -3338,12 +3385,37 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                     <div className="px-4 py-1.5 bg-[#F9F8F6] text-[8px] text-[#9898AB]">Home › Getting Started › Installation</div>
                   )}
                   {block.type === 'navigation-cards' && (
-                    <div className="px-3 py-3">
+                    <div data-testid="navigation-cards-block" className="px-3 py-3">
                       {!!bp.title && <p className="text-[9px] font-semibold text-[#111218] mb-2">{bp.title as string}</p>}
                       <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${Math.min((bp.columns as number) || 3, responsiveView === 'mobile' ? 1 : responsiveView === 'tablet' ? 2 : (bp.columns as number) || 3)}, 1fr)` }}>
-                        {((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>) || []).map(c => (
-                          <div key={c.id} className="border border-[#E2DED7] rounded-lg p-2"><span className="text-[10px]">{c.icon}</span><p className="text-[8px] font-semibold text-[#3D3D4E] mt-0.5">{c.title}</p><p className="text-[7px] text-[#9898AB]">{c.desc}</p></div>
-                        ))}
+                        {getNavigationCards(bp).map(card => {
+                          const topicDestination = card.destinationType === 'topic'
+                          const resolvedTopic = getTopicPath(card.topicId)
+                          const brokenTopicLink = topicDestination && (!card.topicId || !resolvedTopic.topic)
+                          const destinationLabel = topicDestination
+                            ? resolvedTopic.path ?? (card.topicId ? `Missing topic (ID ${card.topicId})` : 'No topic selected')
+                            : card.destinationType === 'external-url'
+                              ? card.url || 'No URL set'
+                              : card.destinationType === 'file'
+                                ? card.fileName || 'No file selected'
+                                : null
+                          return (
+                            <div key={card.id} data-testid={`navigation-card-preview-${card.id}`}
+                              data-destination-type={card.destinationType ?? 'none'}
+                              data-topic-id={card.topicId ?? ''}
+                              data-link-state={brokenTopicLink ? 'broken' : 'valid'}
+                              className={`rounded-lg p-2 border ${brokenTopicLink ? 'border-[#FCA5A5] bg-[#FEF2F2]' : ''}`}
+                              style={!brokenTopicLink ? { borderColor: htmlMasterPresentation.borderColor } : undefined}>
+                              <span className="text-[10px]">{card.icon}</span>
+                              <p className="text-[8px] font-semibold mt-0.5" style={{ color: htmlMasterPresentation.headingColor }}>{card.title}</p>
+                              <p className="text-[7px]" style={{ color: htmlMasterPresentation.bodyColor }}>{card.desc}</p>
+                              {destinationLabel && <p className={`text-[7px] mt-1 truncate ${brokenTopicLink ? 'text-[#B91C1C] font-semibold' : ''}`}
+                                style={!brokenTopicLink ? { color: htmlMasterPresentation.linkColor } : undefined}>
+                                {brokenTopicLink ? '⚠ Broken link: ' : '→ '}{destinationLabel}
+                              </p>}
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   )}
@@ -3533,6 +3605,11 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
               const bp = getBlockProps(selectedBlock.id)
               const patch = (p: Record<string, unknown>) => patchBlockProps(selectedBlock.id, p)
               const idx = canvasBlocks.findIndex(b => b.id === selectedBlock.id)
+              const navigationCards = getNavigationCards(bp)
+              const updateNavigationCard = (cardIndex: number, update: (card: NavigationCard) => NavigationCard) => {
+                const cards = navigationCards.map((card, index) => index === cardIndex ? update(card) : card)
+                patch({ cards })
+              }
               return (
                 <div className="space-y-2.5">
                   <div className="flex items-center justify-between pb-2 border-b border-[#F4F2EE]">
@@ -3593,15 +3670,61 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                       <input value={(bp.title as string) || ''} onChange={e => patch({ title: e.target.value })} className="w-full h-7 px-2 text-[11px] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" /></div>
                     <div><label className="block text-[10px] text-[#9898AB] mb-1">Columns</label>
                       <div className="flex gap-1">{[2,3,4].map(c => <button key={c} onClick={() => patch({ columns: c })} className={`flex-1 py-1 rounded border text-[10px] ${(bp.columns as number) === c ? 'border-[#5B5BD6] bg-[#EEEEFF] text-[#5B5BD6]' : 'border-[#E2DED7] text-[#6B6B7E]'}`}>{c}</button>)}</div></div>
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <label className="block text-[10px] text-[#9898AB] mb-1">Cards</label>
-                      {((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>) || []).map((card, ci) => (
-                        <div key={card.id} className="flex gap-1 items-center">
-                          <input value={card.title} onChange={e => { const cards = [...((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>)||[])]; cards[ci]={...card,title:e.target.value}; patch({cards}) }} className="flex-1 h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
-                          <button onClick={() => { const cards = ((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>)||[]).filter((_,i)=>i!==ci); patch({cards}) }} className="text-[#9898AB] hover:text-[#EF4444] text-[10px] px-0.5">✕</button>
+                      {navigationCards.map((card, ci) => (
+                        <div key={card.id} data-testid={`navigation-card-editor-${card.id}`} className="rounded-lg border border-[#E2DED7] p-2 space-y-1.5">
+                          <div className="flex gap-1 items-center">
+                            <input aria-label={`Card ${ci + 1} icon`} value={card.icon} onChange={e => updateNavigationCard(ci, current => ({ ...current, icon: e.target.value }))} className="w-8 h-6 px-1 text-center text-[10px] border border-[#E2DED7] rounded" />
+                            <input aria-label={`Card ${ci + 1} title`} value={card.title} onChange={e => updateNavigationCard(ci, current => ({ ...current, title: e.target.value }))} className="flex-1 h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                            <button aria-label={`Delete card ${ci + 1}`} onClick={() => patch({ cards: navigationCards.filter((_, index) => index !== ci) })} className="text-[#9898AB] hover:text-[#EF4444] text-[10px] px-0.5">✕</button>
+                          </div>
+                          <input aria-label={`Card ${ci + 1} description`} value={card.desc} placeholder="Description" onChange={e => updateNavigationCard(ci, current => ({ ...current, desc: e.target.value }))} className="w-full h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                          <div>
+                            <label className="block text-[9px] text-[#9898AB] mb-0.5" htmlFor={`card-destination-${card.id}`}>Destination</label>
+                            <select id={`card-destination-${card.id}`} aria-label={`Card ${ci + 1} destination type`}
+                              value={card.destinationType ?? 'none'}
+                              onChange={e => updateNavigationCard(ci, current => ({ ...current, destinationType: e.target.value as NavigationCardDestinationType }))}
+                              className="w-full h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded bg-white">
+                              <option value="none">None</option>
+                              <option value="topic">Documentation Topic / TOC Section</option>
+                              <option value="external-url">External URL</option>
+                              <option value="file">File</option>
+                            </select>
+                          </div>
+                          {card.destinationType === 'topic' && (
+                            <div>
+                              <label className="block text-[9px] text-[#9898AB] mb-0.5" htmlFor={`card-topic-${card.id}`}>Documentation Topic / TOC Section</label>
+                              <select id={`card-topic-${card.id}`} aria-label={`Card ${ci + 1} topic`}
+                                value={card.topicId ?? ''}
+                                onChange={e => updateNavigationCard(ci, current => {
+                                  const next = { ...current }
+                                  if (e.target.value) next.topicId = Number(e.target.value)
+                                  else delete next.topicId
+                                  return next
+                                })}
+                                className="w-full h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded bg-white">
+                                <option value="">Select a topic…</option>
+                                {toc.map(item => <option key={item.id} value={item.id}>{`${'— '.repeat(Math.max(0, item.level - 1))}${item.title}`}</option>)}
+                              </select>
+                              {card.topicId !== undefined && !getTopicPath(card.topicId).topic && (
+                                <p data-testid={`navigation-card-broken-${card.id}`} className="text-[9px] text-[#B91C1C] mt-1">Referenced topic ID {card.topicId} no longer exists.</p>
+                              )}
+                            </div>
+                          )}
+                          {card.destinationType === 'external-url' && (
+                            <input aria-label={`Card ${ci + 1} external URL`} type="url" value={card.url ?? ''} placeholder="https://example.com"
+                              onChange={e => updateNavigationCard(ci, current => ({ ...current, url: e.target.value }))}
+                              className="w-full h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                          )}
+                          {card.destinationType === 'file' && (
+                            <input aria-label={`Card ${ci + 1} file`} value={card.fileName ?? ''} placeholder="File name or path"
+                              onChange={e => updateNavigationCard(ci, current => ({ ...current, fileName: e.target.value }))}
+                              className="w-full h-6 px-1.5 text-[10px] border border-[#E2DED7] rounded" />
+                          )}
                         </div>
                       ))}
-                      <button onClick={() => { const cards = [...((bp.cards as Array<{id:string;title:string;desc:string;icon:string}>)||[]),{id:`c${Date.now()}`,title:'New Card',desc:'',icon:'📄'}]; patch({cards}) }} className="w-full py-1 text-[10px] text-[#5B5BD6] border border-dashed border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF]">+ Add Card</button>
+                      <button onClick={() => patch({ cards: [...navigationCards, { id: `c${Date.now()}`, title: 'New Card', desc: '', icon: '📄', destinationType: 'none' }] })} className="w-full py-1 text-[10px] text-[#5B5BD6] border border-dashed border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF]">+ Add Card</button>
                     </div>
                   </>}
                   {selectedBlock.type === 'announcement-banner' && <>
@@ -12196,7 +12319,7 @@ export default function App() {
   // ── Autosave-aware BrandingScreen handlers ────────────────────────────────
   const handleThemesChange = (t: Theme[]) => { setThemes(t); triggerAutosave() }
   const handlePageLayoutsChange = (pls: PageLayout[]) => { setPageLayouts(pls); triggerAutosave() }
-  const handleHtmlMasterPagesChange = (hmps: HtmlMasterPage[]) => { setHtmlMasterPages(hmps); triggerAutosave() }
+  const handleHtmlMasterPagesChange = (hmps: HtmlMasterPage[]) => { setHtmlMasterPages(normalizeHtmlMasterPages(hmps)); triggerAutosave() }
   const handleApplyStyleProfile = (id: string) => {
     setActiveStyleProfileId(id)
     setProjectMeta(prev => ({ ...prev, styleProfileId: id }))
@@ -12460,7 +12583,7 @@ export default function App() {
     }
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
-    setHtmlMasterPages((record.htmlMasterPages as HtmlMasterPage[]) ?? INITIAL_HTML_MASTER_PAGES)
+    setHtmlMasterPages(normalizeHtmlMasterPages((record.htmlMasterPages as HtmlMasterPage[]) ?? INITIAL_HTML_MASTER_PAGES))
     setSourcesRevision(record.sourcesRevision ?? 0)
     setAnalysisResult((record.analysisResult as AnalysisResult | null) ?? null)
     setAnalysisRevision(record.analysisRevision ?? -1)
@@ -12568,7 +12691,7 @@ export default function App() {
     switch (screen) {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
-      case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
+      case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} onRetryExtraction={handleRetryExtraction} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
       case 'analysis':  return <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
       case 'structure': return <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
