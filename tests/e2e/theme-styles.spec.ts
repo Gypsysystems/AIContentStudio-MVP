@@ -6,6 +6,8 @@ type StoredProject = {
   activeStyleProfileId?: string
   projectMeta?: Record<string, unknown>
   themes: Array<{
+    id?: string
+    brandProfiles?: Array<Record<string, unknown>>
     styleProfiles: Array<Record<string, unknown>>
   }>
   pageLayouts: Array<Record<string, unknown>>
@@ -519,3 +521,76 @@ test(`falls back safely when the persisted style profile ID is ${persistedId ===
     await page.getByRole("button", { name: "Sources", exact: true }).click()
 })
 }
+
+test("resolves rich profiles by project, active, then active-theme priority across reloads", async ({
+  page,
+}) => {
+  const projectName = `Profile Resolution ${Date.now()}`
+  await createProject(page, projectName)
+
+  for (const name of ["Theme Priority Profile", "Project Priority Profile"]) {
+    await page.getByRole("button", { name: "+ New" }).click()
+    const modal = page.getByRole("heading", {
+      name: "Create Brand & Style Profile",
+    }).locator("..")
+    await modal.getByRole("textbox").fill(name)
+    await modal.getByRole("button", { name: "Create", exact: true }).click()
+  }
+
+  await expect.poll(async () => {
+    const profiles = (await readOnlyProject(page)).themes.flatMap(theme => theme.styleProfiles)
+    return profiles.filter(profile =>
+      ["Theme Priority Profile", "Project Priority Profile"].includes(String(profile.name)),
+    ).length
+  }).toBe(2)
+  await page.getByRole("button", { name: /Content Studio/ }).click()
+
+  const stored = await readOnlyProject(page)
+  const profiles = stored.themes.flatMap(theme => theme.styleProfiles)
+  const themePriority = profiles.find(profile => profile.name === "Theme Priority Profile")!
+  const projectPriority = profiles.find(profile => profile.name === "Project Priority Profile")!
+
+  const expectSelectedAfterReload = async (name: string) => {
+    await page.reload()
+    await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+    await page.getByRole("button", { name: /Theme$/ }).click()
+    await expect(
+      page.getByRole("textbox", { name: "Search profiles…" }),
+    ).toHaveValue(name)
+    await page.getByRole("button", { name: "Sources", exact: true }).click()
+  }
+
+  await updateOnlyProject(page, project => ({
+    ...project,
+    activeStyleProfileId: String(themePriority.id),
+    projectMeta: {
+      ...project.projectMeta,
+      styleProfileId: String(projectPriority.id),
+    },
+  }))
+  await expectSelectedAfterReload("Project Priority Profile")
+
+  await updateOnlyProject(page, project => ({
+    ...project,
+    activeStyleProfileId: String(themePriority.id),
+    projectMeta: {
+      ...project.projectMeta,
+      styleProfileId: "invalid-project-profile",
+    },
+  }))
+  await expectSelectedAfterReload("Theme Priority Profile")
+
+  await updateOnlyProject(page, project => ({
+    ...project,
+    activeStyleProfileId: "invalid-active-profile",
+    projectMeta: {
+      ...project.projectMeta,
+      styleProfileId: "",
+    },
+  }))
+  await expectSelectedAfterReload("Theme Priority Profile")
+
+  const reloaded = await readOnlyProject(page)
+  expect(reloaded.pageLayouts).toEqual(stored.pageLayouts)
+  expect(reloaded.htmlMasterPages).toEqual(stored.htmlMasterPages)
+})

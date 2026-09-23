@@ -180,7 +180,7 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     isDemoMode: false,
     themes: [],
     projectMeta: {},
-    activeStyleProfileId: 'sp1',
+    activeStyleProfileId: '',
     themeVariables: {},
     pageLayouts: [],
     htmlMasterPages: [],

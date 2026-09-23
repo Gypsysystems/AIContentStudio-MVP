@@ -31,7 +31,7 @@ type Variable = { id: string; name: string; value: string; description?: string 
 
 // ── Branding/Style architecture types ────────────────────────────────────────
 type TypoStyle = { fontFamily: string; fontSize: number; fontWeight: string; color: string; lineHeight: number; spaceBefore: number; spaceAfter: number; alignment: 'left' | 'center' | 'right' }
-type StyleProfile = {
+export type StyleProfile = {
   id: string; name: string; clientId: string; scope: 'client' | 'product' | 'project'
   // Brand fields (Brand & Style Profile)
   source?: string
@@ -59,7 +59,7 @@ type StyleProfile = {
     example:   { label: string; accentColor: string; bgColor: string; textColor: string }
   }
 }
-type BrandProfile = { id: string; name: string; clientId: string; primaryColor: string; secondaryColor: string; accentColor: string; headingFont: string; bodyFont: string; logoLabel?: string }
+export type BrandProfile = { id: string; name: string; clientId: string; primaryColor: string; secondaryColor: string; accentColor: string; headingFont: string; bodyFont: string; logoLabel?: string }
 type OutputTemplatePack = {
   id: string; name: string; clientId: string
   pdfPageSize: 'A4' | 'Letter'; pdfOrientation: 'portrait' | 'landscape'
@@ -69,13 +69,13 @@ type OutputTemplatePack = {
   footerShowPageNum: boolean; footerShowCopyright: boolean; footerShowConfidentiality: boolean
   htmlNavPosition: 'left' | 'right' | 'top'; htmlColorScheme: 'light' | 'dark' | 'system'; htmlShowSearch: boolean; htmlShowBreadcrumbs: boolean; htmlShowPrevNext: boolean
 }
-type Theme = {
+export type Theme = {
   id: string; name: string; description: string
   clientName?: string; organizationName?: string; productName?: string
   brandProfiles: BrandProfile[]; styleProfiles: StyleProfile[]; outputTemplatePacks: OutputTemplatePack[]
 }
 type OutputVariant = { id: string; name: string; themeId: string; styleProfileId: string; templatePackId: string; formats: ('pdf' | 'word' | 'html')[]; conditions: string[] }
-type ProjectMeta = { themeId: string; styleProfileId: string; templatePackId: string; language: string; version: string; contentType: string; themeCustomized?: boolean }
+export type ProjectMeta = { themeId: string; styleProfileId: string; templatePackId: string; language: string; version: string; contentType: string; themeCustomized?: boolean }
 type PageLayoutZoneElement = { id: string; label: string; alignment: 'left' | 'center' | 'right'; visible: boolean }
 type PageLayout = {
   id: string; name: string; clientId: string; layoutType: 'cover' | 'content' | 'chapter' | 'custom'
@@ -126,6 +126,133 @@ const mkCallouts = (primaryColor: string) => ({
   warning:   { label: 'Warning',   accentColor: '#D97706', bgColor: '#FEF3C7', textColor: '#78350F' },
   example:   { label: 'Example',   accentColor: '#9898AB', bgColor: '#F9F8F6', textColor: '#3D3D4E' },
 })
+
+const createRichStyleProfile = ({
+  id,
+  name,
+  clientId,
+  source,
+  primaryColor = '#5B5BD6',
+  secondaryColor = '#4A4AC4',
+  accentColor = '#8B5CF6',
+  headingFont = 'Arial',
+  bodyFont = 'Arial',
+  logoLabel,
+}: {
+  id: string
+  name: string
+  clientId: string
+  source: string
+  primaryColor?: string
+  secondaryColor?: string
+  accentColor?: string
+  headingFont?: string
+  bodyFont?: string
+  logoLabel?: string
+}): StyleProfile => ({
+  id,
+  name,
+  clientId,
+  scope: 'project',
+  source,
+  primaryColor,
+  secondaryColor,
+  accentColor,
+  bgColor: '#FFFFFF',
+  surfaceColor: '#F9F8F6',
+  headingTextColor: primaryColor,
+  bodyTextColor: '#374151',
+  borderColorToken: '#E2DED7',
+  linkColor: accentColor,
+  successColor: '#16A34A',
+  infoColor: '#2563EB',
+  warningColor: '#D97706',
+  criticalColor: '#DC2626',
+  logoLabel,
+  primaryFont: bodyFont,
+  headingFont,
+  bodyFont,
+  fallbackFont: bodyFont,
+  codeFont: 'Courier New',
+  fontInherit: { h1: true, h2: true, h3: true, h4: true, body: true, caption: true, code: true },
+  body: mkTypo(bodyFont, 11, '400', '#374151'),
+  h1: { ...mkTypo(headingFont, 22, '700', primaryColor), spaceBefore: 16, spaceAfter: 12 },
+  h2: { ...mkTypo(headingFont, 16, '700', secondaryColor), spaceBefore: 12, spaceAfter: 8 },
+  h3: { ...mkTypo(headingFont, 13, '600', secondaryColor), spaceBefore: 10, spaceAfter: 6 },
+  h4: { ...mkTypo(headingFont, 12, '600', secondaryColor), spaceBefore: 8, spaceAfter: 4 },
+  caption: { ...mkTypo(bodyFont, 10, '400', '#6B7280'), spaceBefore: 4, spaceAfter: 8, alignment: 'center' },
+  code: { ...mkTypo('Courier New', 11, '400', '#111827'), spaceBefore: 8, spaceAfter: 8 },
+  links: { color: accentColor, underline: true },
+  lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.', bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 24 },
+  tables: { headerFontWeight: '700', headerTextColor: '#FFFFFF', headerBgColor: secondaryColor, bodyTextColor: '#1F2937', borderColor: '#D1D5DB', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#F9FAFB', firstColEmphasis: false },
+  callouts: mkCallouts(primaryColor),
+})
+
+const isRichStyleProfile = (profile: StyleProfile | undefined): profile is StyleProfile =>
+  !!profile
+  && !!profile.id
+  && !!profile.clientId
+  && !!profile.body
+  && !!profile.h1
+  && !!profile.h2
+  && !!profile.h3
+  && !!profile.h4
+  && !!profile.caption
+  && !!profile.code
+  && !!profile.links
+  && !!profile.lists
+  && !!profile.tables
+  && !!profile.callouts
+
+const synthesizeLegacyBrandProfile = (theme: Theme, brand: BrandProfile): StyleProfile =>
+  createRichStyleProfile({
+    id: `legacy-rich-${theme.id}-${brand.id}`,
+    name: brand.name,
+    clientId: theme.id,
+    source: `Synthesized from legacy brand profile ${brand.id}`,
+    primaryColor: brand.primaryColor,
+    secondaryColor: brand.secondaryColor,
+    accentColor: brand.accentColor,
+    headingFont: brand.headingFont,
+    bodyFont: brand.bodyFont,
+    logoLabel: brand.logoLabel,
+  })
+
+const SAFE_DEFAULT_STYLE_PROFILE = createRichStyleProfile({
+  id: 'safe-default-rich-profile',
+  name: 'Safe Default',
+  clientId: 'default',
+  source: 'Safe default',
+})
+
+export function resolveEffectiveStyleProfile({
+  themes,
+  projectMeta,
+  activeStyleProfileId,
+}: {
+  themes: Theme[]
+  projectMeta: ProjectMeta
+  activeStyleProfileId: string
+}): StyleProfile {
+  const allProfiles = themes.flatMap(theme => theme.styleProfiles ?? [])
+  const byId = (id: string | undefined) =>
+    id ? allProfiles.find(profile => profile.id === id && isRichStyleProfile(profile)) : undefined
+
+  const projectProfile = byId(projectMeta.styleProfileId)
+  if (projectProfile) return projectProfile
+
+  const activeProfile = byId(activeStyleProfileId)
+  if (activeProfile) return activeProfile
+
+  const activeTheme = themes.find(theme => theme.id === projectMeta.themeId) ?? themes[0]
+  const activeThemeProfile = activeTheme?.styleProfiles?.find(isRichStyleProfile)
+  if (activeThemeProfile) return activeThemeProfile
+
+  const legacyBrand = activeTheme?.brandProfiles?.[0]
+  if (activeTheme && legacyBrand) return synthesizeLegacyBrandProfile(activeTheme, legacyBrand)
+
+  return SAFE_DEFAULT_STYLE_PROFILE
+}
 
 const INITIAL_THEMES: Theme[] = [
   {
@@ -1013,11 +1140,12 @@ function ZoneEditor({ title, elements, availableElements, onUpdate }: {
 
 const ALL_PAGE_ELEMENTS = ['Logo', 'Secondary Logo', 'Document Title', 'Subtitle', 'Client Name', 'Product Name', 'Version', 'Date', 'Confidentiality', 'Chapter Title', 'Topic Title', 'Page Number', 'Copyright', 'Custom Text', 'Divider']
 
-function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaChange, activeStyleProfileId, onSetActiveStyleProfileId, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, themeVariables, onThemeVarsChange }: {
+function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStyleProfile, onProjectMetaChange, activeStyleProfileId, onSetActiveStyleProfileId, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, themeVariables, onThemeVarsChange }: {
   onNav: (s: Screen) => void
   returnTo?: Screen
   themes: Theme[]
   projectMeta: ProjectMeta
+  effectiveStyleProfile: StyleProfile
   onProjectMetaChange: (m: Partial<ProjectMeta>) => void
   activeStyleProfileId: string
   onSetActiveStyleProfileId: (id: string) => void
@@ -1052,7 +1180,10 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
   }
 
   // Style profiles — derived from central themes state (no local copy)
-  const localProfiles = themes.flatMap(t => t.styleProfiles)
+  const storedProfiles = themes.flatMap(t => t.styleProfiles)
+  const localProfiles = storedProfiles.some(profile => profile.id === effectiveStyleProfile.id)
+    ? storedProfiles
+    : [...storedProfiles, effectiveStyleProfile]
   const setLocalProfiles = (updater: StyleProfile[] | ((prev: StyleProfile[]) => StyleProfile[])) => {
     const next = typeof updater === 'function' ? updater(localProfiles) : updater
     // Distribute updated profiles back into their respective themes
@@ -1062,9 +1193,12 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
     })))
   }
   const activeThemeObj = themes.find(t => t.id === projectMeta?.themeId) ?? themes[0]
-  const [selectedProfileId, setEditId] = useState<string>(activeStyleProfileId)
+  const [selectedProfileId, setEditId] = useState<string>(effectiveStyleProfile.id)
   const editProfile = localProfiles.find(p => p.id === selectedProfileId) ?? localProfiles[0]
   const editId = editProfile?.id ?? ''
+  useEffect(() => {
+    setEditId(effectiveStyleProfile.id)
+  }, [effectiveStyleProfile.id])
 
   // Profile inline rename
   const [renamingProfileId, setRenamingProfileId] = useState<string | null>(null)
@@ -1437,7 +1571,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
           : existingCallouts.important,
       },
     }
-    setLocalProfiles(prev => [...prev, newP])
+    setLocalProfiles([...storedProfiles, newP])
     setEditId(newP.id)
     closeImportModal()
   }
@@ -1461,7 +1595,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
           tables: { headerFontWeight: '700', headerTextColor: '#FFFFFF', headerBgColor: '#374151', bodyTextColor: '#1F2937', borderColor: '#D1D5DB', borderWidth: 1, cellPadding: 8, alternateRows: true, alternateRowColor: '#F9FAFB', firstColEmphasis: false },
           callouts: mkCallouts('#5B5BD6'),
         }
-    setLocalProfiles(prev => [...prev, newP])
+    setLocalProfiles([...storedProfiles, newP])
     setEditId(newP.id)
     setNewProfOpen(false)
     setNewProfName('New Style Profile')
@@ -11789,7 +11923,7 @@ ${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${ne
 
 // ── App-level project defaults (used for reset and initial state) ─────────────
 const DEFAULT_PROJECT_META: ProjectMeta = {
-  themeId: 'th1', styleProfileId: 'sp1', templatePackId: 'tp1',
+  themeId: 'th1', styleProfileId: '', templatePackId: 'tp1',
   language: 'en-US', version: '', contentType: 'user-guide',
 }
 const DEFAULT_THEME_VARIABLES: Record<string, Variable[]> = {
@@ -11820,7 +11954,7 @@ export default function App() {
   const [themes, setThemes] = useState<Theme[]>(INITIAL_THEMES)
   const [projectMeta, setProjectMeta] = useState<ProjectMeta>(DEFAULT_PROJECT_META)
   const handleProjectMetaChange = (m: Partial<ProjectMeta>) => { setProjectMeta(prev => ({ ...prev, ...m })); triggerAutosave() }
-  const [activeStyleProfileId, setActiveStyleProfileId] = useState('sp1')
+  const [activeStyleProfileId, setActiveStyleProfileId] = useState('')
   const [pageLayouts, setPageLayouts] = useState<PageLayout[]>(INITIAL_PAGE_LAYOUTS)
   const [htmlMasterPages, setHtmlMasterPages] = useState<HtmlMasterPage[]>(INITIAL_HTML_MASTER_PAGES)
   const handleAddTheme = (t: Theme) => { setThemes(prev => [...prev, t]); triggerAutosave() }
@@ -12126,17 +12260,20 @@ export default function App() {
     setProjectId(record.projectId)
     setProjectName(record.projectName ?? '')
     setIsDemoMode(record.isDemoMode ?? false)
-    const SEED_PROFILE_IDS = new Set(['sp1', 'sp2', 'sp3', 'sp4'])
     const restoredThemes = ((record.themes as Theme[]) ?? INITIAL_THEMES).map(t => ({
       ...t,
-      styleProfiles: t.styleProfiles.filter(p => !SEED_PROFILE_IDS.has(p.id)),
+      brandProfiles: t.brandProfiles ?? [],
+      styleProfiles: (t.styleProfiles ?? []).filter(isRichStyleProfile),
+      outputTemplatePacks: t.outputTemplatePacks ?? [],
     }))
     setThemes(restoredThemes)
     // A fallback may be edited, but must not be treated as applied without user action.
-    const restoredActiveId = restoredThemes.flatMap(t => t.styleProfiles)
-      .find(p => p.id === record.activeStyleProfileId)?.id ?? ''
-    setProjectMeta({ ...((record.projectMeta as ProjectMeta) ?? DEFAULT_PROJECT_META), styleProfileId: restoredActiveId })
-    setActiveStyleProfileId(restoredActiveId)
+    const restoredProjectMeta = { ...DEFAULT_PROJECT_META, ...((record.projectMeta as ProjectMeta) ?? {}) }
+    const restoredProfiles = restoredThemes.flatMap(t => t.styleProfiles)
+    const validProjectProfileId = restoredProfiles.find(p => p.id === restoredProjectMeta.styleProfileId)?.id ?? ''
+    const validActiveProfileId = restoredProfiles.find(p => p.id === record.activeStyleProfileId)?.id ?? ''
+    setProjectMeta({ ...restoredProjectMeta, styleProfileId: validProjectProfileId })
+    setActiveStyleProfileId(validActiveProfileId)
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
     setHtmlMasterPages((record.htmlMasterPages as HtmlMasterPage[]) ?? INITIAL_HTML_MASTER_PAGES)
@@ -12200,7 +12337,7 @@ export default function App() {
     setReviewRevision(-1)
     setThemes(INITIAL_THEMES)
     setProjectMeta(DEFAULT_PROJECT_META)
-    setActiveStyleProfileId('sp1')
+    setActiveStyleProfileId('')
     setPageLayouts(INITIAL_PAGE_LAYOUTS)
     setHtmlMasterPages(INITIAL_HTML_MASTER_PAGES)
     setThemeVariables(DEFAULT_THEME_VARIABLES)
@@ -12243,10 +12380,11 @@ export default function App() {
   const [diagOpen, setDiagOpen] = useState(false)
 
   const renderScreen = () => {
+    const effectiveStyleProfile = resolveEffectiveStyleProfile({ themes, projectMeta, activeStyleProfileId })
     switch (screen) {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
-      case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onSetActiveStyleProfileId={handleActiveStyleProfileChange} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
+      case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onSetActiveStyleProfileId={handleActiveStyleProfileChange} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} onRetryExtraction={handleRetryExtraction} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
       case 'analysis':  return <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
       case 'structure': return <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
