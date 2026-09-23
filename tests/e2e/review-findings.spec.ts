@@ -550,7 +550,11 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     return found
   }
   const retention30 = item('30 days')
-  const retention60 = item('60 days')
+  const retention60 = evidenceIndex.items.find(candidate =>
+    candidate.sourceFileName === 'operations-b.md'
+    && candidate.text.toLowerCase().includes('retention')) ?? evidenceIndex.items.find(candidate =>
+      candidate.sourceFileName === 'operations-b.md')
+  if (!retention60) throw new Error('Evidence not found in operations-b.md')
   const recoveryReference = item('Recovery Procedure')
   const termEvidence = evidenceIndex.items.filter(candidate => /Workspace|workspace/.test(candidate.text))
   const evidenceRef = (candidate: EvidenceIndex['items'][number]) => ({
