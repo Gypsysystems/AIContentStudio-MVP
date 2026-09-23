@@ -11,12 +11,28 @@ type StoredTopic = {
 }
 
 type StoredProject = {
+  projectId: string
   projectName: string
+  projectMeta: { contentType: string }
   appToc: StoredTopic[]
-  tocProposal: { items: StoredTopic[] } | null
+  tocProposal: {
+    contentType: string
+    evidenceSourcesRevision: number
+    evidenceExtractionRevision: string
+    groundedAnalysisBuiltAt: number
+    items: StoredTopic[]
+  } | null
+  evidenceIndex: {
+    sourcesRevision: number
+    extractionRevision: string
+  } | null
+  conceptAnalysis: {
+    builtAt: number
+  } | null
   tocGeneratedFromEvidenceSourcesRevision: number
   tocGeneratedFromEvidenceExtractionRevision: string
   tocGeneratedFromConceptBuiltAt: number
+  tocGeneratedFromContentType: string
 }
 
 async function createGroundedProject(page: Page, projectName: string) {
@@ -173,4 +189,80 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await page.getByTestId("regenerate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Release Validation" }).first()).toBeVisible()
+})
+
+test("marks a committed TOC stale after the project content type changes without replacing it", async ({ page }) => {
+  test.setTimeout(60_000)
+  const projectName = `TOC Content Type ${Date.now()}`
+  await createGroundedProject(page, projectName)
+  await page.getByTestId("generate-grounded-toc").click()
+  await page.getByTestId("commit-toc-proposal").click()
+  await expect(page.getByTestId("committed-toc-panel")).toBeVisible()
+  await expect.poll(async () => (await readProject(page, projectName)).tocGeneratedFromContentType).toBe("user-guide")
+
+  const before = await readProject(page, projectName)
+  const committedTopics = before.appToc.map(item => `${item.id}:${item.topicId}:${item.title}`)
+
+  await page.getByRole("button", { name: /Details/ }).click()
+  await page.getByRole("button", { name: /Admin Guide/ }).click()
+  await expect.poll(async () => (await readProject(page, projectName)).projectMeta.contentType).toBe("admin-guide")
+  await page.getByRole("button", { name: /Content Studio/ }).click()
+  await page.getByText(projectName, { exact: true }).click()
+  await page.getByRole("button", { name: "TOC" }).click()
+
+  await expect(page.getByTestId("committed-toc-stale")).toBeVisible()
+  await expect(page.getByTestId("committed-toc-panel")).toContainText("Flight Operations")
+  const after = await readProject(page, projectName)
+  expect(after.tocGeneratedFromContentType).toBe("user-guide")
+  expect(after.appToc.map(item => `${item.id}:${item.topicId}:${item.title}`)).toEqual(committedTopics)
+})
+
+test("keeps a stale TOC proposal stale when the project is duplicated", async ({ page }) => {
+  test.setTimeout(60_000)
+  const projectName = `TOC Stale Duplicate ${Date.now()}`
+  const duplicateName = `${projectName} Copy`
+  await createGroundedProject(page, projectName)
+  await page.getByTestId("generate-grounded-toc").click()
+  await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
+
+  await page.getByRole("button", { name: "Sources" }).click()
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "changed-evidence.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# Changed Evidence\n\nThis source changes the frozen evidence revision."),
+  })
+  await expect(page.getByTestId("evidence-freshness")).toHaveText("Stale", { timeout: 15_000 })
+  await page.getByTestId("rebuild-evidence-index").click()
+  await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
+  await page.getByRole("button", { name: "TOC" }).click()
+  await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
+
+  const original = await readProject(page, projectName)
+  if (!original.tocProposal || !original.evidenceIndex) throw new Error("Expected a stale persisted proposal")
+  expect(original.tocProposal.evidenceExtractionRevision).not.toBe(original.evidenceIndex.extractionRevision)
+  const originalProposalProvenance = {
+    evidenceSourcesRevision: original.tocProposal.evidenceSourcesRevision,
+    evidenceExtractionRevision: original.tocProposal.evidenceExtractionRevision,
+    groundedAnalysisBuiltAt: original.tocProposal.groundedAnalysisBuiltAt,
+  }
+  const originalTopicIds = original.tocProposal.items.map(item => item.topicId)
+
+  await page.getByRole("button", { name: /Content Studio/ }).click()
+  await page.getByRole("button", { name: "Duplicate", exact: true }).click()
+  await expect(page.getByText(duplicateName, { exact: true })).toBeVisible()
+  const duplicate = await readProject(page, duplicateName)
+  if (!duplicate.tocProposal || !duplicate.evidenceIndex) throw new Error("Expected copied proposal and evidence")
+
+  expect({
+    evidenceSourcesRevision: duplicate.tocProposal.evidenceSourcesRevision,
+    evidenceExtractionRevision: duplicate.tocProposal.evidenceExtractionRevision,
+    groundedAnalysisBuiltAt: duplicate.tocProposal.groundedAnalysisBuiltAt,
+  }).toEqual(originalProposalProvenance)
+  expect(duplicate.tocProposal.evidenceExtractionRevision).not.toBe(duplicate.evidenceIndex.extractionRevision)
+  expect(duplicate.tocProposal.items.map(item => item.topicId)).toEqual(originalTopicIds)
+
+  await page.getByText(duplicateName, { exact: true }).click()
+  await page.getByRole("button", { name: "TOC" }).click()
+  await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
+  await expect(page.getByTestId("commit-toc-proposal")).toBeDisabled()
 })

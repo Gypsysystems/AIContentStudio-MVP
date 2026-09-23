@@ -16,7 +16,10 @@ import {
   remapUnsupportedAnalysis,
   type UnsupportedAnalysis,
 } from './unsupportedAnalysis'
-import type { TocProposal } from './tocProposal'
+import {
+  isTocProposalFresh,
+  type TocProposal,
+} from './tocProposal'
 
 export const SCHEMA_VERSION = 2
 const DB_NAME = 'docflow-db'
@@ -72,6 +75,7 @@ export type ProjectRecord = {
   tocGeneratedFromEvidenceSourcesRevision: number
   tocGeneratedFromEvidenceExtractionRevision: string
   tocGeneratedFromConceptBuiltAt: number
+  tocGeneratedFromContentType: string
   tocHumanModified: boolean
   masterAssignments: Record<string, string>
 
@@ -221,6 +225,7 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     tocGeneratedFromEvidenceSourcesRevision: -1,
     tocGeneratedFromEvidenceExtractionRevision: '',
     tocGeneratedFromConceptBuiltAt: -1,
+    tocGeneratedFromContentType: '',
     tocHumanModified: false,
     masterAssignments: {},
     sourceExtractions: {},
@@ -361,12 +366,28 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
   const copiedEvidenceIndex = copy.evidenceIndex as EvidenceIndex | null
   const copiedConceptAnalysis = copy.conceptAnalysis as ConceptAnalysis | null
   const sourceTocProposal = source.tocProposal as TocProposal | null
+  const sourceProjectMeta = source.projectMeta && typeof source.projectMeta === 'object'
+    ? source.projectMeta as Record<string, unknown>
+    : {}
+  const sourceContentType = typeof sourceProjectMeta.contentType === 'string'
+    ? sourceProjectMeta.contentType
+    : source.documentType
+  const sourceProposalWasCurrent = isTocProposalFresh(
+    sourceTocProposal,
+    sourceEvidenceIndex,
+    sourceConceptAnalysis,
+    sourceContentType,
+  )
   copy.tocProposal = sourceTocProposal && copiedEvidenceIndex && copiedConceptAnalysis
     ? {
         ...sourceTocProposal,
-        evidenceSourcesRevision: copiedEvidenceIndex.sourcesRevision,
-        evidenceExtractionRevision: copiedEvidenceIndex.extractionRevision,
-        groundedAnalysisBuiltAt: copiedConceptAnalysis.builtAt,
+        ...(sourceProposalWasCurrent
+          ? {
+              evidenceSourcesRevision: copiedEvidenceIndex.sourcesRevision,
+              evidenceExtractionRevision: copiedEvidenceIndex.extractionRevision,
+              groundedAnalysisBuiltAt: copiedConceptAnalysis.builtAt,
+            }
+          : {}),
         items: sourceTocProposal.items.map(item => ({
           ...item,
           supportingEvidenceIds: [...item.supportingEvidenceIds],
@@ -379,6 +400,7 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     && source.tocGeneratedFromEvidenceSourcesRevision === sourceEvidenceIndex.sourcesRevision
     && source.tocGeneratedFromEvidenceExtractionRevision === sourceEvidenceIndex.extractionRevision
     && source.tocGeneratedFromConceptBuiltAt === sourceConceptAnalysis.builtAt
+    && source.tocGeneratedFromContentType === sourceContentType
   if (committedTocWasCurrent && copiedEvidenceIndex && copiedConceptAnalysis) {
     copy.tocGeneratedFromEvidenceSourcesRevision = copiedEvidenceIndex.sourcesRevision
     copy.tocGeneratedFromEvidenceExtractionRevision = copiedEvidenceIndex.extractionRevision

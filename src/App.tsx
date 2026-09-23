@@ -13468,6 +13468,7 @@ export default function App() {
   const [tocGeneratedFromEvidenceSourcesRevision, setTocGeneratedFromEvidenceSourcesRevision] = useState(-1)
   const [tocGeneratedFromEvidenceExtractionRevision, setTocGeneratedFromEvidenceExtractionRevision] = useState('')
   const [tocGeneratedFromConceptBuiltAt, setTocGeneratedFromConceptBuiltAt] = useState(-1)
+  const [tocGeneratedFromContentType, setTocGeneratedFromContentType] = useState('')
   const [tocHumanModified, setTocHumanModified] = useState(false)
   const handleTocChange = (toc: TocItem[]) => { setAppToc(toc); setTocRevision(r => r + 1); setTocHumanModified(true); triggerAutosave() }
 
@@ -13662,6 +13663,7 @@ export default function App() {
       tocGeneratedFromEvidenceSourcesRevision,
       tocGeneratedFromEvidenceExtractionRevision,
       tocGeneratedFromConceptBuiltAt,
+      tocGeneratedFromContentType,
       tocHumanModified,
       masterAssignments: masterAssignments as Record<string, string>,
       docBlocks: sharedDocBlocksRef.current as unknown[],
@@ -13676,7 +13678,7 @@ export default function App() {
       docComments: docComments as unknown[],
       publishConfig: publishConfig as unknown,
     }
-  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, unsupportedAnalysis, appToc, tocProposal, tocRevision, tocGeneratedFromRev, tocGeneratedFromEvidenceSourcesRevision, tocGeneratedFromEvidenceExtractionRevision, tocGeneratedFromConceptBuiltAt, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
+  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, unsupportedAnalysis, appToc, tocProposal, tocRevision, tocGeneratedFromRev, tocGeneratedFromEvidenceSourcesRevision, tocGeneratedFromEvidenceExtractionRevision, tocGeneratedFromConceptBuiltAt, tocGeneratedFromContentType, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
 
   // Keep latestBuildRef current on every render so autosave never sees stale state
   latestBuildRef.current = buildProjectRecord
@@ -13733,6 +13735,7 @@ export default function App() {
       || tocGeneratedFromEvidenceSourcesRevision !== evidenceIndex.sourcesRevision
       || tocGeneratedFromEvidenceExtractionRevision !== evidenceIndex.extractionRevision
       || tocGeneratedFromConceptBuiltAt !== conceptAnalysis.builtAt
+      || tocGeneratedFromContentType !== projectMeta.contentType
     )
   const handleRebuildEvidence = useCallback(() => {
     if (!canRebuildEvidence || isDemoMode) return
@@ -13796,6 +13799,7 @@ export default function App() {
     setTocGeneratedFromEvidenceSourcesRevision(proposal.evidenceSourcesRevision)
     setTocGeneratedFromEvidenceExtractionRevision(proposal.evidenceExtractionRevision)
     setTocGeneratedFromConceptBuiltAt(proposal.groundedAnalysisBuiltAt)
+    setTocGeneratedFromContentType(proposal.contentType)
     setTocHumanModified(mergedExisting)
     setTocProposal(null)
     triggerAutosave()
@@ -13888,6 +13892,7 @@ export default function App() {
     setTocGeneratedFromEvidenceSourcesRevision(record.tocGeneratedFromEvidenceSourcesRevision ?? -1)
     setTocGeneratedFromEvidenceExtractionRevision(record.tocGeneratedFromEvidenceExtractionRevision ?? '')
     setTocGeneratedFromConceptBuiltAt(record.tocGeneratedFromConceptBuiltAt ?? -1)
+    setTocGeneratedFromContentType(record.tocGeneratedFromContentType ?? '')
     setTocHumanModified(record.tocHumanModified ?? false)
     setMasterAssignments((record.masterAssignments as Record<number, string>) ?? {})
     sharedDocBlocksRef.current = (record.docBlocks as DocBlock[]) ?? []
@@ -13976,6 +13981,7 @@ export default function App() {
     setTocGeneratedFromEvidenceSourcesRevision(-1)
     setTocGeneratedFromEvidenceExtractionRevision('')
     setTocGeneratedFromConceptBuiltAt(-1)
+    setTocGeneratedFromContentType('')
     setTocHumanModified(false)
     setMasterAssignments({})
     sharedDocBlocksRef.current = []
