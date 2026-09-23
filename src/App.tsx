@@ -1140,7 +1140,7 @@ function ZoneEditor({ title, elements, availableElements, onUpdate }: {
 
 const ALL_PAGE_ELEMENTS = ['Logo', 'Secondary Logo', 'Document Title', 'Subtitle', 'Client Name', 'Product Name', 'Version', 'Date', 'Confidentiality', 'Chapter Title', 'Topic Title', 'Page Number', 'Copyright', 'Custom Text', 'Divider']
 
-function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStyleProfile, onProjectMetaChange, activeStyleProfileId, onSetActiveStyleProfileId, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, themeVariables, onThemeVarsChange }: {
+function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStyleProfile, onProjectMetaChange, activeStyleProfileId, onApplyStyleProfile, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, themeVariables, onThemeVarsChange }: {
   onNav: (s: Screen) => void
   returnTo?: Screen
   themes: Theme[]
@@ -1148,7 +1148,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
   effectiveStyleProfile: StyleProfile
   onProjectMetaChange: (m: Partial<ProjectMeta>) => void
   activeStyleProfileId: string
-  onSetActiveStyleProfileId: (id: string) => void
+  onApplyStyleProfile: (id: string) => void
   onAddTheme: (t: Theme) => void
   onThemesChange: (themes: Theme[]) => void
   pageLayouts: PageLayout[]
@@ -2194,8 +2194,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                     const remaining = localProfiles.filter(p => p.id !== editId)
                     setLocalProfiles(remaining)
                     if (editId === activeStyleProfileId) {
-                      onSetActiveStyleProfileId('')
-                      onProjectMetaChange({ styleProfileId: '' })
+                      onApplyStyleProfile('')
                     }
                     setEditId(remaining[0]?.id ?? '')
                   }} title="Delete" className="h-8 w-8 flex items-center justify-center text-[#C8C6C0] border border-[#E2DED7] rounded-lg hover:bg-[#FEF2F2] hover:text-[#EF4444] hover:border-[#FECACA] transition-colors">
@@ -2207,7 +2206,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
 
             {/* Apply to Project */}
             {editProfile && (
-              <button onClick={() => { onSetActiveStyleProfileId(editId); onProjectMetaChange({ styleProfileId: editId }) }}
+              <button onClick={() => onApplyStyleProfile(editId)}
                 className={`w-full py-2 text-[11px] font-semibold rounded-xl transition-all ${activeStyleProfileId === editId ? 'bg-[#DCFCE7] text-[#16A34A] border border-[#BBF7D0]' : 'bg-[#5B5BD6] text-white hover:bg-[#4A4AC4] shadow-sm'}`}>
                 {activeStyleProfileId === editId ? '✓ Applied to Project' : 'Apply to Project'}
               </button>
@@ -12034,7 +12033,11 @@ export default function App() {
   const handleThemesChange = (t: Theme[]) => { setThemes(t); triggerAutosave() }
   const handlePageLayoutsChange = (pls: PageLayout[]) => { setPageLayouts(pls); triggerAutosave() }
   const handleHtmlMasterPagesChange = (hmps: HtmlMasterPage[]) => { setHtmlMasterPages(hmps); triggerAutosave() }
-  const handleActiveStyleProfileChange = (id: string) => { setActiveStyleProfileId(id); triggerAutosave() }
+  const handleApplyStyleProfile = (id: string) => {
+    setActiveStyleProfileId(id)
+    setProjectMeta(prev => ({ ...prev, styleProfileId: id }))
+    triggerAutosave()
+  }
 
   // ── Autosave-aware Studio / Publish handlers ──────────────────────────────
   const handleSnippetsChange = (s: Snippet[]) => { setSnippets(s); triggerAutosave() }
@@ -12270,10 +12273,27 @@ export default function App() {
     // A fallback may be edited, but must not be treated as applied without user action.
     const restoredProjectMeta = { ...DEFAULT_PROJECT_META, ...((record.projectMeta as ProjectMeta) ?? {}) }
     const restoredProfiles = restoredThemes.flatMap(t => t.styleProfiles)
-    const validProjectProfileId = restoredProfiles.find(p => p.id === restoredProjectMeta.styleProfileId)?.id ?? ''
-    const validActiveProfileId = restoredProfiles.find(p => p.id === record.activeStyleProfileId)?.id ?? ''
-    setProjectMeta({ ...restoredProjectMeta, styleProfileId: validProjectProfileId })
-    setActiveStyleProfileId(validActiveProfileId)
+    const resolvedProfile = resolveEffectiveStyleProfile({
+      themes: restoredThemes,
+      projectMeta: restoredProjectMeta,
+      activeStyleProfileId: record.activeStyleProfileId ?? '',
+    })
+    const reconciledProfileId = restoredProfiles.some(p => p.id === resolvedProfile.id)
+      ? resolvedProfile.id
+      : ''
+    const reconciledProjectMeta = { ...restoredProjectMeta, styleProfileId: reconciledProfileId }
+    setProjectMeta(reconciledProjectMeta)
+    setActiveStyleProfileId(reconciledProfileId)
+    if (
+      record.activeStyleProfileId !== reconciledProfileId
+      || restoredProjectMeta.styleProfileId !== reconciledProfileId
+    ) {
+      await saveProject({
+        ...record,
+        projectMeta: reconciledProjectMeta,
+        activeStyleProfileId: reconciledProfileId,
+      })
+    }
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
     setHtmlMasterPages((record.htmlMasterPages as HtmlMasterPage[]) ?? INITIAL_HTML_MASTER_PAGES)
@@ -12384,7 +12404,7 @@ export default function App() {
     switch (screen) {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
-      case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onSetActiveStyleProfileId={handleActiveStyleProfileChange} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
+      case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} onRetryExtraction={handleRetryExtraction} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
       case 'analysis':  return <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
       case 'structure': return <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
