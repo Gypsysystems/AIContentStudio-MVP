@@ -35,11 +35,37 @@ type GroundedRecord = {
 }
 
 type StoredConceptAnalysis = {
+  version: number
   method: string
   evidenceSourcesRevision: number
   evidenceExtractionRevision: string
   concepts: GroundedRecord[]
   terminology: GroundedRecord[]
+  conflicts: Array<{
+    id: string
+    subject: string
+    kind: string
+    summary: string
+    rationale: string
+    sides: Array<{
+      id: string
+      label: string
+      claimText: string
+      evidenceIds: string[]
+      evidenceRefs: EvidenceReference[]
+    }>
+    evidenceIds: string[]
+    evidenceRefs: EvidenceReference[]
+  }>
+  gaps: Array<{
+    id: string
+    category: string
+    status: string
+    title: string
+    rationale: string
+    evidenceIds: string[]
+    evidenceRefs: EvidenceReference[]
+  }>
 }
 
 type StoredProject = {
@@ -79,6 +105,9 @@ async function readProjects(page: Page): Promise<StoredProject[]> {
 
 async function waitForCurrentEvidence(page: Page) {
   await expect(page.getByTestId("evidence-index-panel")).toBeVisible()
+  if (await page.getByTestId("evidence-freshness").textContent() === "Stale") {
+    await page.getByTestId("rebuild-evidence-index").click()
+  }
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
 }
 
@@ -168,6 +197,102 @@ test("derives persisted concepts and terminology only from evidence with inspect
   expect(JSON.stringify(reloaded.conceptAnalysis)).not.toMatch(/Nexus|Asteria/)
 })
 
+test("detects only concrete cross-source conflicts and conservative source-backed gaps", async ({ page }) => {
+  test.setTimeout(60_000)
+  const projectName = `Grounded Findings ${Date.now()}`
+  const positiveClaim = "Operators must enable audit logging."
+  const negativeClaim = "Operators must not enable audit logging."
+  const explicitGap = "Recovery prerequisites are TBD."
+
+  await createProjectAtSources(page, projectName)
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "operations-a.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from([
+      "# Audit Operations",
+      "",
+      positiveClaim,
+      "Administrators must review audit logs.",
+      "Session timeout is 15 minutes.",
+      "Step 1: Open the audit console.",
+      "Step 3: Confirm the audit record.",
+      explicitGap,
+      'Refer to the section "Recovery Procedure".',
+      "",
+      "## Empty Checklist",
+    ].join("\n")),
+  })
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "operations-b.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from([
+      "# Audit Operations",
+      "",
+      negativeClaim,
+      "Administrators should review audit logs.",
+      "Session timeout is 30 minutes.",
+    ].join("\n")),
+  })
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+
+  await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
+  await expect(page.getByTestId("conflict-count")).toHaveText("2")
+  await expect(page.getByTestId("grounded-conflict").filter({ hasText: "Operators" })).toBeVisible()
+  await expect(page.getByTestId("grounded-conflict").filter({ hasText: "Session timeout" })).toBeVisible()
+  await expect(page.getByTestId("grounded-conflict").filter({ hasText: "Administrators" })).toHaveCount(0)
+  await expect(page.getByTestId("grounded-gap").filter({ hasText: "Source explicitly identifies missing information" })).toBeVisible()
+  await expect(page.getByTestId("grounded-gap").filter({ hasText: "Referenced topic not found: Recovery Procedure" })).toBeVisible()
+  await expect(page.getByTestId("grounded-gap").filter({ hasText: "No source content under “Empty Checklist”" })).toBeVisible()
+  await expect(page.getByTestId("grounded-gap").filter({ hasText: "Workflow step 2 not found in source" })).toBeVisible()
+  await expect(page.getByText("Not found in sources", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("Nexus Technical Spec", { exact: false })).toHaveCount(0)
+  await expect(page.getByText("Asteria", { exact: false })).toHaveCount(0)
+
+  let stored: StoredProject | undefined
+  await expect.poll(async () => {
+    stored = (await readProjects(page)).find(project => project.projectName === projectName)
+    return stored?.conceptAnalysis?.conflicts.length
+  }).toBe(2)
+  if (!stored?.evidenceIndex || !stored.conceptAnalysis) throw new Error("Expected persisted findings")
+  expect(stored.conceptAnalysis.version).toBe(2)
+  const evidenceById = new Map(stored.evidenceIndex.items.map(item => [item.id, item]))
+  const operatorsConflict = stored.conceptAnalysis.conflicts.find(conflict => conflict.subject === "Operators")!
+  expect(operatorsConflict.sides.map(side => side.claimText).sort()).toEqual([negativeClaim.slice(0, -1), positiveClaim.slice(0, -1)].sort())
+  expect(operatorsConflict.sides.flatMap(side => side.evidenceRefs).map(reference => reference.sourceFileName).sort())
+    .toEqual(["operations-a.md", "operations-b.md"])
+  for (const finding of [...stored.conceptAnalysis.conflicts, ...stored.conceptAnalysis.gaps]) {
+    expect(finding.evidenceIds.length).toBeGreaterThan(0)
+    expect(finding.evidenceRefs.map(reference => reference.evidenceId)).toEqual(finding.evidenceIds)
+    for (const reference of finding.evidenceRefs) {
+      const evidence = evidenceById.get(reference.evidenceId)
+      expect(reference).toEqual({
+        evidenceId: evidence!.id,
+        sourceId: evidence!.sourceId,
+        fileId: evidence!.fileId,
+        sourceFileName: evidence!.sourceFileName,
+        location: evidence!.location,
+      })
+    }
+  }
+
+  const conflictRow = page.getByTestId("grounded-conflict").filter({ hasText: "Operators" })
+  await conflictRow.getByRole("button").first().click()
+  await conflictRow.getByTestId("analysis-evidence-reference").filter({ hasText: negativeClaim }).click()
+  await expect(page.getByTestId("analysis-evidence-dialog")).toContainText(negativeClaim)
+  await page.getByTestId("analysis-evidence-dialog").getByRole("button").click()
+
+  const conflictIds = stored.conceptAnalysis.conflicts.map(conflict => conflict.id)
+  const gapIds = stored.conceptAnalysis.gaps.map(gap => gap.id)
+  await page.reload()
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+  await expect(page.getByTestId("conflict-count")).toHaveText("2")
+  const reloaded = (await readProjects(page)).find(project => project.projectName === projectName)!
+  expect(reloaded.conceptAnalysis!.conflicts.map(conflict => conflict.id)).toEqual(conflictIds)
+  expect(reloaded.conceptAnalysis!.gaps.map(gap => gap.id)).toEqual(gapIds)
+})
+
 test("marks analysis stale when evidence changes and replaces only concept and terminology results", async ({ page }) => {
   test.setTimeout(60_000)
   const projectName = `Concept Freshness ${Date.now()}`
@@ -182,7 +307,16 @@ test("marks analysis stale when evidence changes and replaces only concept and t
   await openRealAnalysis(page)
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
 
-  const before = (await readProjects(page)).find(project => project.projectName === projectName)!
+  let before: StoredProject | undefined
+  await expect.poll(async () => {
+    before = (await readProjects(page)).find(project => project.projectName === projectName)
+    return before?.conceptAnalysis?.version
+  }).toBe(2)
+  if (!before?.conceptAnalysis) throw new Error("Expected persisted analysis")
+  const findingsBeforeStale = {
+    conflicts: before.conceptAnalysis.conflicts,
+    gaps: before.conceptAnalysis.gaps,
+  }
   const preservedState = {
     themes: before.themes,
     appToc: before.appToc,
@@ -202,6 +336,11 @@ test("marks analysis stale when evidence changes and replaces only concept and t
   await openRealAnalysis(page)
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("rebuild-concept-analysis")).toBeDisabled()
+  const staleProject = (await readProjects(page)).find(project => project.projectName === projectName)!
+  expect({
+    conflicts: staleProject.conceptAnalysis!.conflicts,
+    gaps: staleProject.conceptAnalysis!.gaps,
+  }).toEqual(findingsBeforeStale)
   await page.getByRole("button", { name: "Return to Sources" }).click()
   await page.getByTestId("rebuild-evidence-index").click()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
@@ -235,7 +374,23 @@ test("duplicates grounded analysis with copied source references and stable anal
   await page.locator('input[type="file"]').setInputFiles({
     name: "navigation.md",
     mimeType: "text/markdown",
-    buffer: Buffer.from("# Stellar Navigation Console\n\nStellar Navigation Console displays the Guidance Vector."),
+    buffer: Buffer.from([
+      "# Stellar Navigation Console",
+      "",
+      "Stellar Navigation Console must display the Guidance Vector.",
+      "Navigation timeout is 10 minutes.",
+      "Recovery details are TBD.",
+    ].join("\n")),
+  })
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "navigation-policy.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from([
+      "# Stellar Navigation Console",
+      "",
+      "Stellar Navigation Console must not display the Guidance Vector.",
+      "Navigation timeout is 20 minutes.",
+    ].join("\n")),
   })
   await waitForCurrentEvidence(page)
   await openRealAnalysis(page)
@@ -247,7 +402,7 @@ test("duplicates grounded analysis with copied source references and stable anal
     return original?.conceptAnalysis?.concepts.length ?? 0
   }).toBeGreaterThan(0)
   if (!original?.conceptAnalysis) throw new Error("Expected original analysis")
-  const originalFileId = original.sourceFileIds[0]
+  const originalFileIds = new Set(original.sourceFileIds)
   const originalConceptIds = original.conceptAnalysis.concepts.map(concept => concept.id)
   const originalTermIds = original.conceptAnalysis.terminology.map(term => term.id)
 
@@ -258,16 +413,26 @@ test("duplicates grounded analysis with copied source references and stable anal
   const projects = await readProjects(page)
   const duplicate = projects.find(project => project.projectName === duplicateName)!
   const originalAfter = projects.find(project => project.projectName === projectName)!
-  const duplicateFileId = duplicate.sourceFileIds[0]
-  expect(duplicateFileId).not.toBe(originalFileId)
+  const duplicateFileIds = new Set(duplicate.sourceFileIds)
+  expect([...duplicateFileIds].every(fileId => !originalFileIds.has(fileId))).toBe(true)
   expect(duplicate.conceptAnalysis!.concepts.map(concept => concept.id)).toEqual(originalConceptIds)
   expect(duplicate.conceptAnalysis!.terminology.map(term => term.id)).toEqual(originalTermIds)
-  for (const record of [...duplicate.conceptAnalysis!.concepts, ...duplicate.conceptAnalysis!.terminology]) {
+  for (const record of [
+    ...duplicate.conceptAnalysis!.concepts,
+    ...duplicate.conceptAnalysis!.terminology,
+    ...duplicate.conceptAnalysis!.conflicts,
+    ...duplicate.conceptAnalysis!.gaps,
+    ...duplicate.conceptAnalysis!.conflicts.flatMap(conflict => conflict.sides),
+  ]) {
     expect(record.evidenceRefs.every(reference =>
-      reference.sourceId === duplicateFileId && reference.fileId === duplicateFileId)).toBe(true)
+      duplicateFileIds.has(reference.sourceId) && duplicateFileIds.has(reference.fileId))).toBe(true)
     expect(record.evidenceRefs.every(reference =>
-      reference.sourceId !== originalFileId && reference.fileId !== originalFileId)).toBe(true)
+      !originalFileIds.has(reference.sourceId) && !originalFileIds.has(reference.fileId))).toBe(true)
   }
+  expect(duplicate.conceptAnalysis!.conflicts.map(conflict => conflict.id))
+    .toEqual(original.conceptAnalysis.conflicts.map(conflict => conflict.id))
+  expect(duplicate.conceptAnalysis!.gaps.map(gap => gap.id))
+    .toEqual(original.conceptAnalysis.gaps.map(gap => gap.id))
   expect(originalAfter.conceptAnalysis).toEqual(original.conceptAnalysis)
 
   await page.getByText(duplicateName, { exact: true }).click()

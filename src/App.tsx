@@ -5234,6 +5234,8 @@ function EvidenceAnalysisScreen({
 }) {
   const [expandedConcept, setExpandedConcept] = useState<string | null>(null)
   const [expandedTerm, setExpandedTerm] = useState<string | null>(null)
+  const [expandedConflict, setExpandedConflict] = useState<string | null>(null)
+  const [expandedGap, setExpandedGap] = useState<string | null>(null)
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceItem | null>(null)
   const evidenceById = new Map((evidenceIndex?.items ?? []).map(item => [item.id, item]))
   const canBuild = !!evidenceIndex && evidenceFresh
@@ -5278,7 +5280,7 @@ function EvidenceAnalysisScreen({
         <div>
           <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1.5">Source-backed Analysis</h1>
           <p className="text-[13px] text-[#6B6B7E]">
-            Concepts and terminology derived only from the current Evidence Index.
+            Concepts, terminology, conflicts, and gaps derived only from the current Evidence Index.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -5310,7 +5312,7 @@ function EvidenceAnalysisScreen({
         <div className="w-2 h-2 rounded-full bg-[#6B6B7E] flex-shrink-0" />
         <p className="text-[11px] text-[#6B6B7E]">
           <span className="font-semibold text-[#3D3D4E]">Method:</span>{' '}
-          Conservative deterministic evidence heuristics ({CONCEPT_ANALYSIS_METHOD}). No AI or simulated findings are used.
+          Conservative deterministic evidence heuristics ({CONCEPT_ANALYSIS_METHOD}). Conflicts require concrete opposing source statements; gaps report only source-signaled absence or insufficient coverage. No AI, external expectations, or simulated findings are used.
         </p>
       </div>
 
@@ -5343,7 +5345,7 @@ function EvidenceAnalysisScreen({
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-5 gap-3">
             <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
               <p className="text-[10px] uppercase tracking-wide text-[#9898AB] mb-1">Concepts</p>
               <p data-testid="concept-count" className="text-xl font-semibold text-[#111218]">{analysis.concepts.length}</p>
@@ -5355,6 +5357,14 @@ function EvidenceAnalysisScreen({
             <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
               <p className="text-[10px] uppercase tracking-wide text-[#9898AB] mb-1">Evidence items</p>
               <p className="text-xl font-semibold text-[#111218]">{evidenceIndex.items.length}</p>
+            </div>
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <p className="text-[10px] uppercase tracking-wide text-[#9898AB] mb-1">Conflicts</p>
+              <p data-testid="conflict-count" className="text-xl font-semibold text-[#111218]">{(analysis.conflicts ?? []).length}</p>
+            </div>
+            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <p className="text-[10px] uppercase tracking-wide text-[#9898AB] mb-1">Gaps</p>
+              <p data-testid="gap-count" className="text-xl font-semibold text-[#111218]">{(analysis.gaps ?? []).length}</p>
             </div>
           </div>
 
@@ -5388,6 +5398,98 @@ function EvidenceAnalysisScreen({
                           <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-1">Exact source terminology</p>
                           <p className="text-[12px] text-[#3D3D4E] mb-3">{concept.exactTerms.join(' · ')}</p>
                           {renderEvidenceReferences(concept.evidenceIds)}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[#E2DED7]">
+              <h2 className="text-[13px] font-semibold text-[#111218]">Evidence-backed Conflicts</h2>
+              <p className="text-[11px] text-[#9898AB] mt-0.5">Only materially incompatible statements with concrete evidence in different sources are shown.</p>
+            </div>
+            {(analysis.conflicts ?? []).length === 0 ? (
+              <div className="px-5 py-8 text-center text-[11px] text-[#9898AB]">
+                No evidence-backed conflicts met the conservative threshold.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#F4F2EE]">
+                {(analysis.conflicts ?? []).map(conflict => {
+                  const open = expandedConflict === conflict.id
+                  return (
+                    <div key={conflict.id} data-testid="grounded-conflict" data-conflict-id={conflict.id}>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedConflict(open ? null : conflict.id)}
+                        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-[#FAFAF8]"
+                      >
+                        <span className="w-2 h-2 rounded-full bg-[#DC2626] flex-shrink-0" />
+                        <span className="flex-1">
+                          <span className="block text-[13px] font-semibold text-[#111218]">{conflict.summary}</span>
+                          <span className="block text-[10px] text-[#9898AB] mt-0.5">{conflict.kind === 'explicit-value' ? 'Different explicit values' : 'Opposing source statements'}</span>
+                        </span>
+                        <span className="text-[10px] text-[#9898AB]">{conflict.evidenceIds.length} evidence</span>
+                      </button>
+                      {open && (
+                        <div className="px-5 py-4 bg-[#FEF2F2] border-t border-[#FEE2E2] space-y-3">
+                          <p className="text-[11px] text-[#7F1D1D]">{conflict.rationale}</p>
+                          {conflict.sides.map(side => (
+                            <div key={side.id}>
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-[#991B1B] mb-1.5">{side.label}</p>
+                              <p className="text-[11px] text-[#7F1D1D] mb-2">“{side.claimText}”</p>
+                              {renderEvidenceReferences(side.evidenceIds)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[#E2DED7]">
+              <h2 className="text-[13px] font-semibold text-[#111218]">Source-backed Gaps</h2>
+              <p className="text-[11px] text-[#9898AB] mt-0.5">Absence and insufficient coverage are reported separately from contradictions, without external feature assumptions.</p>
+            </div>
+            {(analysis.gaps ?? []).length === 0 ? (
+              <div className="px-5 py-8 text-center text-[11px] text-[#9898AB]">
+                No source-backed gaps met the conservative threshold.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#F4F2EE]">
+                {(analysis.gaps ?? []).map(gap => {
+                  const open = expandedGap === gap.id
+                  return (
+                    <div key={gap.id} data-testid="grounded-gap" data-gap-id={gap.id}>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedGap(open ? null : gap.id)}
+                        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-[#FAFAF8]"
+                      >
+                        <span className="w-2 h-2 rounded-full bg-[#D97706] flex-shrink-0" />
+                        <span className="flex-1">
+                          <span className="block text-[13px] font-semibold text-[#111218]">{gap.title}</span>
+                          <span className="block text-[10px] text-[#9898AB] mt-0.5">{gap.category.replace(/-/g, ' ')}</span>
+                        </span>
+                        <span className={`text-[9px] font-semibold uppercase tracking-wide rounded-full px-2 py-1 ${
+                          gap.status === 'not-found-in-sources'
+                            ? 'bg-[#FFF7ED] text-[#9A3412]'
+                            : 'bg-[#FEF3C7] text-[#92400E]'
+                        }`}>
+                          {gap.status === 'not-found-in-sources' ? 'Not found in sources' : 'Insufficiently covered'}
+                        </span>
+                      </button>
+                      {open && (
+                        <div className="px-5 py-4 bg-[#FFF7ED] border-t border-[#FFEDD5]">
+                          <p className="text-[11px] text-[#7C2D12] mb-3">{gap.rationale}</p>
+                          {renderEvidenceReferences(gap.evidenceIds)}
                         </div>
                       )}
                     </div>
@@ -13355,6 +13457,8 @@ export default function App() {
                     <DiagRow label="Method" value={conceptAnalysis?.method ?? 'Not run'} status={conceptAnalysis ? 'ok' : 'info'} />
                     <DiagRow label="Concepts Detected" value={conceptAnalysis ? `${conceptAnalysis.concepts.length}` : 'N/A'} status={conceptAnalysis ? 'ok' : 'info'} />
                     <DiagRow label="Terms Detected" value={conceptAnalysis ? `${conceptAnalysis.terminology.length}` : 'N/A'} status={conceptAnalysis ? 'ok' : 'info'} />
+                    <DiagRow label="Evidence-backed Conflicts" value={conceptAnalysis ? `${(conceptAnalysis.conflicts ?? []).length}` : 'N/A'} status={conceptAnalysis ? 'ok' : 'info'} />
+                    <DiagRow label="Source-backed Gaps" value={conceptAnalysis ? `${(conceptAnalysis.gaps ?? []).length}` : 'N/A'} status={conceptAnalysis ? 'ok' : 'info'} />
                     <DiagRow label="Stale" value={conceptAnalysis && !conceptAnalysisFresh ? 'Yes — Evidence Index changed' : 'No'} status={conceptAnalysis && !conceptAnalysisFresh ? 'warn' : 'ok'} />
                   </>
                 )}

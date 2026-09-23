@@ -1,4 +1,9 @@
 import type { EvidenceIndex, EvidenceItem } from './evidenceIndex'
+import {
+  buildEvidenceFindings,
+  type GroundedConflict,
+  type GroundedGap,
+} from './evidenceFindings'
 
 export const CONCEPT_ANALYSIS_METHOD = 'deterministic-evidence-heuristics-v1' as const
 
@@ -31,13 +36,15 @@ export type GroundedTerm = {
 }
 
 export type ConceptAnalysis = {
-  version: 1
+  version: 1 | 2
   method: typeof CONCEPT_ANALYSIS_METHOD
   evidenceSourcesRevision: number
   evidenceExtractionRevision: string
   builtAt: number
   concepts: GroundedConcept[]
   terminology: GroundedTerm[]
+  conflicts?: GroundedConflict[]
+  gaps?: GroundedGap[]
 }
 
 type CandidateAggregate = {
@@ -230,14 +237,17 @@ export function buildConceptAnalysis(evidenceIndex: EvidenceIndex): ConceptAnaly
       || right.occurrenceCount - left.occurrenceCount
       || left.label.localeCompare(right.label))
 
+  const findings = buildEvidenceFindings(evidenceIndex, concepts)
   return {
-    version: 1,
+    version: 2,
     method: CONCEPT_ANALYSIS_METHOD,
     evidenceSourcesRevision: evidenceIndex.sourcesRevision,
     evidenceExtractionRevision: evidenceIndex.extractionRevision,
     builtAt: Date.now(),
     concepts,
     terminology,
+    conflicts: findings.conflicts,
+    gaps: findings.gaps,
   }
 }
 
@@ -247,6 +257,7 @@ export function isConceptAnalysisFresh(
 ): boolean {
   return !!analysis
     && !!evidenceIndex
+    && analysis.version === 2
     && analysis.evidenceSourcesRevision === evidenceIndex.sourcesRevision
     && analysis.evidenceExtractionRevision === evidenceIndex.extractionRevision
 }
@@ -285,11 +296,26 @@ export function remapConceptAnalysis(
     evidenceIds: [...term.evidenceIds],
     evidenceRefs: remapRefs(term.evidenceIds, term.evidenceRefs),
   }))
+  const remapFindingRefs = <T extends {
+    evidenceIds: string[]
+    evidenceRefs: AnalysisEvidenceReference[]
+  }>(finding: T): T => ({
+    ...finding,
+    evidenceIds: [...finding.evidenceIds],
+    evidenceRefs: remapRefs(finding.evidenceIds, finding.evidenceRefs),
+  })
+  const conflicts = (analysis.conflicts ?? []).map(conflict => ({
+    ...remapFindingRefs(conflict),
+    sides: conflict.sides.map(side => remapFindingRefs(side)),
+  }))
+  const gaps = (analysis.gaps ?? []).map(gap => remapFindingRefs(gap))
 
   return {
     ...analysis,
     concepts,
     terminology,
+    conflicts,
+    gaps,
     evidenceSourcesRevision: wasFresh && remappedEvidenceIndex
       ? remappedEvidenceIndex.sourcesRevision
       : analysis.evidenceSourcesRevision,
