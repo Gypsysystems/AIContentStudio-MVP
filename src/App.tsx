@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   SCHEMA_VERSION,
   createProject, saveProject, loadProject, listProjects, deleteProject, duplicateProject,
@@ -72,6 +72,10 @@ import {
   reconcileReviewModelTopics,
   type ReviewModel,
 } from './reviewModel'
+import {
+  buildReviewInputSnapshot,
+  type ReviewInputSnapshot,
+} from './reviewInput'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -12224,6 +12228,7 @@ function QualityScreen({
   onSetReviewStage,
   reviewStaleContent,
   isDemoMode,
+  reviewInputSnapshot,
 }: {
   onNav: (s: Screen) => void
   findingStatuses: Record<number, FindingStatus>
@@ -12235,6 +12240,7 @@ function QualityScreen({
   onSetReviewStage: (s: 1 | 2) => void
   reviewStaleContent?: boolean
   isDemoMode?: boolean
+  reviewInputSnapshot?: ReviewInputSnapshot | null
 }) {
   const stage = reviewStage
   const setStage = onSetReviewStage
@@ -12539,6 +12545,142 @@ function QualityScreen({
     { id: 'troubleshoot', title: 'Troubleshooting', excerpt: 'Common issues include login failures, slow sync, and missing notifications — each covered below.' },
   ]
 
+  const renderReviewInputDiagnostics = () => {
+    if (isDemoMode) return null
+    if (!reviewInputSnapshot) {
+      return (
+        <section data-testid="review-input-diagnostics" className="mb-6 rounded-xl border border-[#E2DED7] bg-white p-5">
+          <p className="text-[13px] font-semibold text-[#111218]">Review inputs</p>
+          <p className="mt-1 text-[12px] text-[#6B6B7E]">Preparing the project input snapshot…</p>
+        </section>
+      )
+    }
+    const snapshot = reviewInputSnapshot
+    const blockCount = snapshot.topics.reduce((count, topic) => count + topic.blocks.length, 0)
+    const readinessLabel = snapshot.readiness === 'ready'
+      ? 'Ready'
+      : snapshot.readiness === 'stale-inputs'
+        ? 'Stale inputs'
+        : 'Missing inputs'
+    const readinessClass = snapshot.readiness === 'ready'
+      ? 'bg-[#DCFCE7] text-[#15803D]'
+      : snapshot.readiness === 'stale-inputs'
+        ? 'bg-[#FEF3C7] text-[#92400E]'
+        : 'bg-[#FEE2E2] text-[#B91C1C]'
+    return (
+      <section data-testid="review-input-diagnostics" className="mb-6 rounded-xl border border-[#E2DED7] bg-white p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[13px] font-semibold text-[#111218]">Review input snapshot</p>
+            <p className="mt-0.5 text-[11px] text-[#9898AB]">
+              Read-only · {snapshot.snapshotId} · {snapshot.contentType} · {snapshot.language}
+            </p>
+          </div>
+          <span data-testid="review-input-readiness" className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${readinessClass}`}>
+            {readinessLabel}
+          </span>
+        </div>
+
+        <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">
+          {[
+            ['Topics', snapshot.topics.length],
+            ['Blocks', blockCount],
+            ['Sources', snapshot.sources.length],
+            ['Evidence', snapshot.evidence.length],
+            ['Terms', snapshot.terminology.length],
+            ['Standards', snapshot.standards.length],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg bg-[#F9F8F6] px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-[#9898AB]">{label}</p>
+              <p className="mt-0.5 text-[15px] font-semibold text-[#111218]">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        {snapshot.issues.length > 0 && (
+          <div data-testid="review-input-issues" className="mt-4 space-y-1.5">
+            {snapshot.issues.map((issue, index) => (
+              <div key={`${issue.code}-${issue.topicId ?? issue.sourceId ?? index}`} className={`rounded-lg border px-3 py-2 text-[11px] ${
+                issue.severity === 'stale'
+                  ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
+                  : 'border-[#FECACA] bg-[#FEF2F2] text-[#991B1B]'
+              }`}>
+                <span className="font-semibold">{issue.severity === 'stale' ? 'Stale' : 'Missing'}:</span>{' '}
+                {issue.message}
+                {issue.topicId && <span className="ml-1 font-mono text-[10px]">({issue.topicId})</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 space-y-2">
+          <details data-testid="review-input-topics" className="rounded-lg border border-[#E2DED7] bg-[#FCFBFA] px-3 py-2">
+            <summary className="cursor-pointer text-[11px] font-semibold text-[#3D3D4E]">Topics and stable blocks</summary>
+            <div className="mt-2 space-y-2">
+              {snapshot.topics.length === 0 && <p className="text-[11px] text-[#9898AB]">No committed topics.</p>}
+              {snapshot.topics.map(topic => (
+                <div key={topic.topicId}>
+                  <p className="text-[11px] font-medium text-[#111218]">{topic.title} <span className="font-mono text-[10px] text-[#9898AB]">{topic.topicId}</span></p>
+                  <p className="text-[10px] text-[#6B6B7E]">
+                    {topic.blocks.length
+                      ? topic.blocks.map(block => `${block.blockId} · ${block.type}`).join('  |  ')
+                      : 'No persisted blocks'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </details>
+
+          <details data-testid="review-input-sources" className="rounded-lg border border-[#E2DED7] bg-[#FCFBFA] px-3 py-2">
+            <summary className="cursor-pointer text-[11px] font-semibold text-[#3D3D4E]">Sources and evidence</summary>
+            <div className="mt-2 space-y-2 text-[10px] text-[#6B6B7E]">
+              {snapshot.sources.length === 0 && <p>No persisted source extractions.</p>}
+              {snapshot.sources.map(source => (
+                <p key={source.fileId}>
+                  <span className="font-medium text-[#111218]">{source.fileName}</span> · {source.status} · {source.blockIds.length} extracted blocks · <span className="font-mono">{source.fileId}</span>
+                </p>
+              ))}
+              {snapshot.evidence.map(item => (
+                <p key={item.evidenceId}>
+                  <span className="font-mono text-[#5B5BD6]">{item.evidenceId}</span> · {item.sourceFileName} · {item.location}
+                </p>
+              ))}
+            </div>
+          </details>
+
+          <details data-testid="review-input-analysis" className="rounded-lg border border-[#E2DED7] bg-[#FCFBFA] px-3 py-2">
+            <summary className="cursor-pointer text-[11px] font-semibold text-[#3D3D4E]">Analysis, terminology, and standards</summary>
+            <div className="mt-2 space-y-2 text-[10px] text-[#6B6B7E]">
+              <p>
+                Concepts {snapshot.groundedAnalysis.conceptIds.length} · Conflicts {snapshot.groundedAnalysis.conflictIds.length} · Gaps {snapshot.groundedAnalysis.gapIds.length} · Unsupported claims {snapshot.unsupportedAnalysis.findingIds.length}
+              </p>
+              <p>Canonical style: <span className="font-medium text-[#111218]">{snapshot.style ? `${snapshot.style.name} (${snapshot.style.styleProfileId})` : 'Missing'}</span></p>
+              {snapshot.terminology.map(term => (
+                <p key={term.termId}><span className="font-medium text-[#111218]">{term.preferredTerm}</span> · {term.exactTerms.join(', ')} · <span className="font-mono">{term.termId}</span></p>
+              ))}
+              {snapshot.standards.map(standard => (
+                <p key={standard.standardId}><span className="font-medium text-[#111218]">{standard.label}</span> · <span className="font-mono">{standard.standardId}</span></p>
+              ))}
+            </div>
+          </details>
+
+          <details data-testid="review-input-author-provenance" className="rounded-lg border border-[#E2DED7] bg-[#FCFBFA] px-3 py-2">
+            <summary className="cursor-pointer text-[11px] font-semibold text-[#3D3D4E]">Author provenance and freshness</summary>
+            <div className="mt-2 space-y-1 text-[10px] text-[#6B6B7E]">
+              {snapshot.authorTopics.length === 0 && <p>No Author provenance is persisted.</p>}
+              {snapshot.authorTopics.map(topic => (
+                <p key={topic.topicId}>
+                  <span className="font-mono text-[#111218]">{topic.topicId}</span> · {topic.contentOrigin} · {topic.generatedFreshness}
+                  {topic.generatedFreshnessReason ? ` · ${topic.generatedFreshnessReason}` : ''}
+                </p>
+              ))}
+            </div>
+          </details>
+        </div>
+      </section>
+    )
+  }
+
   const renderStageStepper = () => (
     <div className="flex items-center gap-0 mb-8">
       {STAGES.map((s, idx) => {
@@ -12776,6 +12918,7 @@ function QualityScreen({
             <button onClick={() => onSetAiReviewDone(false)} className="text-[11px] font-semibold text-[#92400E] border border-[#FDE68A] px-2.5 py-1 rounded-lg hover:bg-[#FDE68A]/50">Re-review</button>
           </div>
         )}
+        {renderReviewInputDiagnostics()}
         {renderStageStepper()}
 
         <div className="bg-white rounded-2xl border border-[#E2DED7] p-6 shadow-sm">
@@ -14552,6 +14695,67 @@ export default function App() {
     projectMeta,
     activeStyleProfileId,
   })
+  const currentReviewInputSnapshot = useMemo(() => {
+    if (!projectId || isDemoMode) return null
+    return buildReviewInputSnapshot({
+      projectId,
+      contentType: projectMeta.contentType,
+      language: projectMeta.language,
+      contentRevision,
+      tocRevision,
+      topics: appToc,
+      topicContent,
+      sourcesRevision,
+      sourceFileIds: sources.map(source => source.fileId),
+      sourceExtractions,
+      evidenceIndex,
+      evidenceFresh,
+      conceptAnalysis,
+      conceptAnalysisFresh,
+      analysisRevision,
+      unsupportedAnalysis,
+      unsupportedAnalysisFresh,
+      styleProfile: groundingStyleProfile,
+      authorTopicMetadata,
+    })
+  }, [
+    projectId,
+    isDemoMode,
+    projectMeta.contentType,
+    projectMeta.language,
+    contentRevision,
+    tocRevision,
+    appToc,
+    topicContent,
+    sources,
+    sourcesRevision,
+    sourceExtractions,
+    evidenceIndex,
+    evidenceFresh,
+    conceptAnalysis,
+    conceptAnalysisFresh,
+    analysisRevision,
+    unsupportedAnalysis,
+    unsupportedAnalysisFresh,
+    groundingStyleProfile,
+    authorTopicMetadata,
+  ])
+  useEffect(() => {
+    if (appLoading || isDemoMode || !currentReviewInputSnapshot) return
+    if (reviewModel.inputSnapshot?.snapshotId === currentReviewInputSnapshot.snapshotId) return
+    setReviewModel(current => ({
+      ...current,
+      inputSnapshot: currentReviewInputSnapshot,
+      updatedAt: currentReviewInputSnapshot.capturedAt,
+    }))
+    triggerAutosave()
+  }, [
+    appLoading,
+    isDemoMode,
+    currentReviewInputSnapshot,
+    reviewModel.inputSnapshot?.snapshotId,
+    triggerAutosave,
+  ])
   const groundingTheme = themes.find(theme => theme.id === projectMeta.themeId)
   const buildGroundingInput = useCallback((topic: TocItem): TopicGroundingBuildInput => {
     const topicId = stableAuthorTopicId(topic)
@@ -15341,7 +15545,7 @@ export default function App() {
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
-      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} />
+      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
       case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
       default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />

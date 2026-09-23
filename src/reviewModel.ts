@@ -1,3 +1,12 @@
+import {
+  hydrateReviewInputSnapshot,
+  remapReviewInputSnapshot,
+  type ReviewInputProvenance,
+  type ReviewInputSnapshot,
+} from './reviewInput'
+
+export type { ReviewInputProvenance } from './reviewInput'
+
 export const REVIEW_MODEL_VERSION = 1
 
 export type ReviewFindingStatus =
@@ -56,24 +65,6 @@ export type ReviewResolutionEvent = {
   at: number
 }
 
-export type ReviewInputProvenance = {
-  projectId: string
-  contentRevision: number
-  contentFingerprint: string
-  sourcesRevision: number
-  sourceFileIds: string[]
-  evidenceExtractionRevision: string | null
-  evidenceIndexBuiltAt: number | null
-  analysisRevision: number | null
-  analysisBuiltAt: number | null
-  tocRevision: number
-  contentType: string
-  styleProfileId: string | null
-  styleFingerprint: string | null
-  standardsFingerprint: string | null
-  capturedAt: number
-}
-
 export type ReviewFreshness = {
   status: 'current' | 'stale' | 'unknown'
   reasons: string[]
@@ -121,6 +112,7 @@ export type ReviewModel = {
   version: typeof REVIEW_MODEL_VERSION
   projectId: string
   activeReviewRunId: string | null
+  inputSnapshot: ReviewInputSnapshot | null
   runs: ReviewRun[]
   findings: ReviewFinding[]
   updatedAt: number | null
@@ -131,6 +123,7 @@ export function createEmptyReviewModel(projectId: string): ReviewModel {
     version: REVIEW_MODEL_VERSION,
     projectId,
     activeReviewRunId: null,
+    inputSnapshot: null,
     runs: [],
     findings: [],
     updatedAt: null,
@@ -166,6 +159,7 @@ export function hydrateReviewModel(value: unknown, projectId: string): ReviewMod
     version: REVIEW_MODEL_VERSION,
     projectId,
     activeReviewRunId,
+    inputSnapshot: hydrateReviewInputSnapshot(value.inputSnapshot, projectId),
     runs: runs.map(run => ({
       ...run,
       projectId,
@@ -236,6 +230,9 @@ export function remapReviewModelForDuplicate(
   return {
     ...source,
     projectId: copiedProjectId,
+    inputSnapshot: source.inputSnapshot
+      ? remapReviewInputSnapshot(source.inputSnapshot, copiedProjectId, fileIdMap)
+      : null,
     runs: source.runs.map(run => ({
       ...run,
       projectId: copiedProjectId,

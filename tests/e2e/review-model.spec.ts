@@ -120,6 +120,7 @@ function reviewModel(
     version: 1,
     projectId,
     activeReviewRunId: 'review-run-stable',
+    inputSnapshot: null,
     runs: [{
       reviewRunId: 'review-run-stable',
       projectId,

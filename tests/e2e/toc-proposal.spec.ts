@@ -59,7 +59,9 @@ async function createGroundedProject(page: Page, projectName: string) {
       "Token Rotation is reviewed by the Flight Security Team.",
     ].join("\n")),
   })
-  await expect(page.getByText("flight-operations.md", { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(
+    page.getByTestId("source-file-row").getByText("flight-operations.md", { exact: true }),
+  ).toBeVisible({ timeout: 15_000 })
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current", { timeout: 15_000 })
   await page.getByRole("button", { name: "Analyze Sources" }).click()
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
