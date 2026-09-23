@@ -62,6 +62,10 @@ import {
   type AuthorDraftDiff,
   type AuthorTopicDraft,
 } from './authorDraftGeneration'
+import {
+  searchAuthorTopicContent,
+  type AuthorSearchResult,
+} from './authorSearch'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
