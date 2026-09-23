@@ -68,12 +68,45 @@ type StoredConceptAnalysis = {
   }>
 }
 
+type StoredUnsupportedAnalysis = {
+  version: number
+  method: string
+  evidenceSourcesRevision: number
+  evidenceExtractionRevision: string
+  groundedAnalysisBuiltAt: number
+  contentRevision: number
+  contentFingerprint: string
+  status: string
+  analyzedClaimCount: number
+  supportedClaimCount: number
+  findings: Array<{
+    id: string
+    claimText: string
+    reason: string
+    evidenceStatus: string
+    context: {
+      contextType: string
+      location: string
+      blockId: string
+      topicId?: string
+    }
+    nearMatches: Array<EvidenceReference & {
+      text: string
+      similarity: number
+      relationship: string
+    }>
+  }>
+}
+
 type StoredProject = {
   projectId: string
   projectName: string
   sourceFileIds: string[]
   evidenceIndex: StoredEvidenceIndex | null
   conceptAnalysis: StoredConceptAnalysis | null
+  unsupportedAnalysis: StoredUnsupportedAnalysis | null
+  docBlocks: Array<{ id: string; type: string; content: string }>
+  contentRevision: number
   themes: unknown[]
   appToc: unknown[]
   topicContent: Record<string, unknown[]>
@@ -116,6 +149,39 @@ async function openRealAnalysis(page: Page) {
   await expect(page.getByRole("heading", { name: "Source-backed Analysis" })).toBeVisible()
 }
 
+async function seedAnalyzableContent(
+  page: Page,
+  projectName: string,
+  blocks: Array<{ id: string; type: string; content: string }>,
+  clearUnsupported = true,
+) {
+  await page.evaluate(async ({ name, nextBlocks, shouldClear }) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("docflow-db", 2)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const project = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const request = db.transaction("projects", "readonly").objectStore("projects").getAll()
+      request.onsuccess = () => {
+        const match = (request.result as Array<Record<string, unknown>>).find(candidate => candidate.projectName === name)
+        if (!match) reject(new Error(`Project not found: ${name}`))
+        else resolve(match)
+      }
+      request.onerror = () => reject(request.error)
+    })
+    project.docBlocks = nextBlocks
+    project.topicContent = {}
+    project.contentRevision = Number(project.contentRevision ?? 0) + 1
+    if (shouldClear) project.unsupportedAnalysis = null
+    await new Promise<void>((resolve, reject) => {
+      const request = db.transaction("projects", "readwrite").objectStore("projects").put(project)
+      request.onsuccess = () => resolve()
+      request.onerror = () => reject(request.error)
+    })
+  }, { name: projectName, nextBlocks: blocks, shouldClear: clearUnsupported })
+}
+
 test("derives persisted concepts and terminology only from evidence with inspectable traceability", async ({ page }) => {
   test.setTimeout(60_000)
   const projectName = `Grounded Concepts ${Date.now()}`
@@ -143,6 +209,8 @@ test("derives persisted concepts and terminology only from evidence with inspect
   await expect(page.getByText("Conservative deterministic evidence heuristics", { exact: false })).toBeVisible()
   await expect(page.getByTestId("grounded-concept").filter({ hasText: "Orbital Access Control" })).toBeVisible()
   await expect(page.getByTestId("grounded-term").filter({ hasText: "OAC" })).toBeVisible()
+  await expect(page.getByTestId("unsupported-no-content")).toBeVisible()
+  await expect(page.getByTestId("unsupported-count")).toHaveText("0")
   await expect(page.getByText("Coverage Gaps")).toHaveCount(0)
   await expect(page.getByText("Nexus Technical Spec", { exact: false })).toHaveCount(0)
   await expect(page.getByText("Asteria", { exact: false })).toHaveCount(0)
@@ -195,6 +263,127 @@ test("derives persisted concepts and terminology only from evidence with inspect
   expect(reloaded.conceptAnalysis!.concepts.find(concept => concept.label === "Orbital Access Control")!.id)
     .toBe(originalConceptId)
   expect(JSON.stringify(reloaded.conceptAnalysis)).not.toMatch(/Nexus|Asteria/)
+  expect(reloaded.unsupportedAnalysis?.status).toBe("no-analyzable-content")
+  expect(reloaded.unsupportedAnalysis?.findings).toEqual([])
+})
+
+test("supports evidence-backed paraphrases and reports only genuinely unsupported content", async ({ page }) => {
+  test.setTimeout(60_000)
+  const projectName = `Unsupported Claims ${Date.now()}`
+  const supportedParaphrase = "Audit logging needs to be turned on by administrators prior to launch."
+  const unsupportedClaim = "The launch console provides quantum teleportation."
+
+  await createProjectAtSources(page, projectName)
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "audit-controls.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from([
+      "# Audit Controls",
+      "",
+      "Administrators must enable audit logging before launch.",
+      "The launch console uses secure channels.",
+    ].join("\n")),
+  })
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+  await expect(page.getByTestId("unsupported-no-content")).toBeVisible()
+
+  await seedAnalyzableContent(page, projectName, [
+    { id: "claim-supported", type: "para", content: supportedParaphrase },
+    { id: "claim-unsupported", type: "para", content: unsupportedClaim },
+  ])
+  await page.reload()
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+
+  await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
+  await expect(page.getByTestId("unsupported-count")).toHaveText("1")
+  await expect(page.getByTestId("unsupported-finding")).toContainText(unsupportedClaim)
+  await expect(page.getByTestId("unsupported-finding")).not.toContainText(supportedParaphrase)
+  await expect(page.getByTestId("conflict-count")).toHaveText("0")
+  await expect(page.getByTestId("gap-count")).toHaveText("0")
+  await expect(page.getByText("Nexus Technical Spec", { exact: false })).toHaveCount(0)
+  await expect(page.getByText("Asteria", { exact: false })).toHaveCount(0)
+
+  const findingRow = page.getByTestId("unsupported-finding")
+  await findingRow.getByRole("button").first().click()
+  await expect(findingRow).toContainText("Document block claim-unsupported")
+  await expect(findingRow.getByText("Evidence candidates — not support")).toBeVisible()
+  await findingRow.getByTestId("unsupported-evidence-candidate").click()
+  await expect(page.getByTestId("analysis-evidence-dialog")).toContainText("launch console uses secure channels")
+  await page.getByTestId("analysis-evidence-dialog").getByRole("button").click()
+
+  let stored: StoredProject | undefined
+  await expect.poll(async () => {
+    stored = (await readProjects(page)).find(project => project.projectName === projectName)
+    return stored?.unsupportedAnalysis?.findings.length
+  }).toBe(1)
+  if (!stored?.evidenceIndex || !stored.unsupportedAnalysis) throw new Error("Expected unsupported analysis")
+  expect(stored.unsupportedAnalysis.method).toBe("deterministic-evidence-support-v1")
+  expect(stored.unsupportedAnalysis.analyzedClaimCount).toBe(2)
+  expect(stored.unsupportedAnalysis.supportedClaimCount).toBe(1)
+  expect(stored.unsupportedAnalysis.findings[0].claimText).toBe(unsupportedClaim)
+  expect(stored.unsupportedAnalysis.findings[0].evidenceStatus).toBe("unsupported")
+  expect(stored.unsupportedAnalysis.findings[0].nearMatches.length).toBeGreaterThan(0)
+  expect(stored.unsupportedAnalysis.findings[0].nearMatches[0].evidenceId).toBeTruthy()
+  expect(stored.unsupportedAnalysis.findings[0].nearMatches[0].relationship).toBe("near-match")
+
+  const findingId = stored.unsupportedAnalysis.findings[0].id
+  await page.reload()
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+  await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
+  const reloaded = (await readProjects(page)).find(project => project.projectName === projectName)!
+  expect(reloaded.unsupportedAnalysis!.findings[0].id).toBe(findingId)
+})
+
+test("marks unsupported analysis stale when analyzed content changes and refreshes only that result", async ({ page }) => {
+  test.setTimeout(60_000)
+  const projectName = `Unsupported Freshness ${Date.now()}`
+
+  await createProjectAtSources(page, projectName)
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "controls.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# Controls\n\nAdministrators enable audit logging before launch."),
+  })
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+  await seedAnalyzableContent(page, projectName, [
+    { id: "claim-one", type: "para", content: "Administrators turn on audit logging before launch." },
+  ])
+  await page.reload()
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+  await expect(page.getByTestId("unsupported-count")).toHaveText("0")
+
+  let before: StoredProject | undefined
+  await expect.poll(async () => {
+    before = (await readProjects(page)).find(project => project.projectName === projectName)
+    return before?.unsupportedAnalysis?.status
+  }).toBe("complete")
+  await page.waitForTimeout(1_000)
+  if (!before) throw new Error("Expected persisted project")
+  const preservedGroundedAnalysis = before.conceptAnalysis
+  await seedAnalyzableContent(page, projectName, [
+    { id: "claim-one", type: "para", content: "Administrators turn on audit logging before launch." },
+    { id: "claim-two", type: "para", content: "The system supports interplanetary transport." },
+  ], false)
+  await page.reload()
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+  await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Stale")
+  await expect(page.getByTestId("unsupported-count")).toHaveText("0")
+  await page.getByTestId("rebuild-unsupported-analysis").click()
+  await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
+  await expect(page.getByTestId("unsupported-count")).toHaveText("1")
+
+  let rebuilt: StoredProject | undefined
+  await expect.poll(async () => {
+    rebuilt = (await readProjects(page)).find(project => project.projectName === projectName)
+    return rebuilt?.unsupportedAnalysis?.findings.length
+  }).toBe(1)
+  expect(rebuilt!.conceptAnalysis).toEqual(preservedGroundedAnalysis)
 })
 
 test("detects only concrete cross-source conflicts and conservative source-backed gaps", async ({ page }) => {
@@ -310,9 +499,12 @@ test("marks analysis stale when evidence changes and replaces only concept and t
   let before: StoredProject | undefined
   await expect.poll(async () => {
     before = (await readProjects(page)).find(project => project.projectName === projectName)
-    return before?.conceptAnalysis?.version
-  }).toBe(2)
-  if (!before?.conceptAnalysis) throw new Error("Expected persisted analysis")
+    return {
+      conceptVersion: before?.conceptAnalysis?.version,
+      unsupportedStatus: before?.unsupportedAnalysis?.status,
+    }
+  }).toEqual({ conceptVersion: 2, unsupportedStatus: "no-analyzable-content" })
+  if (!before?.conceptAnalysis || !before.unsupportedAnalysis) throw new Error("Expected persisted analysis")
   const findingsBeforeStale = {
     conflicts: before.conceptAnalysis.conflicts,
     gaps: before.conceptAnalysis.gaps,
@@ -335,13 +527,15 @@ test("marks analysis stale when evidence changes and replaces only concept and t
 
   await openRealAnalysis(page)
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Stale")
+  await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("rebuild-concept-analysis")).toBeDisabled()
+  await expect(page.getByTestId("rebuild-unsupported-analysis")).toBeDisabled()
   const staleProject = (await readProjects(page)).find(project => project.projectName === projectName)!
   expect({
     conflicts: staleProject.conceptAnalysis!.conflicts,
     gaps: staleProject.conceptAnalysis!.gaps,
   }).toEqual(findingsBeforeStale)
-  await page.getByRole("button", { name: "Return to Sources" }).click()
+  await page.getByRole("button", { name: /Sources$/ }).click()
   await page.getByTestId("rebuild-evidence-index").click()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
 
@@ -349,6 +543,9 @@ test("marks analysis stale when evidence changes and replaces only concept and t
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Stale")
   await page.getByTestId("rebuild-concept-analysis").click()
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
+  await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Stale")
+  await page.getByTestId("rebuild-unsupported-analysis").click()
+  await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
   await expect(page.getByTestId("grounded-concept").filter({ hasText: "Thermal Safety Protocol" })).toBeVisible()
 
   let rebuilt: StoredProject | undefined
@@ -395,13 +592,25 @@ test("duplicates grounded analysis with copied source references and stable anal
   await waitForCurrentEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
+  await expect.poll(async () => {
+    const project = (await readProjects(page)).find(candidate => candidate.projectName === projectName)
+    return project?.unsupportedAnalysis?.status
+  }).toBe("no-analyzable-content")
+  await page.waitForTimeout(1_000)
+  await seedAnalyzableContent(page, projectName, [
+    { id: "navigation-claim", type: "para", content: "Stellar Navigation Console supports teleportation." },
+  ])
+  await page.reload()
+  await waitForCurrentEvidence(page)
+  await openRealAnalysis(page)
+  await expect(page.getByTestId("unsupported-count")).toHaveText("1")
 
   let original: StoredProject | undefined
   await expect.poll(async () => {
     original = (await readProjects(page)).find(project => project.projectName === projectName)
-    return original?.conceptAnalysis?.concepts.length ?? 0
-  }).toBeGreaterThan(0)
-  if (!original?.conceptAnalysis) throw new Error("Expected original analysis")
+    return original?.unsupportedAnalysis?.findings.length ?? 0
+  }).toBe(1)
+  if (!original?.conceptAnalysis || !original.unsupportedAnalysis) throw new Error("Expected original analysis")
   const originalFileIds = new Set(original.sourceFileIds)
   const originalConceptIds = original.conceptAnalysis.concepts.map(concept => concept.id)
   const originalTermIds = original.conceptAnalysis.terminology.map(term => term.id)
@@ -433,11 +642,22 @@ test("duplicates grounded analysis with copied source references and stable anal
     .toEqual(original.conceptAnalysis.conflicts.map(conflict => conflict.id))
   expect(duplicate.conceptAnalysis!.gaps.map(gap => gap.id))
     .toEqual(original.conceptAnalysis.gaps.map(gap => gap.id))
+  expect(duplicate.unsupportedAnalysis!.findings.map(finding => finding.id))
+    .toEqual(original.unsupportedAnalysis.findings.map(finding => finding.id))
+  for (const candidate of duplicate.unsupportedAnalysis!.findings.flatMap(finding => finding.nearMatches)) {
+    expect(duplicateFileIds.has(candidate.sourceId)).toBe(true)
+    expect(duplicateFileIds.has(candidate.fileId)).toBe(true)
+    expect(originalFileIds.has(candidate.sourceId)).toBe(false)
+    expect(originalFileIds.has(candidate.fileId)).toBe(false)
+  }
   expect(originalAfter.conceptAnalysis).toEqual(original.conceptAnalysis)
+  expect(originalAfter.unsupportedAnalysis).toEqual(original.unsupportedAnalysis)
 
   await page.getByText(duplicateName, { exact: true }).click()
   await waitForCurrentEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
+  await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
+  await expect(page.getByTestId("unsupported-count")).toHaveText("1")
   await expect(page.getByTestId("grounded-concept").filter({ hasText: "Stellar Navigation Console" })).toBeVisible()
 })

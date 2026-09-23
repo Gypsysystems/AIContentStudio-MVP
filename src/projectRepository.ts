@@ -12,6 +12,10 @@ import {
   type ConceptAnalysis,
 } from './conceptAnalysis'
 import type { SourceExtraction } from './sourceExtractor'
+import {
+  remapUnsupportedAnalysis,
+  type UnsupportedAnalysis,
+} from './unsupportedAnalysis'
 
 export const SCHEMA_VERSION = 2
 const DB_NAME = 'docflow-db'
@@ -57,6 +61,7 @@ export type ProjectRecord = {
   analysisResult: unknown | null
   analysisRevision: number
   conceptAnalysis: unknown | null
+  unsupportedAnalysis: unknown | null
 
   // TOC
   appToc: unknown[]
@@ -203,6 +208,7 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     analysisResult: null,
     analysisRevision: -1,
     conceptAnalysis: null,
+    unsupportedAnalysis: null,
     appToc: [],
     tocRevision: 0,
     tocGeneratedFromRev: -1,
@@ -332,6 +338,16 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     newFileIdMap,
     copy.evidenceIndex as EvidenceIndex | null,
     isConceptAnalysisFresh(sourceConceptAnalysis, sourceEvidenceIndex),
+  )
+  const sourceUnsupportedAnalysis = source.unsupportedAnalysis as UnsupportedAnalysis | null
+  copy.unsupportedAnalysis = remapUnsupportedAnalysis(
+    sourceUnsupportedAnalysis,
+    newFileIdMap,
+    copy.evidenceIndex as EvidenceIndex | null,
+    !!sourceUnsupportedAnalysis
+      && !!sourceEvidenceIndex
+      && sourceUnsupportedAnalysis.evidenceSourcesRevision === sourceEvidenceIndex.sourcesRevision
+      && sourceUnsupportedAnalysis.evidenceExtractionRevision === sourceEvidenceIndex.extractionRevision,
   )
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     await put(ps, copy)
