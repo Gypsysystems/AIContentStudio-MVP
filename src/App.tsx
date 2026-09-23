@@ -8,7 +8,7 @@ import {
 } from './projectRepository'
 import { extractBrandFromFile, type BrandExtractionResult } from './brandExtractor'
 import {
-  extractFromFile, searchExtractions,
+  extractFromFile, isExtractionFresh, searchExtractions,
   type SourceExtraction,
 } from './sourceExtractor'
 
@@ -4443,12 +4443,13 @@ const DEMO_SOURCE_NAMES = [
   'Support_Ticket_Analysis_Oct.pdf',
 ]
 
-function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtractions, onRetryExtraction, isDemoMode, onSetDemoMode }: {
+function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtractions, sourcesRevision, onRetryExtraction, isDemoMode, onSetDemoMode }: {
   onNav: (s: Screen) => void
   sources?: ProjectSource[]
   onSourceAdd?: (file: File) => Promise<string>
   onSourceRemove?: (fileId: string) => void
   sourceExtractions?: Record<string, SourceExtraction>
+  sourcesRevision: number
   onRetryExtraction?: (fileId: string, file: File) => void
   isDemoMode: boolean
   onSetDemoMode: (v: boolean) => void
@@ -4514,11 +4515,9 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
   const openPicker = () => { if (!isDemoMode) fileInputRef.current?.click() }
 
   const removeEntry = (id: string) => {
-    setEntries(prev => {
-      const entry = prev.find(e => e.id === id)
-      if (entry?.fileId) onSourceRemove?.(entry.fileId)
-      return prev.filter(e => e.id !== id)
-    })
+    const entry = entries.find(candidate => candidate.id === id)
+    if (entry?.fileId) onSourceRemove?.(entry.fileId)
+    setEntries(prev => prev.filter(candidate => candidate.id !== id))
   }
 
   const readyEntries = entries.filter(e => e.status === 'ready')
@@ -4786,8 +4785,9 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                 const bgColor = TYPE_BG[ext] ?? 'bg-[#6B6B7E]'
                 const extraction = entry.fileId ? sourceExtractions?.[entry.fileId] : undefined
                 const isViewing = viewingFileId === entry.fileId
+                const extractionFresh = isExtractionFresh(extraction, sourcesRevision)
                 return (
-                  <div key={entry.id} className="border-b border-[#F4F2EE] last:border-0">
+                  <div key={entry.id} data-testid="source-file-row" data-file-name={entry.file.name} className="border-b border-[#F4F2EE] last:border-0">
                     <div className="flex items-center gap-3 px-4 py-3 group">
                       {/* Type badge */}
                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 ${bgColor}`}>
@@ -4801,30 +4801,39 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                         </p>
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-[11px] text-[#9898AB]">{fmtSize(entry.file.size)}</span>
-                          {extraction && entry.status === 'ready' && (
+                          {entry.status === 'ready' && (
                             <>
                               <span className="text-[#E2DED7]">·</span>
-                              {extraction.status === 'extracting' && (
-                                <span className="flex items-center gap-1 text-[10px] text-[#5B5BD6]">
+                              {!extraction && (
+                                <span data-testid="extraction-status" className="text-[10px] text-[#9898AB] font-medium">Not Extracted</span>
+                              )}
+                              {extraction?.status === 'extracting' && (
+                                <span data-testid="extraction-status" className="flex items-center gap-1 text-[10px] text-[#5B5BD6]">
                                   <span className="w-2 h-2 border border-[#5B5BD6] border-t-transparent rounded-full animate-spin inline-block" />
-                                  Extracting…
+                                  Extracting
                                 </span>
                               )}
-                              {extraction.status === 'extracted' && (
-                                <span className="text-[10px] text-[#16A34A] font-medium">
-                                  ✓ {extraction.blocks.length} blocks
+                              {extraction?.status === 'extracted' && (
+                                <span data-testid="extraction-status" className="text-[10px] text-[#16A34A] font-medium">
+                                  ✓ Extracted · {extraction.blocks.length} blocks
                                 </span>
                               )}
-                              {extraction.status === 'partial' && (
-                                <span className="text-[10px] text-[#D97706] font-medium">
+                              {extraction?.status === 'partial' && (
+                                <span data-testid="extraction-status" className="text-[10px] text-[#D97706] font-medium">
                                   ⚠ Partial — {extraction.blocks.length} blocks
                                 </span>
                               )}
-                              {extraction.status === 'failed' && (
-                                <span className="text-[10px] text-[#DC2626] font-medium">Extraction failed</span>
+                              {extraction?.status === 'failed' && (
+                                <span data-testid="extraction-status" className="text-[10px] text-[#DC2626] font-medium">Failed — Extraction failed</span>
                               )}
-                              {extraction.status === 'unsupported' && (
-                                <span className="text-[10px] text-[#9898AB]">Extraction not supported</span>
+                              {extraction?.status === 'unsupported' && (
+                                <span data-testid="extraction-status" className="text-[10px] text-[#9898AB] font-medium">Unsupported — Extraction not yet supported</span>
+                              )}
+                              {extraction?.status === 'not-extracted' && (
+                                <span data-testid="extraction-status" className="text-[10px] text-[#9898AB] font-medium">Not Extracted</span>
+                              )}
+                              {extraction && !extractionFresh && !['extracting', 'not-extracted'].includes(extraction.status) && (
+                                <span className="text-[9px] text-[#D97706] font-medium">Stale at source revision {extraction.extractionRevision ?? 'unknown'}</span>
                               )}
                             </>
                           )}
@@ -4852,9 +4861,10 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                       {entry.fileId && extraction && (extraction.status === 'extracted' || extraction.status === 'partial') && (
                         <button
                           onClick={() => setViewingFileId(isViewing ? null : (entry.fileId ?? null))}
+                          data-testid="view-extracted-content"
                           className={`text-[11px] font-medium px-2 py-1 rounded-md transition-colors flex-shrink-0 ${isViewing ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'text-[#9898AB] hover:text-[#5B5BD6] hover:bg-[#F4F2EE]'}`}
                         >
-                          {isViewing ? 'Hide' : 'View'}
+                          {isViewing ? 'Hide Extracted Content' : 'View Extracted Content'}
                         </button>
                       )}
                       {entry.fileId && extraction?.status === 'failed' && (
@@ -4880,8 +4890,20 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
 
                     {/* Inline extraction view */}
                     {isViewing && viewingExtraction && (
-                      <div className="border-t border-[#E2DED7] bg-[#FAFAFE] px-4 py-4 max-h-80 overflow-y-auto">
+                      <div data-testid="extracted-content-view" className="border-t border-[#E2DED7] bg-[#FAFAFE] px-4 py-4 max-h-[32rem] overflow-y-auto">
                         <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <p className="text-[12px] font-semibold text-[#111218]">{viewingExtraction.fileName}</p>
+                            <div className="flex flex-wrap items-center gap-2 mt-1 text-[10px] text-[#9898AB]">
+                              <span className="font-medium text-[#6B6B7E]">{viewingExtraction.status === 'extracted' ? 'Extracted' : 'Partial'}</span>
+                              <span>·</span>
+                              <span>fileId: {viewingExtraction.sourceId}</span>
+                              <span>·</span>
+                              <span>source rev {viewingExtraction.sourceRevision ?? 'unknown'}</span>
+                              <span>·</span>
+                              <span>extraction rev {viewingExtraction.extractionRevision ?? 'unknown'}</span>
+                            </div>
+                          </div>
                           <div className="flex items-center gap-3 text-[11px] text-[#9898AB]">
                             <span className="font-medium text-[#6B6B7E]">{viewingExtraction.parser ?? 'parser'}</span>
                             <span>·</span>
@@ -4890,6 +4912,16 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                             {viewingExtraction.charCount != null && <><span>·</span><span>{viewingExtraction.charCount.toLocaleString()} chars</span></>}
                           </div>
                         </div>
+                        {!extractionFresh && (
+                          <div className="mb-3 bg-[#FFF7ED] border border-[#FED7AA] rounded-lg px-3 py-2 text-[11px] text-[#9A3412]">
+                            This extraction is stale relative to source revision {sourcesRevision}. Retry extraction to refresh it.
+                          </div>
+                        )}
+                        {viewingExtraction.extractionError && (
+                          <div className="mb-3 bg-[#FEF2F2] border border-[#FECACA] rounded-lg px-3 py-2 text-[11px] text-[#991B1B]">
+                            {viewingExtraction.extractionError}
+                          </div>
+                        )}
                         {viewingExtraction.warnings.map((w, i) => (
                           <div key={i} className="flex items-start gap-2 mb-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-lg px-3 py-2">
                             <span className="text-[#D97706] text-[11px] flex-shrink-0">⚠</span>
@@ -4900,6 +4932,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                           {viewingExtraction.blocks.map(block => (
                             <div key={block.id} className="bg-white border border-[#E8E4DD] rounded-lg px-3 py-2">
                               <div className="flex items-center gap-2 mb-1">
+                                <span className="text-[9px] text-[#C8C6C0]">#{block.order + 1}</span>
                                 <span className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${
                                   block.type === 'heading' ? 'bg-[#DDDEFF] text-[#4A4AC4]' :
                                   block.type === 'table' ? 'bg-[#DCFCE7] text-[#15803D]' :
@@ -4916,18 +4949,29 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                               {block.type === 'table' && block.tableData ? (
                                 <div className="overflow-x-auto">
                                   <table className="text-[10px] border-collapse">
-                                    {block.tableData.map((row, ri) => (
-                                      <tr key={ri}>
-                                        {row.map((cell, ci) => (
-                                          <td key={ci} className={`border border-[#E2DED7] px-2 py-1 ${ri === 0 ? 'font-semibold bg-[#F4F2EE]' : ''}`}>{cell}</td>
-                                        ))}
-                                      </tr>
-                                    ))}
+                                    <tbody>
+                                      {block.tableData.map((row, ri) => (
+                                        <tr key={ri}>
+                                          {row.map((cell, ci) => (
+                                            <td key={ci} className={`border border-[#E2DED7] px-2 py-1 ${ri === 0 ? 'font-semibold bg-[#F4F2EE]' : ''}`}>{cell}</td>
+                                          ))}
+                                        </tr>
+                                      ))}
+                                    </tbody>
                                   </table>
                                 </div>
                               ) : (
-                                <p className="text-[11px] text-[#3D3D4E] leading-snug line-clamp-4">{block.text}</p>
+                                <p className="text-[11px] text-[#3D3D4E] leading-snug whitespace-pre-wrap">{block.text}</p>
                               )}
+                              {block.links?.length ? (
+                                <div className="mt-2 space-y-1">
+                                  {block.links.map((link, linkIndex) => (
+                                    <div key={`${link.url}-${linkIndex}`} className="text-[10px] text-[#5B5BD6] break-all">
+                                      Link: {link.text || link.url} → {link.url}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
                             </div>
                           ))}
                         </div>
@@ -4970,7 +5014,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
           <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
             <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-2">Or try a demo</p>
             <p className="text-[12px] text-[#6B6B7E] leading-relaxed mb-3">
-              Explore the full analysis flow with a pre-loaded Nexus Platform demonstration project.
+              Explore the full workflow with a pre-loaded demonstration project.
             </p>
             <button
               onClick={isDemoMode ? deactivateDemoMode : activateDemoMode}
@@ -12299,6 +12343,9 @@ export default function App() {
 
   // ── Revision counters for pipeline stale-state detection ──────────────────
   const [sourcesRevision, setSourcesRevision] = useState(0)
+  const sourcesRevisionRef = useRef(0)
+  const extractionRunRef = useRef<Record<string, number>>({})
+  const removedSourceIdsRef = useRef<Set<string>>(new Set())
   const [analysisRevision, setAnalysisRevision] = useState(-1) // -1 = never run
   const [tocRevision, setTocRevision] = useState(0)
   const [contentRevision, setContentRevision] = useState(0)
@@ -12354,52 +12401,74 @@ export default function App() {
 
   const handleSourceAdd = async (file: File): Promise<string> => {
     if (!projectId) throw new Error('No project')
+    // A source does not exist in project state until its bytes are safely stored.
     const stored = await saveFile(projectId, file)
     const fileId = stored.fileId
+    const sourceRevision = sourcesRevisionRef.current + 1
+    sourcesRevisionRef.current = sourceRevision
+    removedSourceIdsRef.current.delete(fileId)
+    const extractionRun = (extractionRunRef.current[fileId] ?? 0) + 1
+    extractionRunRef.current[fileId] = extractionRun
     setSources(prev => [...prev, { fileId, file }])
-    setSourcesRevision(r => r + 1)
-    // Mark extraction as pending immediately
+    setSourcesRevision(sourceRevision)
     const pending: SourceExtraction = {
       sourceId: fileId, fileName: file.name, fileType: file.name.split('.').pop()?.toLowerCase() ?? 'other',
       status: 'extracting', blocks: [], extractedText: '', warnings: [],
+      sourceRevision, extractionRevision: sourceRevision,
     }
     setSourceExtractions(prev => ({ ...prev, [fileId]: pending }))
     triggerAutosave()
     // Run extraction in the background
-    extractFromFile(file, fileId).then(result => {
+    extractFromFile(file, fileId, sourceRevision).then(result => {
+      if (removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
       setSourceExtractions(prev => ({ ...prev, [fileId]: result }))
       triggerAutosave()
-    }).catch(() => {
+    }).catch((error) => {
+      if (removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
       setSourceExtractions(prev => ({
         ...prev,
-        [fileId]: { ...pending, status: 'failed', extractionError: 'Extraction failed unexpectedly' },
+        [fileId]: { ...pending, status: 'failed', extractedAt: Date.now(), extractionError: error instanceof Error ? error.message : 'Extraction failed unexpectedly' },
       }))
+      triggerAutosave()
     })
     return fileId
   }
 
   const handleSourceRemove = async (fileId: string) => {
+    removedSourceIdsRef.current.add(fileId)
+    extractionRunRef.current[fileId] = (extractionRunRef.current[fileId] ?? 0) + 1
+    const sourceRevision = sourcesRevisionRef.current + 1
+    sourcesRevisionRef.current = sourceRevision
     setSources(prev => prev.filter(s => s.fileId !== fileId))
     setSourceExtractions(prev => { const next = { ...prev }; delete next[fileId]; return next })
-    setSourcesRevision(r => r + 1)
+    setSourcesRevision(sourceRevision)
     try { await removeFile(fileId) } catch { /* best effort */ }
     triggerAutosave()
   }
 
   const handleRetryExtraction = (fileId: string, file: File) => {
+    const sourceRevision = sourcesRevisionRef.current
+    removedSourceIdsRef.current.delete(fileId)
+    const extractionRun = (extractionRunRef.current[fileId] ?? 0) + 1
+    extractionRunRef.current[fileId] = extractionRun
     const pending: SourceExtraction = {
       sourceId: fileId, fileName: file.name, fileType: file.name.split('.').pop()?.toLowerCase() ?? 'other',
       status: 'extracting', blocks: [], extractedText: '', warnings: [],
+      sourceRevision, extractionRevision: sourceRevision,
     }
     setSourceExtractions(prev => ({ ...prev, [fileId]: pending }))
-    extractFromFile(file, fileId).then(result => {
+    triggerAutosave()
+    extractFromFile(file, fileId, sourceRevision).then(result => {
+      if (removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
       setSourceExtractions(prev => ({ ...prev, [fileId]: result }))
       triggerAutosave()
-    }).catch(() => {
+    }).catch((error) => {
+      if (removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
       setSourceExtractions(prev => ({
         ...prev,
-        [fileId]: { ...pending, status: 'failed', extractionError: 'Extraction failed unexpectedly' },
+        [fileId]: { ...pending, status: 'failed', extractedAt: Date.now(), extractionError: error instanceof Error ? error.message : 'Extraction failed unexpectedly' },
       }))
+      triggerAutosave()
     })
   }
 
@@ -12584,7 +12653,8 @@ export default function App() {
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
     setHtmlMasterPages(normalizeHtmlMasterPages((record.htmlMasterPages as HtmlMasterPage[]) ?? INITIAL_HTML_MASTER_PAGES))
-    setSourcesRevision(record.sourcesRevision ?? 0)
+    sourcesRevisionRef.current = record.sourcesRevision ?? 0
+    setSourcesRevision(sourcesRevisionRef.current)
     setAnalysisResult((record.analysisResult as AnalysisResult | null) ?? null)
     setAnalysisRevision(record.analysisRevision ?? -1)
     setAppToc((record.appToc as TocItem[]) ?? [])
@@ -12605,17 +12675,43 @@ export default function App() {
     setConditionGroups((record.conditionGroups as ConditionGroup[]) ?? DEFAULT_CONDITION_GROUPS)
     setDocComments((record.docComments as DocComment[]) ?? [])
     setPublishConfig((record.publishConfig as PublishConfig) ?? { selectedFormats: [], activeVariant: '' })
-    // Restore sourceExtractions (schema default for v1 records)
-    setSourceExtractions((record.sourceExtractions as Record<string, SourceExtraction>) ?? {})
     // Restore source files from IndexedDB as stable ProjectSource[]
     try {
       const storedFiles = await loadProjectFiles(record.projectId)
+      const persistedExtractions = (record.sourceExtractions as Record<string, SourceExtraction>) ?? {}
+      const restoredExtractions: Record<string, SourceExtraction> = {}
+      for (const storedFile of storedFiles) {
+        const persisted = persistedExtractions[storedFile.fileId]
+        restoredExtractions[storedFile.fileId] = persisted
+          ? {
+              ...persisted,
+              sourceId: storedFile.fileId,
+              sourceRevision: persisted.sourceRevision ?? (record.sourcesRevision ?? 0),
+              extractionRevision: persisted.extractionRevision ?? (record.sourcesRevision ?? 0),
+              blocks: (persisted.blocks ?? []).map(block => ({ ...block, sourceId: storedFile.fileId })),
+            }
+          : {
+              sourceId: storedFile.fileId,
+              fileName: storedFile.name,
+              fileType: storedFile.name.split('.').pop()?.toLowerCase() ?? 'other',
+              status: 'not-extracted',
+              blocks: [],
+              extractedText: '',
+              warnings: [],
+              sourceRevision: record.sourcesRevision ?? 0,
+              extractionRevision: -1,
+            }
+      }
+      setSourceExtractions(restoredExtractions)
       const restoredSources: ProjectSource[] = storedFiles.map(sf => ({
         fileId: sf.fileId,
         file: new File([sf.blob], sf.name, { type: sf.type }),
       }))
       setSources(restoredSources)
-    } catch { setSources([]) }
+    } catch {
+      setSourceExtractions({})
+      setSources([])
+    }
     setActiveProjectId(record.projectId)
   }
 
@@ -12626,6 +12722,9 @@ export default function App() {
     setIsDemoMode(false)
     setSources([])
     setSourceExtractions({})
+    sourcesRevisionRef.current = 0
+    extractionRunRef.current = {}
+    removedSourceIdsRef.current = new Set()
     setSourcesRevision(0)
     setAnalysisResult(null)
     setAnalysisRevision(-1)
@@ -12692,7 +12791,7 @@ export default function App() {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
-      case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} onRetryExtraction={handleRetryExtraction} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
+      case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
       case 'analysis':  return <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
       case 'structure': return <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
