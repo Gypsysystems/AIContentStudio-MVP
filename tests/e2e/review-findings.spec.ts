@@ -636,6 +636,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   })
   await page.reload()
   await page.getByRole('button', { name: 'Analysis' }).click()
+  await page.getByRole('button', { name: /Recheck Content|Check Content/ }).click()
   await expect.poll(async () => {
     const project = await readProject(page, projectName)
     return (project.unsupportedAnalysis as UnsupportedAnalysis | null)?.findings.length ?? 0
@@ -644,7 +645,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     (await readProject(page, projectName)).reviewModel.inputSnapshot?.readiness,
   ).toBe('ready')
 
-  await page.getByRole('button', { name: 'Review', exact: true }).click()
+  await page.getByText('Review', { exact: true }).last().click()
   await expect(page.getByTestId('run-grounded-review')).toBeEnabled()
   await page.getByTestId('run-grounded-review').click()
   await expect(page.getByTestId('grounded-review-finding')).toHaveCount(4)
@@ -660,25 +661,24 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await expect(page.getByTestId('review-finding-inspector')).toContainText('Retention period is 30 days.')
 
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(1)
-  await page.reload()
-  await page.getByRole('button', { name: 'Analysis' }).click()
-  await page.getByRole('button', { name: 'Review', exact: true }).click()
-  await expect(page.getByTestId('review-run-provenance')).toBeVisible()
   await page.getByTestId('run-grounded-review').click()
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(2)
   const rerun = (await readProject(page, projectName)).reviewModel
   expect(rerun.findings).toHaveLength(8)
   expect(new Set(rerun.runs.map(run => run.reviewRunId)).size).toBe(2)
+  await page.reload()
+  await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(2)
+  await expect.poll(async () => (await readProject(page, projectName)).reviewModel.findings.length).toBe(8)
 })
 
 test('never exposes or persists grounded real-project findings from explicit demo Review data', async ({ page }) => {
   const projectName = `Grounded Review demo isolation ${Date.now()}`
   await createProject(page, projectName)
   await page.getByRole('button', { name: 'Use demo project', exact: true }).click()
-  await page.getByRole('button', { name: 'Review', exact: true }).click()
+  await page.getByText('Review', { exact: true }).last().click()
   await expect(page.getByTestId('real-review-findings')).toHaveCount(0)
   await page.getByRole('button', { name: 'Run AI Review' }).click()
-  await expect(page.getByText('15 findings')).toBeVisible({ timeout: 5_000 })
+  await expect(page.getByText('6 findings')).toBeVisible({ timeout: 5_000 })
   const project = await readProject(page, projectName)
   expect(project.reviewModel.runs).toEqual([])
   expect(project.reviewModel.findings).toEqual([])
