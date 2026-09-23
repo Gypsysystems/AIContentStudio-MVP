@@ -7,3 +7,4 @@
 - [Author grounding metadata](author-grounding-metadata.md) — keep generation provenance separate from authored blocks and link it by stable topic ID.
 - [Author real-source isolation](author-real-source-isolation.md) — real Author context is stable-ID-backed; never fall back to demo filenames, excerpts, references, or AI output.
 - [Author grounding context](author-grounding-context.md) — cache deterministic per-topic context separately from content; stale inputs invalidate context without rewriting authored blocks.
+- [Author draft review boundary](author-draft-review-boundary.md) — grounded drafts persist separately from authored content and require current context plus explicit confirmed apply.

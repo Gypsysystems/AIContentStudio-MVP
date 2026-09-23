@@ -3,6 +3,7 @@ import { buildTopicGroundingContext } from "../../src/authorGroundingContext"
 import type { ConceptAnalysis } from "../../src/conceptAnalysis"
 import type { EvidenceIndex } from "../../src/evidenceIndex"
 import type { SourceExtraction } from "../../src/sourceExtractor"
+import type { AuthorTopicDraft } from "../../src/authorDraftGeneration"
 
 test.describe.configure({ mode: "serial" })
 
@@ -23,6 +24,7 @@ type AuthorTopicMetadata = {
   sourcePaths: string[][]
   sourceFileIds: string[]
   groundingContext: unknown | null
+  draft: AuthorTopicDraft | null
   provenance: {
     sourcesRevision: number | null
     evidenceExtractionRevision: string | null
@@ -30,6 +32,10 @@ type AuthorTopicMetadata = {
     analysisRevision: number | null
     contentType: string
     variableSnapshot: Record<string, string>
+    groundingContextId: string | null
+    language: string
+    styleProfileId: string | null
+    styleFingerprint: string | null
   }
   generatedAt: number | null
   generatedFreshness: "not-applicable" | "current" | "stale"
@@ -67,6 +73,7 @@ function metadata(
     sourcePaths: [],
     sourceFileIds: [],
     groundingContext: null,
+    draft: null,
     provenance: {
       sourcesRevision: null,
       evidenceExtractionRevision: null,
@@ -74,6 +81,10 @@ function metadata(
       analysisRevision: null,
       contentType: "user-guide",
       variableSnapshot: { product: "Orbital Console" },
+      groundingContextId: null,
+      language: "",
+      styleProfileId: null,
+      styleFingerprint: null,
     },
     generatedAt: 1_700_000_000_000,
     generatedFreshness: "current",

@@ -50,6 +50,11 @@ import {
   isTopicGroundingContextFresh,
   type TopicGroundingBuildInput,
 } from './authorGroundingContext'
+import {
+  buildDeterministicAuthorDraft,
+  isAuthorDraftFresh,
+  type AuthorTopicDraft,
+} from './authorDraftGeneration'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -8538,7 +8543,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onApplyTopicDraft, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [outlineOpen, setOutlineOpen] = useState(true)
   const [tocWidth, setTocWidth] = useState(260)
@@ -8549,11 +8554,15 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const openTopic = (topicId: number, topicTitle: string) => {
     // Save current topic's blocks into central state
     if (activeTopicId !== null && onTopicContentChange) {
-      onTopicContentChange({ ...(topicContent ?? {}), [String(activeTopicId)]: docBlocks })
+      const currentTopic = (toc ?? []).find(topic => topic.id === activeTopicId)
+      const currentKey = currentTopic ? stableAuthorTopicId(currentTopic) : String(activeTopicId)
+      onTopicContentChange({ ...(topicContent ?? {}), [currentKey]: docBlocks })
     }
     // Load or create blocks for the new topic — flag as hydration so sync effect is skipped for this load
     isHydratingTopicRef.current = true
-    const existing = (topicContent ?? {})[String(topicId)]
+    const nextTopic = (toc ?? []).find(topic => topic.id === topicId)
+    const nextKey = nextTopic ? stableAuthorTopicId(nextTopic) : String(topicId)
+    const existing = (topicContent ?? {})[nextKey] ?? (topicContent ?? {})[String(topicId)]
     if (existing) {
       setDocBlocks(existing)
     } else {
@@ -8601,41 +8610,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
     }, 400)
   }
 
-  // Generate content from sources for the active new topic
-  const generateTopicContent = (title: string) => {
-    setContentSugLoading(true)
-    setTopicAiContent(null)
-    setTopicAiWarning(null)
-    setTimeout(() => {
-      if (!isDemoMode) {
-        setTopicAiContent(null)
-        setTopicAiWarning('Source-based content generation is not yet available for this project. Write this topic manually or connect a source analysis pipeline.')
-        setContentSugLoading(false)
-        return
-      }
-      // Demo-only: Nexus synthetic source map
-      const t = title.toLowerCase()
-      const sourceMap: Record<string, string> = {
-        'install': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§2)**: Navigate to nexus.example.com and sign in with your organization credentials. Accept the workspace invitation, then complete the setup wizard.',
-        'dashboard': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§4)** and **UX_Research_Findings_Q3.docx (p.8)**: The dashboard provides a real-time view of active projects, pending tasks, and team notifications. 83% of tested users preferred the compact card view.',
-        'authentication': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§7)**: SSO is supported via SAML 2.0 and OAuth 2.0. Administrators configure identity providers in Security settings.',
-        'notification': 'Based on **Support_Ticket_Analysis_Oct.pdf**: Notifications are delivered in-app and by email. Mute specific projects or channels in Profile → Notifications.',
-        'api': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§14)**: REST API uses OAuth 2.0. Base URL: https://api.nexus.example.com/v1. Rate limit: 1000 req/min.',
-        'team': 'Based on **UX_Research_Findings_Q3.docx (p.12)**: Invite members by email and assign Owner, Editor, or Viewer roles. Real-time collaboration is supported.',
-        'troubleshoot': 'Based on **Support_Ticket_Analysis_Oct.pdf**: Clear browser cache and cookies. Verify SSO configuration. Contact support@nexus.example.com for escalations.',
-      }
-      const match = Object.entries(sourceMap).find(([key]) => t.includes(key))
-      if (match) {
-        setTopicAiContent(match[1])
-        setTopicAiWarning(null)
-      } else {
-        setTopicAiContent(null)
-        setTopicAiWarning(`No content found in source files for "${title}". Consider adding a relevant source document or writing this topic manually.`)
-      }
-      setContentSugLoading(false)
-    }, 1400)
-  }
-
   const TOC_DEFAULT_WIDTH = 260
   const TOC_MIN_WIDTH = 220
   const TOC_MAX_WIDTH = 520
@@ -8675,6 +8649,8 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const [aiResultUnavailable, setAiResultUnavailable] = useState(false)
   const [sourceRef, setSourceRef] = useState(false)
   const [groundingOpen, setGroundingOpen] = useState(false)
+  const [draftOpen, setDraftOpen] = useState(false)
+  const [confirmDraftApply, setConfirmDraftApply] = useState(false)
   // New-topic AI assistance
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([])
   const [titleSugLoading, setTitleSugLoading] = useState(false)
@@ -8894,7 +8870,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   // Continuously sync active topic's blocks to central topicContent — do not wait for topic switch
   useEffect(() => {
     if (activeTopicId === null || isHydratingTopicRef.current) return
-    onTopicContentChange?.({ ...(topicContent ?? {}), [String(activeTopicId)]: docBlocks })
+    const topic = (toc ?? []).find(candidate => candidate.id === activeTopicId)
+    const topicKey = topic ? stableAuthorTopicId(topic) : String(activeTopicId)
+    onTopicContentChange?.({ ...(topicContent ?? {}), [topicKey]: docBlocks })
   }, [docBlocks, activeTopicId])
 
   const triggerSave = () => {
@@ -9118,6 +9096,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const activeGroundingFresh = activeStableTopicId
     ? groundingFreshnessByTopic?.[activeStableTopicId] ?? false
     : false
+  const activeDraft = activeAuthorMetadata?.draft ?? null
+  const activeDraftFresh = isAuthorDraftFresh(
+    activeDraft,
+    activeGroundingContext,
+    activeGroundingFresh,
+  )
   const availableAuthorSources: AuthorProjectSource[] = isDemoMode
     ? SOURCE_FILES.map(source => ({ fileId: `demo-source-${source.id}`, name: source.name }))
     : (projectSources ?? [])
@@ -9172,6 +9156,64 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
         contentType: documentType ?? base.provenance.contentType,
       },
     })
+  }
+
+  const generateTopicContent = (title: string) => {
+    setContentSugLoading(true)
+    setTopicAiContent(null)
+    setTopicAiWarning(null)
+    if (!isDemoMode) {
+      if (!activeStableTopicId) {
+        setTopicAiWarning('Select a committed TOC topic before generating a draft.')
+        setContentSugLoading(false)
+        return
+      }
+      const result = onGenerateTopicDraft?.(activeStableTopicId)
+      if (!result?.draft) {
+        setTopicAiWarning(result?.error ?? 'A current grounding context is required before generating a draft.')
+      } else {
+        setDraftOpen(true)
+        setConfirmDraftApply(false)
+      }
+      setContentSugLoading(false)
+      return
+    }
+    setTimeout(() => {
+      const t = title.toLowerCase()
+      const sourceMap: Record<string, string> = {
+        'install': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§2)**: Navigate to nexus.example.com and sign in with your organization credentials. Accept the workspace invitation, then complete the setup wizard.',
+        'dashboard': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§4)** and **UX_Research_Findings_Q3.docx (p.8)**: The dashboard provides a real-time view of active projects, pending tasks, and team notifications. 83% of tested users preferred the compact card view.',
+        'authentication': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§7)**: SSO is supported via SAML 2.0 and OAuth 2.0. Administrators configure identity providers in Security settings.',
+        'notification': 'Based on **Support_Ticket_Analysis_Oct.pdf**: Notifications are delivered in-app and by email. Mute specific projects or channels in Profile → Notifications.',
+        'api': 'Based on **Nexus_Technical_Specification_v3.2.pdf (§14)**: REST API uses OAuth 2.0. Base URL: https://api.nexus.example.com/v1. Rate limit: 1000 req/min.',
+        'team': 'Based on **UX_Research_Findings_Q3.docx (p.12)**: Invite members by email and assign Owner, Editor, or Viewer roles. Real-time collaboration is supported.',
+        'troubleshoot': 'Based on **Support_Ticket_Analysis_Oct.pdf**: Clear browser cache and cookies. Verify SSO configuration. Contact support@nexus.example.com for escalations.',
+      }
+      const match = Object.entries(sourceMap).find(([key]) => t.includes(key))
+      if (match) {
+        setTopicAiContent(match[1])
+      } else {
+        setTopicAiWarning(`No content found in source files for "${title}". Consider adding a relevant source document or writing this topic manually.`)
+      }
+      setContentSugLoading(false)
+    }, 1400)
+  }
+
+  const applyActiveDraft = () => {
+    if (!activeStableTopicId || !onApplyTopicDraft) return
+    const result = onApplyTopicDraft(activeStableTopicId)
+    if (!result.blocks) {
+      setTopicAiWarning(result.error ?? 'The draft could not be applied.')
+      setConfirmDraftApply(false)
+      return
+    }
+    isHydratingTopicRef.current = true
+    setDocBlocks(result.blocks)
+    setTimeout(() => { isHydratingTopicRef.current = false }, 0)
+    setConfirmDraftApply(false)
+    setDraftOpen(false)
+    setTopicMode('write')
+    setTopicAiWarning(null)
   }
 
   const toggleTopicSource = (fileId: string) => {
@@ -9476,17 +9518,29 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
               Style
             </button>
             {!isDemoMode && (
-              <button
-                type="button"
-                data-testid="author-grounding-toggle"
-                data-topic-id={activeStableTopicId ?? ''}
-                data-context-id={activeGroundingContext?.contextId ?? ''}
-                onClick={() => setGroundingOpen(open => !open)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${groundingOpen ? 'bg-[#EEF6FF] text-[#2563EB]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
-              >
-                Grounding
-                <span className={`w-1.5 h-1.5 rounded-full ${activeGroundingFresh ? 'bg-[#16A34A]' : activeGroundingContext ? 'bg-[#D97706]' : 'bg-[#C8C6C0]'}`} />
-              </button>
+              <>
+                <button
+                  type="button"
+                  data-testid="author-grounding-toggle"
+                  data-topic-id={activeStableTopicId ?? ''}
+                  data-context-id={activeGroundingContext?.contextId ?? ''}
+                  onClick={() => setGroundingOpen(open => !open)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${groundingOpen ? 'bg-[#EEF6FF] text-[#2563EB]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
+                >
+                  Grounding
+                  <span className={`w-1.5 h-1.5 rounded-full ${activeGroundingFresh ? 'bg-[#16A34A]' : activeGroundingContext ? 'bg-[#D97706]' : 'bg-[#C8C6C0]'}`} />
+                </button>
+                <button
+                  type="button"
+                  data-testid="author-draft-toggle"
+                  data-topic-id={activeStableTopicId ?? ''}
+                  onClick={() => { setDraftOpen(open => !open); setConfirmDraftApply(false) }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${draftOpen ? 'bg-[#F3F0FF] text-[#6D28D9]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
+                >
+                  Draft
+                  <span className={`w-1.5 h-1.5 rounded-full ${activeDraftFresh ? 'bg-[#16A34A]' : activeDraft ? 'bg-[#D97706]' : 'bg-[#C8C6C0]'}`} />
+                </button>
+              </>
             )}
             <button
               onClick={() => setSourceRef(!sourceRef)}
@@ -10196,6 +10250,27 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                                 Add source document
                               </button>
                               <button onClick={() => setTopicMode('write')} className="h-7 px-3 border border-[#E2DED7] text-[#6B6B7E] rounded-lg text-[11px] hover:bg-[#F4F2EE] transition-colors">Write manually instead</button>
+                            </div>
+                          </div>
+                        ) : activeDraft && !isDemoMode ? (
+                          <div className="space-y-2" data-testid="author-draft-inline-preview">
+                            <div className="bg-white border border-[#E2DED7] rounded-lg p-3">
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded ${activeDraftFresh ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEF3C7] text-[#B45309]'}`}>
+                                  {activeDraftFresh ? 'Current draft' : 'Stale draft'}
+                                </span>
+                                <span className="text-[9px] text-[#9898AB]">{activeDraft.modelLabel}</span>
+                              </div>
+                              <p className="text-[11px] text-[#3D3D4E] line-clamp-3">
+                                {activeDraft.blocks.filter(block => block.type === 'para').map(block => block.content).join(' ') || 'No factual detail was generated.'}
+                              </p>
+                              {activeDraft.warnings.length > 0 && (
+                                <p className="text-[10px] text-[#B45309] mt-2">{activeDraft.warnings.length} drafting warning{activeDraft.warnings.length !== 1 ? 's' : ''}</p>
+                              )}
+                            </div>
+                            <div className="flex gap-2 flex-wrap">
+                              <button type="button" onClick={() => setDraftOpen(true)} className="h-7 px-3 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-medium hover:bg-[#4A4AC4] transition-colors">Review draft</button>
+                              <button type="button" onClick={() => generateTopicContent(currentTitle)} className="h-7 px-3 border border-[#E2DED7] text-[#6B6B7E] rounded-lg text-[11px] hover:bg-[#F4F2EE] transition-colors">Regenerate</button>
                             </div>
                           </div>
                         ) : topicAiContent ? (
@@ -11047,6 +11122,142 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
             </button>
           </div>
         </div>
+      )}
+
+      {draftOpen && !isDemoMode && (
+        <aside data-testid="author-draft-inspector" className="fixed right-4 top-24 bottom-4 z-50 w-[430px] bg-white border border-[#D8D4CE] rounded-2xl popover-shadow overflow-hidden flex flex-col">
+          <div className="px-4 py-3 border-b border-[#E2DED7] flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-[13px] font-semibold text-[#111218]">Review grounded draft</h2>
+                {activeDraft && (
+                  <span data-testid="author-draft-freshness" className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded ${activeDraftFresh ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEF3C7] text-[#B45309]'}`}>
+                    {activeDraftFresh ? 'Current' : 'Stale'}
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-[#9898AB] mt-1 truncate">{activeTopic?.title ?? 'No topic selected'}</p>
+            </div>
+            <button type="button" onClick={() => { setDraftOpen(false); setConfirmDraftApply(false) }} className="text-[#9898AB]">×</button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            {!activeStableTopicId ? (
+              <div className="py-10 text-center text-[11px] text-[#9898AB]">Open a TOC topic to generate or review its draft.</div>
+            ) : !activeDraft ? (
+              <div className="py-8 text-center">
+                <p className="text-[12px] font-semibold text-[#111218]">No reviewable draft yet</p>
+                <p className="text-[11px] text-[#9898AB] mt-1 mb-4">
+                  Generation uses only this topic’s current grounding context and does not change authored content.
+                </p>
+                {!activeGroundingFresh && (
+                  <p className="text-[10px] text-[#B45309] bg-[#FFF7ED] border border-[#FED7AA] rounded-lg p-2.5 mb-3">
+                    Refresh the grounding context before generating.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  data-testid="generate-author-draft"
+                  disabled={!activeGroundingFresh}
+                  onClick={() => generateTopicContent(activeTopic?.title ?? 'New Topic')}
+                  className="px-4 py-2 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-semibold disabled:opacity-40"
+                >
+                  Generate grounded draft
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                <section data-testid="author-draft-method" className="bg-[#F9F8F6] border border-[#E2DED7] rounded-lg p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Generation method</p>
+                  <p className="text-[11px] font-semibold text-[#3D3D4E] mt-1">{activeDraft.modelLabel}</p>
+                  <p className="text-[9px] text-[#9898AB] mt-1">{activeDraft.method} · {new Date(activeDraft.generatedAt).toLocaleString()}</p>
+                  <p className="text-[9px] text-[#9898AB] mt-1">Content type: {activeDraft.contentType} · Language: {activeDraft.language || 'Project language'}</p>
+                  <p className="text-[9px] text-[#9898AB]">Style: {activeDraft.styleProvenance.styleProfileName}</p>
+                </section>
+
+                {activeDraft.warnings.length > 0 && (
+                  <section data-testid="author-draft-warnings">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[#B45309] mb-2">Drafting warnings</p>
+                    {activeDraft.warnings.map(warning => (
+                      <div key={warning.id} data-warning-kind={warning.kind} className="bg-[#FFF7ED] border border-[#FED7AA] rounded-lg p-2.5 mb-2">
+                        <p className="text-[10px] font-semibold text-[#9A3412] capitalize">{warning.kind.replace('-', ' ')}</p>
+                        <p className="text-[10px] text-[#9A3412] mt-1 leading-relaxed">{warning.message}</p>
+                      </div>
+                    ))}
+                  </section>
+                )}
+
+                <section data-testid="author-draft-preview">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Draft preview</p>
+                  <div className="border border-[#E2DED7] rounded-xl p-4 bg-white space-y-3">
+                    {activeDraft.blocks.map(block => {
+                      if (block.type === 'h1') return <h3 key={block.id} className="text-[18px] font-semibold text-[#111218]">{block.content}</h3>
+                      if (block.type === 'h2' || block.type === 'h3') return <h4 key={block.id} className="text-[12px] font-semibold text-[#3D3D4E]">{block.content}</h4>
+                      if (block.type === 'callout') return (
+                        <div key={block.id} className={`border-l-2 rounded-r p-2.5 text-[10px] leading-relaxed ${block.calloutVariant === 'warning' ? 'border-[#D97706] bg-[#FFF7ED] text-[#92400E]' : 'border-[#5B5BD6] bg-[#FAFAFF] text-[#4C4C8A]'}`}>{block.content}</div>
+                      )
+                      return <p key={block.id} className="text-[11px] text-[#3D3D4E] leading-relaxed">{block.content}</p>
+                    })}
+                  </div>
+                </section>
+
+                <section data-testid="author-draft-evidence">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Evidence used ({activeDraft.evidenceIdsUsed.length})</p>
+                  {activeDraft.evidenceIdsUsed.length === 0 ? (
+                    <p className="text-[10px] text-[#9898AB]">No factual evidence was used.</p>
+                  ) : activeDraft.evidenceIdsUsed.map(evidenceId => {
+                    const evidence = [
+                      ...(activeGroundingContext?.requiredEvidence ?? []),
+                      ...(activeGroundingContext?.optionalSupportingEvidence ?? []),
+                    ].find(item => item.evidenceId === evidenceId)
+                    return (
+                      <div key={evidenceId} data-evidence-id={evidenceId} className="border border-[#E2DED7] rounded-lg p-2.5 mb-2">
+                        <p className="text-[10px] font-semibold text-[#5B5BD6]">{evidence?.sourceFileName ?? evidenceId}</p>
+                        <p className="text-[9px] text-[#9898AB]">{evidence?.location}</p>
+                        <p className="text-[10px] text-[#3D3D4E] mt-1 line-clamp-3">{evidence?.text}</p>
+                      </div>
+                    )
+                  })}
+                </section>
+
+                <section data-testid="author-draft-provenance">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Generation provenance</p>
+                  <p className="text-[9px] text-[#6B6B7E] break-all">Grounding revision: {activeDraft.groundingRevision}</p>
+                  {Object.entries(activeDraft.variableSnapshot).map(([name, value]) => (
+                    <p key={name} className="text-[9px] text-[#6B6B7E]">{name}: {value}</p>
+                  ))}
+                </section>
+              </div>
+            )}
+          </div>
+          {activeStableTopicId && (
+            <div className="p-3 border-t border-[#E2DED7] bg-[#F9F8F6]">
+              {confirmDraftApply && activeDraft ? (
+                <div data-testid="confirm-author-draft-apply" className="space-y-2">
+                  <p className="text-[10px] text-[#92400E]">
+                    Confirm applying this draft. It will replace the current topic blocks; no content changes occur before confirmation.
+                  </p>
+                  <div className="flex gap-2">
+                    <button type="button" data-testid="confirm-apply-author-draft" onClick={applyActiveDraft} className="flex-1 py-2 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-semibold">Confirm apply</button>
+                    <button type="button" onClick={() => setConfirmDraftApply(false)} className="px-3 py-2 border border-[#E2DED7] bg-white rounded-lg text-[11px] text-[#6B6B7E]">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    data-testid="apply-author-draft"
+                    disabled={!activeDraft || !activeDraftFresh}
+                    onClick={() => setConfirmDraftApply(true)}
+                    className="flex-1 py-2 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-semibold disabled:opacity-40"
+                  >
+                    Apply draft to topic
+                  </button>
+                  <button type="button" data-testid="regenerate-author-draft" disabled={!activeGroundingFresh} onClick={() => generateTopicContent(activeTopic?.title ?? 'New Topic')} className="px-3 py-2 border border-[#E2DED7] bg-white rounded-lg text-[11px] text-[#6B6B7E] disabled:opacity-40">Regenerate</button>
+                </div>
+              )}
+            </div>
+          )}
+        </aside>
       )}
 
       {groundingOpen && !isDemoMode && (
@@ -14186,6 +14397,163 @@ export default function App() {
     ]
   }))
 
+  const handleGenerateTopicDraft = useCallback((topicId: string): {
+    draft: AuthorTopicDraft | null
+    error: string | null
+  } => {
+    if (isDemoMode) {
+      return { draft: null, error: 'Grounded real-project generation is unavailable in demo mode.' }
+    }
+    const topic = appToc.find(candidate => stableAuthorTopicId(candidate) === topicId)
+    if (!topic) return { draft: null, error: 'The selected TOC topic no longer exists.' }
+    const metadata = authorTopicMetadataRef.current[topicId]
+    const context = metadata?.groundingContext
+    const input = buildGroundingInput(topic)
+    if (!context || !isTopicGroundingContextFresh(context, input)) {
+      return {
+        draft: null,
+        error: 'The grounding context is missing or stale. Refresh grounding before generating.',
+      }
+    }
+
+    const draft = buildDeterministicAuthorDraft(context)
+    const usedEvidence = [
+      ...context.requiredEvidence,
+      ...context.optionalSupportingEvidence,
+    ].filter(item => draft.evidenceIdsUsed.includes(item.evidenceId))
+    const base = metadata ?? createManualAuthorTopicMetadata(
+      topicId,
+      authorMetadataContext(),
+      false,
+    )
+    setAuthorTopicMetadata(current => {
+      const next = {
+        ...current,
+        [topicId]: {
+          ...base,
+          generationStatus: 'draft' as const,
+          draft,
+          evidenceIds: [...draft.evidenceIdsUsed],
+          sourcePaths: usedEvidence.map(item => [...item.sectionPath]),
+          sourceFileIds: [...base.sourceFileIds],
+          provenance: {
+            ...base.provenance,
+            sourcesRevision: context.provenance.sourcesRevision,
+            evidenceExtractionRevision: context.provenance.evidenceExtractionRevision,
+            analysisBuiltAt: context.provenance.analysisBuiltAt,
+            analysisRevision: context.provenance.analysisRevision,
+            contentType: draft.contentType,
+            variableSnapshot: { ...draft.variableSnapshot },
+            groundingContextId: context.contextId,
+            language: draft.language,
+            styleProfileId: draft.styleProvenance.styleProfileId,
+            styleFingerprint: draft.styleProvenance.styleFingerprint,
+          },
+          generatedAt: draft.generatedAt,
+          generatedFreshness: 'current' as const,
+          approved: false,
+        },
+      }
+      authorTopicMetadataRef.current = next
+      return next
+    })
+    triggerAutosave()
+    return { draft, error: null }
+  }, [
+    appToc,
+    authorMetadataContext,
+    buildGroundingInput,
+    isDemoMode,
+    triggerAutosave,
+  ])
+
+  const handleApplyTopicDraft = useCallback((topicId: string): {
+    blocks: DocBlock[] | null
+    error: string | null
+  } => {
+    if (isDemoMode) return { blocks: null, error: 'Grounded drafts cannot be applied in demo mode.' }
+    const topic = appToc.find(candidate => stableAuthorTopicId(candidate) === topicId)
+    const metadata = authorTopicMetadataRef.current[topicId]
+    const draft = metadata?.draft
+    const context = metadata?.groundingContext
+    if (!topic || !draft || !context || !isAuthorDraftFresh(
+      draft,
+      context,
+      isTopicGroundingContextFresh(context, buildGroundingInput(topic)),
+    )) {
+      return { blocks: null, error: 'The draft is stale. Regenerate it from current grounding before applying.' }
+    }
+    const blocks: DocBlock[] = draft.blocks.map((block, index) => ({
+      id: `${draft.draftId}-${index + 1}`,
+      type: block.type,
+      content: block.content,
+      ...(block.type === 'callout'
+        ? { calloutVariant: block.calloutVariant === 'warning' ? 'warning' as const : 'note' as const }
+        : {}),
+    }))
+    const existing = topicContentRef.current[topicId]
+      ?? topicContentRef.current[String(topic.id)]
+      ?? []
+    const nextContent = {
+      ...topicContentRef.current,
+      [topicId]: blocks,
+    }
+    topicContentRef.current = nextContent
+    setTopicContent(nextContent)
+    setAuthorTopicMetadata(current => {
+      const currentMetadata = current[topicId] ?? metadata
+      const next = {
+        ...current,
+        [topicId]: {
+          ...currentMetadata,
+          generationStatus: 'generated' as const,
+          contentOrigin: existing.length > 0 ? 'mixed' as const : 'generated' as const,
+          generatedFreshness: 'current' as const,
+          manualEdited: false,
+          approved: true,
+        },
+      }
+      authorTopicMetadataRef.current = next
+      return next
+    })
+    setContentRevision(revision => revision + 1)
+    triggerAutosave()
+    return { blocks, error: null }
+  }, [appToc, buildGroundingInput, isDemoMode, triggerAutosave])
+
+  useEffect(() => {
+    if (appLoading || isDemoMode) return
+    const staleTopicIds = appToc.flatMap(topic => {
+      const topicId = stableAuthorTopicId(topic)
+      const metadata = authorTopicMetadataRef.current[topicId]
+      if (!metadata?.draft || metadata.generatedFreshness !== 'current') return []
+      return isAuthorDraftFresh(
+        metadata.draft,
+        metadata.groundingContext,
+        groundingFreshnessByTopic[topicId] ?? false,
+      ) ? [] : [topicId]
+    })
+    if (staleTopicIds.length === 0) return
+    const staleSet = new Set(staleTopicIds)
+    setAuthorTopicMetadata(current => {
+      const next = Object.fromEntries(Object.entries(current).map(([topicId, metadata]) => [
+        topicId,
+        staleSet.has(topicId)
+          ? { ...metadata, generatedFreshness: 'stale' as const }
+          : metadata,
+      ]))
+      authorTopicMetadataRef.current = next
+      return next
+    })
+    triggerAutosave()
+  }, [
+    appLoading,
+    appToc,
+    groundingFreshnessByTopic,
+    isDemoMode,
+    triggerAutosave,
+  ])
+
   useEffect(() => {
     if (appLoading || isDemoMode || appToc.length === 0) return
     const missingTopics = appToc.filter(topic =>
@@ -14552,7 +14920,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
+      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
       case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />

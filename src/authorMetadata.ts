@@ -4,6 +4,7 @@ import {
   remapTopicGroundingContext,
   type TopicGroundingContext,
 } from './authorGroundingContext'
+import type { AuthorTopicDraft } from './authorDraftGeneration'
 
 export type AuthorGenerationStatus = 'not-generated' | 'draft' | 'generated' | 'failed'
 export type AuthorContentOrigin = 'manual' | 'generated' | 'mixed' | 'approved'
@@ -17,6 +18,7 @@ export type AuthorTopicMetadata = {
   sourcePaths: string[][]
   sourceFileIds: string[]
   groundingContext: TopicGroundingContext | null
+  draft: AuthorTopicDraft | null
   provenance: {
     sourcesRevision: number | null
     evidenceExtractionRevision: string | null
@@ -24,6 +26,10 @@ export type AuthorTopicMetadata = {
     analysisRevision: number | null
     contentType: string
     variableSnapshot: Record<string, string>
+    groundingContextId: string | null
+    language: string
+    styleProfileId: string | null
+    styleFingerprint: string | null
   }
   generatedAt: number | null
   generatedFreshness: AuthorGeneratedFreshness
@@ -71,6 +77,7 @@ export function createManualAuthorTopicMetadata(
     sourcePaths: [],
     sourceFileIds: [],
     groundingContext: null,
+    draft: null,
     provenance: {
       sourcesRevision: null,
       evidenceExtractionRevision: null,
@@ -78,6 +85,10 @@ export function createManualAuthorTopicMetadata(
       analysisRevision: null,
       contentType: context.contentType,
       variableSnapshot: variableSnapshot(context.variables),
+      groundingContextId: null,
+      language: '',
+      styleProfileId: null,
+      styleFingerprint: null,
     },
     generatedAt: null,
     generatedFreshness: 'not-applicable',
@@ -109,6 +120,7 @@ export function hydrateAuthorTopicMetadata(
           groundingContext: metadata.groundingContext
             ? structuredClone(metadata.groundingContext)
             : null,
+          draft: metadata.draft ? structuredClone(metadata.draft) : null,
           provenance: {
             sourcesRevision: provenance?.sourcesRevision ?? null,
             evidenceExtractionRevision: provenance?.evidenceExtractionRevision ?? null,
@@ -116,6 +128,10 @@ export function hydrateAuthorTopicMetadata(
             analysisRevision: provenance?.analysisRevision ?? null,
             contentType: provenance?.contentType ?? context.contentType,
             variableSnapshot: { ...(provenance?.variableSnapshot ?? {}) },
+            groundingContextId: provenance?.groundingContextId ?? metadata.draft?.groundingContextId ?? null,
+            language: provenance?.language ?? metadata.draft?.language ?? '',
+            styleProfileId: provenance?.styleProfileId ?? metadata.draft?.styleProvenance.styleProfileId ?? null,
+            styleFingerprint: provenance?.styleFingerprint ?? metadata.draft?.styleProvenance.styleFingerprint ?? null,
           },
           generatedAt: metadata.generatedAt ?? null,
           generatedFreshness: metadata.generatedFreshness ?? 'not-applicable',
@@ -169,6 +185,22 @@ export function remapAuthorTopicMetadata(
         && item.provenance.evidenceExtractionRevision === sourceEvidenceIndex.extractionRevision
         && item.provenance.analysisBuiltAt === sourceConceptAnalysis.builtAt
 
+      const groundingContext = remapTopicGroundingContext(
+        item.groundingContext,
+        fileIdMap,
+        copiedEvidenceIndex,
+        copiedConceptAnalysis,
+      )
+      const draft = item.draft
+        ? {
+            ...structuredClone(item.draft),
+            groundingContextId: groundingContext?.contextId ?? item.draft.groundingContextId,
+            groundingRevision: groundingContext?.contextId ?? item.draft.groundingRevision,
+            evidenceIdsUsed: item.draft.evidenceIdsUsed.filter(id => copiedEvidenceIds.has(id)),
+            requiredEvidenceIdsUsed: item.draft.requiredEvidenceIdsUsed.filter(id => copiedEvidenceIds.has(id)),
+            optionalEvidenceIdsUsed: item.draft.optionalEvidenceIdsUsed.filter(id => copiedEvidenceIds.has(id)),
+          }
+        : null
       return [
         topicId,
         {
@@ -178,12 +210,8 @@ export function remapAuthorTopicMetadata(
           sourcePaths: (item.sourcePaths ?? []).map(path => [...path]),
           sourceFileIds: (item.sourceFileIds ?? []).flatMap(fileId =>
             fileIdMap[fileId] ? [fileIdMap[fileId]] : []),
-          groundingContext: remapTopicGroundingContext(
-            item.groundingContext,
-            fileIdMap,
-            copiedEvidenceIndex,
-            copiedConceptAnalysis,
-          ),
+          groundingContext,
+          draft,
           provenance: {
             ...item.provenance,
             ...(wasCurrent && copiedEvidenceIndex && copiedConceptAnalysis
