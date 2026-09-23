@@ -308,7 +308,7 @@ test("edits a duplicated profile independently and preserves both styles across 
   await expectStoredState(duplicated.id)
 })
 
-test("clears a deleted applied profile until a remaining profile is explicitly applied", async ({
+test("falls back to a remaining profile when the applied profile is deleted", async ({
   page,
 }) => {
   const projectName = `Profile Deletion ${Date.now()}`
@@ -334,43 +334,26 @@ test("clears a deleted applied profile until a remaining profile is explicitly a
 
   page.once("dialog", dialog => dialog.accept())
   await page.getByRole("button", { name: "Delete", exact: true }).click()
-  await expect(page.getByRole("button", { name: "Apply to Project", exact: true })).toBeVisible()
-  const expectUnapplied = async () => {
+  await expect(page.getByRole("button", { name: "✓ Applied to Project", exact: true })).toBeVisible()
+  const expectFallbackApplied = async () => {
     await expect.poll(async () => {
       const stored = await readOnlyProject(page)
-      return stored.activeStyleProfileId === ""
-        && stored.projectMeta?.styleProfileId === ""
-        && !stored.themes.flatMap(theme => theme.styleProfiles)
-          .some(profile => profile.name === "Applied Profile")
+      const profiles = stored.themes.flatMap(theme => theme.styleProfiles)
+      const remaining = profiles.find(profile => profile.name === "Remaining Profile")
+      return !!remaining
+        && stored.activeStyleProfileId === remaining.id
+        && stored.projectMeta?.styleProfileId === remaining.id
+        && !profiles.some(profile => profile.name === "Applied Profile")
     }).toBe(true)
   }
-  await expectUnapplied()
-
-  await page.reload()
-  await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
-  await expect(page.getByRole("button", { name: "Apply to Project", exact: true })).toBeVisible()
-  await expectUnapplied()
-
-  await page.getByRole("textbox", { name: "Search profiles…" }).click()
-  await page.getByRole("button", { name: "Remaining Profile Reusable", exact: true }).click()
-  await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue("Remaining Profile")
-  await expect(page.getByRole("button", { name: "Apply to Project", exact: true })).toBeVisible()
-  await expectUnapplied()
-  await page.getByRole("button", { name: "Apply to Project", exact: true }).click()
-  await expect.poll(async () => {
-    const stored = await readOnlyProject(page)
-    const remaining = stored.themes.flatMap(theme => theme.styleProfiles)
-      .find(profile => profile.name === "Remaining Profile")
-    return !!remaining && stored.activeStyleProfileId === remaining.id
-      && stored.projectMeta?.styleProfileId === remaining.id
-  }).toBe(true)
+  await expectFallbackApplied()
 
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
   await page.getByRole("button", { name: /Theme$/ }).click()
   await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue("Remaining Profile")
   await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
+  await expectFallbackApplied()
 })
 
 for (const scenario of [
@@ -500,10 +483,6 @@ test(`falls back safely when the persisted style profile ID is ${persistedId ===
       page.getByRole("textbox", { name: "Search profiles…" }),
     ).toHaveValue(profileName)
     await expect(
-      page.getByRole("button", { name: "Apply to Project" }),
-    ).toBeVisible()
-    await page.getByRole("button", { name: "Apply to Project" }).click()
-    await expect(
       page.getByRole("button", { name: "✓ Applied to Project" }),
     ).toBeVisible()
     await expect.poll(async () => {
@@ -550,13 +529,26 @@ test("resolves rich profiles by project, active, then active-theme priority acro
   const themePriority = profiles.find(profile => profile.name === "Theme Priority Profile")!
   const projectPriority = profiles.find(profile => profile.name === "Project Priority Profile")!
 
-  const expectSelectedAfterReload = async (name: string) => {
+  const expectSelectedAfterReload = async (name: string, expectedId: string) => {
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
     await page.getByRole("button", { name: /Theme$/ }).click()
     await expect(
       page.getByRole("textbox", { name: "Search profiles…" }),
     ).toHaveValue(name)
+    await expect(
+      page.getByRole("button", { name: "✓ Applied to Project" }),
+    ).toBeVisible()
+    await expect.poll(async () => {
+      const reloaded = await readOnlyProject(page)
+      return {
+        projectProfileId: reloaded.projectMeta?.styleProfileId,
+        legacyProfileId: reloaded.activeStyleProfileId,
+      }
+    }).toEqual({
+      projectProfileId: expectedId,
+      legacyProfileId: expectedId,
+    })
     await page.getByRole("button", { name: "Sources", exact: true }).click()
   }
 
@@ -568,7 +560,7 @@ test("resolves rich profiles by project, active, then active-theme priority acro
       styleProfileId: String(projectPriority.id),
     },
   }))
-  await expectSelectedAfterReload("Project Priority Profile")
+  await expectSelectedAfterReload("Project Priority Profile", String(projectPriority.id))
 
   await updateOnlyProject(page, project => ({
     ...project,
@@ -578,7 +570,7 @@ test("resolves rich profiles by project, active, then active-theme priority acro
       styleProfileId: "invalid-project-profile",
     },
   }))
-  await expectSelectedAfterReload("Theme Priority Profile")
+  await expectSelectedAfterReload("Theme Priority Profile", String(themePriority.id))
 
   await updateOnlyProject(page, project => ({
     ...project,
@@ -588,7 +580,7 @@ test("resolves rich profiles by project, active, then active-theme priority acro
       styleProfileId: "",
     },
   }))
-  await expectSelectedAfterReload("Theme Priority Profile")
+  await expectSelectedAfterReload("Theme Priority Profile", String(themePriority.id))
 
   const reloaded = await readOnlyProject(page)
   expect(reloaded.pageLayouts).toEqual(stored.pageLayouts)
