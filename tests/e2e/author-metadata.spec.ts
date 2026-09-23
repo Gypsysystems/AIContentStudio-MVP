@@ -3,7 +3,12 @@ import { buildTopicGroundingContext } from "../../src/authorGroundingContext"
 import type { ConceptAnalysis } from "../../src/conceptAnalysis"
 import type { EvidenceIndex } from "../../src/evidenceIndex"
 import type { SourceExtraction } from "../../src/sourceExtractor"
-import type { AuthorTopicDraft } from "../../src/authorDraftGeneration"
+import type {
+  AuthorAppliedBaseline,
+  AuthorBlockState,
+  AuthorRegenerationProposal,
+  AuthorTopicDraft,
+} from "../../src/authorDraftGeneration"
 
 test.describe.configure({ mode: "serial" })
 
@@ -25,6 +30,9 @@ type AuthorTopicMetadata = {
   sourceFileIds: string[]
   groundingContext: unknown | null
   draft: AuthorTopicDraft | null
+  appliedBaseline: AuthorAppliedBaseline | null
+  regenerationProposal: AuthorRegenerationProposal | null
+  blockStates: Record<string, AuthorBlockState>
   provenance: {
     sourcesRevision: number | null
     evidenceExtractionRevision: string | null
@@ -74,6 +82,9 @@ function metadata(
     sourceFileIds: [],
     groundingContext: null,
     draft: null,
+    appliedBaseline: null,
+    regenerationProposal: null,
+    blockStates: {},
     provenance: {
       sourcesRevision: null,
       evidenceExtractionRevision: null,

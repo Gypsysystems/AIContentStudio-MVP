@@ -121,8 +121,13 @@ function blockFingerprint(block: AuthorComparableBlock): string {
   }))
 }
 
+export function authorBlockFingerprint(block: AuthorComparableBlock): string {
+  return blockFingerprint(block)
+}
+
 export function authorContentFingerprint(blocks: AuthorComparableBlock[]): string {
   return stableHash(stableStringify(blocks.map(block => ({
+    id: block.id,
     type: block.type,
     content: block.content,
     calloutVariant: block.calloutVariant ?? '',
@@ -195,7 +200,13 @@ export function buildAuthorRegenerationProposal(
       selected = false
     } else if (currentBlock && isSameBlock(currentBlock, proposed)) {
       status = 'unchanged'
-      protection = approved ? 'approved' : 'none'
+      protection = approved
+        ? 'approved'
+        : baselineBlock
+          ? 'none'
+          : state === 'legacy'
+            ? 'legacy'
+            : 'manual'
       selected = false
     } else if (baselineBlock) {
       status = 'changed'

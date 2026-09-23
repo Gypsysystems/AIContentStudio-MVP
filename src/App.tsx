@@ -51,8 +51,13 @@ import {
   type TopicGroundingBuildInput,
 } from './authorGroundingContext'
 import {
+  authorBlockFingerprint,
+  authorContentFingerprint,
+  buildAuthorRegenerationProposal,
   buildDeterministicAuthorDraft,
   isAuthorDraftFresh,
+  type AuthorBlockState,
+  type AuthorDraftDiff,
   type AuthorTopicDraft,
 } from './authorDraftGeneration'
 
@@ -8543,7 +8548,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onApplyTopicDraft, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [outlineOpen, setOutlineOpen] = useState(true)
   const [tocWidth, setTocWidth] = useState(260)
@@ -9097,11 +9102,14 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
     ? groundingFreshnessByTopic?.[activeStableTopicId] ?? false
     : false
   const activeDraft = activeAuthorMetadata?.draft ?? null
+  const activeRegenerationProposal = activeAuthorMetadata?.regenerationProposal ?? null
   const activeDraftFresh = isAuthorDraftFresh(
     activeDraft,
     activeGroundingContext,
     activeGroundingFresh,
   )
+  const activeProposalMatchesContent = !!activeRegenerationProposal
+    && activeRegenerationProposal.currentContentFingerprint === authorContentFingerprint(docBlocks)
   const availableAuthorSources: AuthorProjectSource[] = isDemoMode
     ? SOURCE_FILES.map(source => ({ fileId: `demo-source-${source.id}`, name: source.name }))
     : (projectSources ?? [])
@@ -11174,6 +11182,88 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                   <p className="text-[9px] text-[#9898AB]">Style: {activeDraft.styleProvenance.styleProfileName}</p>
                 </section>
 
+                {activeRegenerationProposal && (
+                  <section data-testid="author-regeneration-diff">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">
+                        {activeAuthorMetadata?.appliedBaseline ? 'Regeneration proposal' : 'Draft changes'}
+                      </p>
+                      <span className="text-[9px] text-[#9898AB]">
+                        {activeRegenerationProposal.diffs.filter(diff => diff.selected).length} selected
+                      </span>
+                    </div>
+                    {!activeProposalMatchesContent && (
+                      <div data-testid="author-regeneration-content-stale" className="bg-[#FFF7ED] border border-[#FED7AA] rounded-lg p-2.5 mb-2 text-[10px] text-[#9A3412]">
+                        Authored content changed after this proposal was generated. Regenerate to review an up-to-date comparison.
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      {activeRegenerationProposal.diffs.map(diff => {
+                        const selectable = diff.status !== 'unchanged' && diff.status !== 'manually-edited'
+                        const labels: Record<AuthorDraftDiff['status'], string> = {
+                          added: 'Added',
+                          changed: 'Changed',
+                          removed: 'Removed',
+                          unchanged: 'Unchanged',
+                          'manually-edited': diff.protection === 'legacy' ? 'Legacy / protected' : 'Manually edited',
+                          protected: 'Protected / approved',
+                        }
+                        const colors: Record<AuthorDraftDiff['status'], string> = {
+                          added: 'bg-[#DCFCE7] text-[#15803D]',
+                          changed: 'bg-[#DBEAFE] text-[#1D4ED8]',
+                          removed: 'bg-[#FEE2E2] text-[#B91C1C]',
+                          unchanged: 'bg-[#F1F5F9] text-[#64748B]',
+                          'manually-edited': 'bg-[#FEF3C7] text-[#B45309]',
+                          protected: 'bg-[#F3E8FF] text-[#7E22CE]',
+                        }
+                        return (
+                          <label key={diff.id} data-testid="author-draft-diff-row" data-diff-status={diff.status} className="block border border-[#E2DED7] rounded-lg p-2.5">
+                            <div className="flex items-start gap-2">
+                              <input
+                                type="checkbox"
+                                aria-label={`Apply ${labels[diff.status]} change`}
+                                checked={diff.selected}
+                                disabled={!selectable || !activeDraftFresh || !activeProposalMatchesContent}
+                                onChange={event => activeStableTopicId && onSetDraftDiffSelection?.(
+                                  activeStableTopicId,
+                                  diff.id,
+                                  event.target.checked,
+                                )}
+                                className="mt-0.5 accent-[#5B5BD6]"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <span className={`inline-block text-[8px] uppercase font-semibold px-1.5 py-0.5 rounded ${colors[diff.status]}`}>{labels[diff.status]}</span>
+                                {diff.currentBlock && diff.status !== 'added' && (
+                                  <div className="mt-1.5">
+                                    <p className="text-[8px] uppercase text-[#9898AB]">Current authored content</p>
+                                    <p className="text-[10px] text-[#3D3D4E] line-clamp-3">{diff.currentBlock.content}</p>
+                                  </div>
+                                )}
+                                {diff.proposedBlock && diff.status !== 'unchanged' && diff.status !== 'manually-edited' && (
+                                  <div className="mt-1.5">
+                                    <p className="text-[8px] uppercase text-[#9898AB]">Proposed content</p>
+                                    <p className="text-[10px] text-[#3D3D4E] line-clamp-3">{diff.proposedBlock.content}</p>
+                                  </div>
+                                )}
+                                {(diff.status === 'manually-edited' || diff.status === 'protected') && (
+                                  <p className="text-[9px] text-[#B45309] mt-1">
+                                    Preserved by default. {diff.status === 'protected' ? 'Select to approve this replacement.' : 'Manual content cannot be replaced from this proposal.'}
+                                  </p>
+                                )}
+                                {diff.status === 'removed' && diff.protection === 'approved' && (
+                                  <p className="text-[9px] text-[#B45309] mt-1">
+                                    Approved content is preserved by default. Select to approve its removal.
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </section>
+                )}
+
                 {activeDraft.warnings.length > 0 && (
                   <section data-testid="author-draft-warnings">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-[#B45309] mb-2">Drafting warnings</p>
@@ -11234,7 +11324,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
               {confirmDraftApply && activeDraft ? (
                 <div data-testid="confirm-author-draft-apply" className="space-y-2">
                   <p className="text-[10px] text-[#92400E]">
-                    Confirm applying this draft. It will replace the current topic blocks; no content changes occur before confirmation.
+                    Confirm the selected changes. Manual, legacy, and unselected protected content will remain unchanged.
                   </p>
                   <div className="flex gap-2">
                     <button type="button" data-testid="confirm-apply-author-draft" onClick={applyActiveDraft} className="flex-1 py-2 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-semibold">Confirm apply</button>
@@ -11246,11 +11336,11 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                   <button
                     type="button"
                     data-testid="apply-author-draft"
-                    disabled={!activeDraft || !activeDraftFresh}
+                    disabled={!activeDraft || !activeDraftFresh || !activeRegenerationProposal || !activeProposalMatchesContent}
                     onClick={() => setConfirmDraftApply(true)}
                     className="flex-1 py-2 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-semibold disabled:opacity-40"
                   >
-                    Apply draft to topic
+                    Apply selected changes
                   </button>
                   <button type="button" data-testid="regenerate-author-draft" disabled={!activeGroundingFresh} onClick={() => generateTopicContent(activeTopic?.title ?? 'New Topic')} className="px-3 py-2 border border-[#E2DED7] bg-white rounded-lg text-[11px] text-[#6B6B7E] disabled:opacity-40">Regenerate</button>
                 </div>
@@ -14125,6 +14215,7 @@ export default function App() {
   }
 
   const handleTopicContentChange = (tc: Record<string, DocBlock[]>) => {
+    topicContentRef.current = tc
     setTopicContent(tc)
     setAuthorTopicMetadata(current => {
       let next = current
@@ -14133,13 +14224,57 @@ export default function App() {
         const topic = appToc.find(candidate =>
           stableAuthorTopicId(candidate) === contentKey || String(candidate.id) === contentKey)
         const topicId = topic ? stableAuthorTopicId(topic) : contentKey
-        if (!next[topicId]) {
+        const existing = next[topicId]
+        if (!existing) {
+          const created = createManualAuthorTopicMetadata(topicId, authorMetadataContext(), false)
+          created.blockStates = Object.fromEntries(blocks.map(block => [block.id, 'manually-edited' as const]))
           next = {
             ...next,
-            [topicId]: createManualAuthorTopicMetadata(topicId, authorMetadataContext(), false),
+            [topicId]: created,
+          }
+          continue
+        }
+        const baselineByAppliedId = new Map(
+          (existing.appliedBaseline?.blocks ?? []).map(entry => [entry.appliedBlockId, entry]),
+        )
+        const blockStates: Record<string, AuthorBlockState> = {}
+        let generatedCount = 0
+        let manualCount = 0
+        for (const block of blocks) {
+          const baselineEntry = baselineByAppliedId.get(block.id)
+          if (baselineEntry) {
+            const unchanged = authorBlockFingerprint(block)
+              === authorBlockFingerprint(baselineEntry.block)
+            if (unchanged) {
+              blockStates[block.id] = existing.blockStates?.[block.id] === 'generated'
+                ? 'generated'
+                : 'approved'
+              generatedCount += 1
+            } else {
+              blockStates[block.id] = 'manually-edited'
+              manualCount += 1
+            }
+          } else {
+            blockStates[block.id] = existing.blockStates?.[block.id]
+              ?? (existing.legacyHydrated ? 'legacy' : 'manually-edited')
+            manualCount += 1
           }
         }
+        const nextMetadata: AuthorTopicMetadata = {
+          ...existing,
+          blockStates,
+          manualEdited: manualCount > 0,
+          contentOrigin: generatedCount > 0 && manualCount > 0
+            ? 'mixed'
+            : generatedCount > 0
+              ? (existing.approved ? 'approved' : 'generated')
+              : 'manual',
+        }
+        if (JSON.stringify(nextMetadata) !== JSON.stringify(existing)) {
+          next = { ...next, [topicId]: nextMetadata }
+        }
       }
+      authorTopicMetadataRef.current = next
       return next
     })
     triggerAutosave()
@@ -14426,6 +14561,16 @@ export default function App() {
       authorMetadataContext(),
       false,
     )
+    const currentBlocks = topicContentRef.current[topicId]
+      ?? topicContentRef.current[String(topic.id)]
+      ?? []
+    const regenerationProposal = buildAuthorRegenerationProposal(
+      draft,
+      currentBlocks,
+      base.appliedBaseline,
+      base.approved,
+      base.blockStates,
+    )
     setAuthorTopicMetadata(current => {
       const next = {
         ...current,
@@ -14433,6 +14578,7 @@ export default function App() {
           ...base,
           generationStatus: 'draft' as const,
           draft,
+          regenerationProposal,
           evidenceIds: [...draft.evidenceIdsUsed],
           sourcePaths: usedEvidence.map(item => [...item.sectionPath]),
           sourceFileIds: [...base.sourceFileIds],
@@ -14451,7 +14597,7 @@ export default function App() {
           },
           generatedAt: draft.generatedAt,
           generatedFreshness: 'current' as const,
-          approved: false,
+          approved: base.approved,
         },
       }
       authorTopicMetadataRef.current = next
@@ -14467,6 +14613,33 @@ export default function App() {
     triggerAutosave,
   ])
 
+  const handleSetDraftDiffSelection = useCallback((
+    topicId: string,
+    diffId: string,
+    selected: boolean,
+  ) => {
+    setAuthorTopicMetadata(current => {
+      const metadata = current[topicId]
+      if (!metadata?.regenerationProposal) return current
+      const next = {
+        ...current,
+        [topicId]: {
+          ...metadata,
+          regenerationProposal: {
+            ...metadata.regenerationProposal,
+            diffs: metadata.regenerationProposal.diffs.map(diff =>
+              diff.id === diffId && diff.status !== 'unchanged' && diff.status !== 'manually-edited'
+                ? { ...diff, selected }
+                : diff),
+          },
+        },
+      }
+      authorTopicMetadataRef.current = next
+      return next
+    })
+    triggerAutosave()
+  }, [triggerAutosave])
+
   const handleApplyTopicDraft = useCallback((topicId: string): {
     blocks: DocBlock[] | null
     error: string | null
@@ -14476,6 +14649,7 @@ export default function App() {
     const metadata = authorTopicMetadataRef.current[topicId]
     const draft = metadata?.draft
     const context = metadata?.groundingContext
+    const proposal = metadata?.regenerationProposal
     if (!topic || !draft || !context || !isAuthorDraftFresh(
       draft,
       context,
@@ -14483,17 +14657,86 @@ export default function App() {
     )) {
       return { blocks: null, error: 'The draft is stale. Regenerate it from current grounding before applying.' }
     }
-    const blocks: DocBlock[] = draft.blocks.map((block, index) => ({
-      id: `${draft.draftId}-${index + 1}`,
+    const existing = topicContentRef.current[topicId]
+      ?? topicContentRef.current[String(topic.id)]
+      ?? []
+    if (!proposal
+      || proposal.proposedDraftId !== draft.draftId
+      || proposal.groundingContextId !== context.contextId
+      || proposal.currentContentFingerprint !== authorContentFingerprint(existing)) {
+      return {
+        blocks: null,
+        error: 'Authored content changed after this proposal was created. Regenerate to review a current diff.',
+      }
+    }
+    const toDocBlock = (block: NonNullable<AuthorDraftDiff['proposedBlock']>, id: string): DocBlock => ({
+      id,
       type: block.type,
       content: block.content,
       ...(block.type === 'callout'
         ? { calloutVariant: block.calloutVariant === 'warning' ? 'warning' as const : 'note' as const }
         : {}),
+    })
+    let blocks = existing.map(block => ({ ...block }))
+    const appliedIdsBySource = new Map<string, string>()
+    const baselineEntries = new Map(
+      (metadata.appliedBaseline?.blocks ?? []).map(entry => [entry.sourceBlockId, structuredClone(entry)]),
+    )
+    for (const diff of proposal.diffs) {
+      if (diff.status === 'unchanged'
+        && diff.sourceBlockId
+        && diff.currentBlock
+        && diff.proposedBlock
+        && diff.protection !== 'manual'
+        && diff.protection !== 'legacy') {
+        appliedIdsBySource.set(diff.sourceBlockId, diff.currentBlock.id)
+        baselineEntries.set(diff.sourceBlockId, {
+          sourceBlockId: diff.sourceBlockId,
+          appliedBlockId: diff.currentBlock.id,
+          block: structuredClone(diff.proposedBlock),
+        })
+        continue
+      }
+      if (!diff.selected || diff.status === 'manually-edited') continue
+      if (diff.status === 'removed') {
+        if (diff.currentBlock) blocks = blocks.filter(block => block.id !== diff.currentBlock?.id)
+        if (diff.sourceBlockId) baselineEntries.delete(diff.sourceBlockId)
+        continue
+      }
+      if (!diff.proposedBlock || !diff.sourceBlockId) continue
+      const existingId = diff.currentBlock?.id
+      const appliedBlockId = existingId
+        ?? `${draft.draftId}-${diff.sourceBlockId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+      const nextBlock = toDocBlock(diff.proposedBlock, appliedBlockId)
+      const existingIndex = existingId
+        ? blocks.findIndex(block => block.id === existingId)
+        : -1
+      if (existingIndex >= 0) blocks[existingIndex] = nextBlock
+      else blocks.push(nextBlock)
+      appliedIdsBySource.set(diff.sourceBlockId, appliedBlockId)
+      baselineEntries.set(diff.sourceBlockId, {
+        sourceBlockId: diff.sourceBlockId,
+        appliedBlockId,
+        block: structuredClone(diff.proposedBlock),
+      })
+    }
+    const finalBlockIds = new Set(blocks.map(block => block.id))
+    for (const [sourceBlockId, entry] of baselineEntries) {
+      if (!finalBlockIds.has(entry.appliedBlockId)) baselineEntries.delete(sourceBlockId)
+    }
+    const generatedIds = new Set(Array.from(baselineEntries.values()).map(entry => entry.appliedBlockId))
+    const blockStates: Record<string, AuthorBlockState> = Object.fromEntries(blocks.map(block => {
+      if (generatedIds.has(block.id)) {
+        const baselineEntry = Array.from(baselineEntries.values())
+          .find(entry => entry.appliedBlockId === block.id)
+        const matches = !!baselineEntry
+          && authorBlockFingerprint(block) === authorBlockFingerprint(baselineEntry.block)
+        return [block.id, matches ? 'approved' : 'manually-edited']
+      }
+      return [block.id, metadata.blockStates?.[block.id] ?? (metadata.legacyHydrated ? 'legacy' : 'manually-edited')]
     }))
-    const existing = topicContentRef.current[topicId]
-      ?? topicContentRef.current[String(topic.id)]
-      ?? []
+    const hasGenerated = Object.values(blockStates).some(state => state === 'approved' || state === 'generated')
+    const hasManual = Object.values(blockStates).some(state => state === 'manually-edited' || state === 'legacy' || state === 'mixed')
     const nextContent = {
       ...topicContentRef.current,
       [topicId]: blocks,
@@ -14507,10 +14750,22 @@ export default function App() {
         [topicId]: {
           ...currentMetadata,
           generationStatus: 'generated' as const,
-          contentOrigin: existing.length > 0 ? 'mixed' as const : 'generated' as const,
+          contentOrigin: hasGenerated && hasManual
+            ? 'mixed' as const
+            : hasGenerated
+              ? 'approved' as const
+              : 'manual' as const,
           generatedFreshness: 'current' as const,
-          manualEdited: false,
-          approved: true,
+          manualEdited: hasManual,
+          approved: hasGenerated,
+          blockStates,
+          appliedBaseline: {
+            draftId: draft.draftId,
+            groundingContextId: draft.groundingContextId,
+            contentFingerprint: authorContentFingerprint(blocks),
+            blocks: Array.from(baselineEntries.values()),
+          },
+          regenerationProposal: null,
         },
       }
       authorTopicMetadataRef.current = next
@@ -14920,7 +15175,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
+      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
       case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />

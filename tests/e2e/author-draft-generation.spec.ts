@@ -1,7 +1,9 @@
 import { expect, test, type Page } from "@playwright/test"
 import {
+  buildAuthorRegenerationProposal,
   buildDeterministicAuthorDraft,
   isAuthorDraftFresh,
+  type AuthorAppliedBaseline,
 } from "../../src/authorDraftGeneration"
 import type { TopicGroundingContext } from "../../src/authorGroundingContext"
 import type { ConceptAnalysis } from "../../src/conceptAnalysis"
@@ -184,6 +186,98 @@ test("creates warning-only output when a current topic has no supporting evidenc
   })])
 })
 
+test("regeneration protects approved and manually edited blocks while selecting safe additions", () => {
+  const originalDraft = buildDeterministicAuthorDraft(grounding(), 1_710_000_000_000)
+  const proposedDraft = buildDeterministicAuthorDraft(grounding({
+    conflicts: [],
+    gaps: [],
+    unavailableInformation: [],
+    writingGuidance: {
+      ...grounding().writingGuidance,
+      contentType: "api-reference",
+    },
+    requiredEvidence: [{
+      ...grounding().requiredEvidence[0],
+      text: "{{ProductName}} requires monthly access reviews.",
+    }],
+    optionalSupportingEvidence: [
+      ...grounding().optionalSupportingEvidence,
+      {
+        evidenceId: "evidence-new",
+        fileId: "file-real",
+        sourceId: "file-real",
+        sourceFileName: "operations.md",
+        location: "Operations › Escalation",
+        sectionPath: ["Operations", "Escalation"],
+        text: "Escalations are recorded in the operations log.",
+      },
+    ],
+  }), 1_720_000_000_000)
+  const appliedBlocks = originalDraft.blocks.map((block, index) => ({
+    ...block,
+    id: `applied-${index}`,
+  }))
+  const editedEvidence = appliedBlocks.find(block => block.id === "applied-2")
+  if (!editedEvidence) throw new Error("Expected evidence block")
+  editedEvidence.content = "A writer manually changed this approved evidence paragraph."
+  const baseline: AuthorAppliedBaseline = {
+    draftId: originalDraft.draftId,
+    groundingContextId: originalDraft.groundingContextId,
+    contentFingerprint: "baseline",
+    blocks: originalDraft.blocks.map((block, index) => ({
+      sourceBlockId: block.id,
+      appliedBlockId: `applied-${index}`,
+      block,
+    })),
+  }
+  const proposal = buildAuthorRegenerationProposal(
+    proposedDraft,
+    [
+      ...appliedBlocks,
+      { id: "manual-note", type: "para", content: "Legacy manual note." },
+    ],
+    baseline,
+    true,
+    {
+      "applied-0": "approved",
+      "applied-1": "approved",
+      "applied-2": "manually-edited",
+      "manual-note": "legacy",
+    },
+  )
+
+  expect(proposal.diffs).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      sourceBlockId: "draft-evidence-heading",
+      status: "protected",
+      protection: "approved",
+      selected: false,
+    }),
+    expect.objectContaining({
+      sourceBlockId: "draft-evidence-1",
+      status: "manually-edited",
+      protection: "manual",
+      selected: false,
+    }),
+    expect.objectContaining({
+      sourceBlockId: "draft-evidence-3",
+      status: "added",
+      selected: true,
+    }),
+    expect.objectContaining({
+      status: "removed",
+      protection: "approved",
+      selected: false,
+    }),
+    expect.objectContaining({
+      currentBlock: expect.objectContaining({ id: "manual-note" }),
+      status: "manually-edited",
+      protection: "legacy",
+      selected: false,
+    }),
+  ]))
+})
+
 test("persists a reviewable draft without overwriting manual content and applies only after confirmation", async ({ page }) => {
   test.setTimeout(90_000)
   const projectName = `Grounded draft ${Date.now()}`
@@ -311,17 +405,36 @@ test("persists a reviewable draft without overwriting manual content and applies
   ).toBe(true)
   persisted = await readProject(page, projectName)
   expect(persisted.topicContent["topic-access"]).not.toEqual(manualContent["topic-access"])
-  expect(persisted.topicContent["topic-access"].map((block: { content: string }) => block.content).join(" "))
-    .toContain("Administrators must review privileged access every quarter.")
+  const appliedText = persisted.topicContent["topic-access"].map((block: { content: string }) => block.content).join(" ")
+  expect(appliedText).toContain("Keep this manual content until explicit approval.")
+  expect(appliedText).toContain("Administrators must review privileged access every quarter.")
   expect(persisted.authorTopicMetadata["topic-access"]).toMatchObject({
     generationStatus: "generated",
     generatedFreshness: "current",
     approved: true,
+    contentOrigin: "mixed",
+    manualEdited: true,
+    regenerationProposal: null,
   })
   expect(JSON.stringify(persisted.authorTopicMetadata["topic-access"].draft))
     .not.toMatch(/Nexus|Technical_Specification|api\.nexus/)
 
+  const generatedEvidenceBlock = persisted.topicContent["topic-access"].find((block: { content: string }) =>
+    block.content.includes("review privileged access"))
+  if (!generatedEvidenceBlock) throw new Error("Expected applied generated evidence block")
+  const manuallyEditedText = "A writer manually changed the generated access-review paragraph."
+  const changedTopicContent = {
+    ...persisted.topicContent,
+    "topic-access": [
+      ...persisted.topicContent["topic-access"].map((block: { id: string; content: string }) =>
+        block.id === generatedEvidenceBlock.id
+          ? { ...block, content: manuallyEditedText }
+          : block),
+      { id: "manual-appendix", type: "para", content: "Manual escalation notes must remain." },
+    ],
+  }
   await patchProject(page, projectName, {
+    topicContent: changedTopicContent,
     projectMeta: { ...persisted.projectMeta, contentType: "api-reference" },
   })
   await page.reload()
@@ -333,4 +446,63 @@ test("persists a reviewable draft without overwriting manual content and applies
   await page.getByTestId("author-draft-toggle").click()
   await expect(page.getByTestId("author-draft-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("apply-author-draft")).toBeDisabled()
+  expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
+
+  await page.getByTestId("author-draft-toggle").click()
+  await page.getByTestId("author-grounding-toggle").click()
+  await page.getByTestId("refresh-author-grounding").click()
+  await expect(page.getByTestId("author-grounding-freshness")).toHaveText("Current")
+  await page.getByTestId("author-grounding-toggle").click()
+  await page.getByTestId("author-draft-toggle").click()
+  await page.getByTestId("regenerate-author-draft").click()
+
+  await expect(page.getByTestId("author-regeneration-diff")).toBeVisible()
+  await expect(page.locator('[data-diff-status="manually-edited"]').filter({ hasText: manuallyEditedText }))
+    .toBeVisible()
+  await expect(page.locator('[data-diff-status="protected"]').filter({ hasText: "Reference details" }))
+    .toBeVisible()
+  await expect(page.locator('[data-diff-status="manually-edited"] input[type="checkbox"]').first()).toBeDisabled()
+  expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
+  await expect.poll(async () =>
+    (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.regenerationProposal?.proposalId,
+  ).toMatch(/^author-proposal-/)
+  const proposalId = (await readProject(page, projectName))
+    .authorTopicMetadata["topic-access"].regenerationProposal.proposalId
+
+  await page.reload()
+  await expect.poll(async () =>
+    (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.regenerationProposal?.proposalId,
+  ).toBe(proposalId)
+  expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
+  await page.getByRole("button", { name: /Author/ }).click()
+  await page.locator('[title="Access operations — double-click to open"]').dispatchEvent("dblclick")
+  await page.getByTestId("author-draft-toggle").click()
+  const protectedRow = page.locator('[data-diff-status="protected"]').filter({ hasText: "Reference details" })
+  await protectedRow.locator('input[type="checkbox"]').check()
+  await page.getByTestId("apply-author-draft").click()
+  await expect(page.getByTestId("confirm-author-draft-apply")).toBeVisible()
+  expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
+  await page.getByTestId("confirm-apply-author-draft").click()
+
+  await expect.poll(async () =>
+    (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.regenerationProposal,
+  ).toBeNull()
+  persisted = await readProject(page, projectName)
+  const regeneratedText = persisted.topicContent["topic-access"]
+    .map((block: { content: string }) => block.content)
+    .join(" ")
+  expect(regeneratedText).toContain(manuallyEditedText)
+  expect(regeneratedText).toContain("Keep this manual content until explicit approval.")
+  expect(regeneratedText).toContain("Manual escalation notes must remain.")
+  expect(regeneratedText).toContain("Reference details")
+  expect(regeneratedText).not.toContain("Administrators must review privileged access every month.")
+  expect(persisted.authorTopicMetadata["topic-access"]).toMatchObject({
+    generationStatus: "generated",
+    generatedFreshness: "current",
+    contentOrigin: "mixed",
+    manualEdited: true,
+    regenerationProposal: null,
+  })
+  expect(persisted.authorTopicMetadata["topic-access"].blockStates[generatedEvidenceBlock.id])
+    .toBe("manually-edited")
 })

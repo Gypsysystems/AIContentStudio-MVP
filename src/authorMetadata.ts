@@ -4,7 +4,12 @@ import {
   remapTopicGroundingContext,
   type TopicGroundingContext,
 } from './authorGroundingContext'
-import type { AuthorTopicDraft } from './authorDraftGeneration'
+import type {
+  AuthorAppliedBaseline,
+  AuthorBlockState,
+  AuthorRegenerationProposal,
+  AuthorTopicDraft,
+} from './authorDraftGeneration'
 
 export type AuthorGenerationStatus = 'not-generated' | 'draft' | 'generated' | 'failed'
 export type AuthorContentOrigin = 'manual' | 'generated' | 'mixed' | 'approved'
@@ -19,6 +24,9 @@ export type AuthorTopicMetadata = {
   sourceFileIds: string[]
   groundingContext: TopicGroundingContext | null
   draft: AuthorTopicDraft | null
+  appliedBaseline: AuthorAppliedBaseline | null
+  regenerationProposal: AuthorRegenerationProposal | null
+  blockStates: Record<string, AuthorBlockState>
   provenance: {
     sourcesRevision: number | null
     evidenceExtractionRevision: string | null
@@ -78,6 +86,9 @@ export function createManualAuthorTopicMetadata(
     sourceFileIds: [],
     groundingContext: null,
     draft: null,
+    appliedBaseline: null,
+    regenerationProposal: null,
+    blockStates: {},
     provenance: {
       sourcesRevision: null,
       evidenceExtractionRevision: null,
@@ -121,6 +132,13 @@ export function hydrateAuthorTopicMetadata(
             ? structuredClone(metadata.groundingContext)
             : null,
           draft: metadata.draft ? structuredClone(metadata.draft) : null,
+          appliedBaseline: metadata.appliedBaseline
+            ? structuredClone(metadata.appliedBaseline)
+            : null,
+          regenerationProposal: metadata.regenerationProposal
+            ? structuredClone(metadata.regenerationProposal)
+            : null,
+          blockStates: { ...(metadata.blockStates ?? {}) },
           provenance: {
             sourcesRevision: provenance?.sourcesRevision ?? null,
             evidenceExtractionRevision: provenance?.evidenceExtractionRevision ?? null,
@@ -201,6 +219,25 @@ export function remapAuthorTopicMetadata(
             optionalEvidenceIdsUsed: item.draft.optionalEvidenceIdsUsed.filter(id => copiedEvidenceIds.has(id)),
           }
         : null
+      const appliedBaseline = item.appliedBaseline
+        ? {
+            ...structuredClone(item.appliedBaseline),
+            groundingContextId: groundingContext?.contextId ?? item.appliedBaseline.groundingContextId,
+            blocks: item.appliedBaseline.blocks.map(entry => ({
+              ...entry,
+              block: {
+                ...entry.block,
+                evidenceIds: entry.block.evidenceIds.filter(id => copiedEvidenceIds.has(id)),
+              },
+            })),
+          }
+        : null
+      const regenerationProposal = item.regenerationProposal
+        ? {
+            ...structuredClone(item.regenerationProposal),
+            groundingContextId: groundingContext?.contextId ?? item.regenerationProposal.groundingContextId,
+          }
+        : null
       return [
         topicId,
         {
@@ -212,6 +249,9 @@ export function remapAuthorTopicMetadata(
             fileIdMap[fileId] ? [fileIdMap[fileId]] : []),
           groundingContext,
           draft,
+          appliedBaseline,
+          regenerationProposal,
+          blockStates: { ...(item.blockStates ?? {}) },
           provenance: {
             ...item.provenance,
             ...(wasCurrent && copiedEvidenceIndex && copiedConceptAnalysis
