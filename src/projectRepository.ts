@@ -24,6 +24,11 @@ import {
   remapAuthorTopicMetadata,
   type AuthorTopicMetadataMap,
 } from './authorMetadata'
+import {
+  createEmptyReviewModel,
+  remapReviewModelForDuplicate,
+  type ReviewModel,
+} from './reviewModel'
 
 export const SCHEMA_VERSION = 2
 const DB_NAME = 'docflow-db'
@@ -94,6 +99,7 @@ export type ProjectRecord = {
   contentRevision: number
 
   // Review
+  reviewModel: ReviewModel
   findingStatuses: Record<number, string>
   aiReviewDone: boolean
   reviewStage: 1 | 2
@@ -239,6 +245,7 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     topicContent: {},
     authorTopicMetadata: {},
     contentRevision: 0,
+    reviewModel: createEmptyReviewModel(partial.projectId),
     findingStatuses: {},
     aiReviewDone: false,
     reviewStage: 1,
@@ -419,6 +426,12 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     copiedEvidenceIndex,
     sourceConceptAnalysis,
     copiedConceptAnalysis,
+  )
+  copy.reviewModel = remapReviewModelForDuplicate(
+    source.reviewModel,
+    source.projectId,
+    newId,
+    newFileIdMap,
   )
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     await put(ps, copy)

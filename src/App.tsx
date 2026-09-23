@@ -66,6 +66,12 @@ import {
   searchAuthorTopicContent,
   type AuthorSearchResult,
 } from './authorSearch'
+import {
+  createEmptyReviewModel,
+  hydrateReviewModel,
+  reconcileReviewModelTopics,
+  type ReviewModel,
+} from './reviewModel'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -14067,6 +14073,7 @@ export default function App() {
   const [findingStatuses, setFindingStatuses] = useState<Record<number, FindingStatus>>({})
   const [aiReviewDone, setAiReviewDone] = useState(false)
   const [reviewStage, setReviewStage] = useState<1 | 2>(1)
+  const [reviewModel, setReviewModel] = useState<ReviewModel>(() => createEmptyReviewModel(''))
   const [themes, setThemes] = useState<Theme[]>(INITIAL_THEMES)
   const [projectMeta, setProjectMeta] = useState<ProjectMeta>(DEFAULT_PROJECT_META)
   const handleProjectMetaChange = (m: Partial<ProjectMeta>) => { setProjectMeta(prev => ({ ...prev, ...m })); triggerAutosave() }
@@ -14176,7 +14183,9 @@ export default function App() {
   // Create persisted project record when user clicks Continue on CreateScreen
   const handleCreateProjectPersist = useCallback(async () => {
     const newId = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const emptyReviewModel = createEmptyReviewModel(newId)
     setProjectId(newId)
+    setReviewModel(emptyReviewModel)
     setActiveProjectId(newId)
     try {
       await createProject({
@@ -14185,7 +14194,7 @@ export default function App() {
         themes: themes as unknown[], projectMeta: projectMeta as unknown,
         activeStyleProfileId, themeVariables: themeVariables as Record<string, unknown[]>,
         pageLayouts: pageLayouts as unknown[], htmlMasterPages: htmlMasterPages as unknown[],
-        isDemoMode,
+        isDemoMode, reviewModel: emptyReviewModel,
       })
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2000)
@@ -14277,6 +14286,10 @@ export default function App() {
     const normalized = normalizeTopicIds(toc)
     setAppToc(normalized)
     setAuthorTopicMetadata(current => pruneAuthorTopicMetadata(current, normalized))
+    setReviewModel(current => reconcileReviewModelTopics(
+      current,
+      normalized.map(topic => stableAuthorTopicId(topic)),
+    ))
     setTocRevision(r => r + 1)
     setTocGeneratedFromRev(fromAnalysisRev)
     setTocHumanModified(false)
@@ -14304,6 +14317,10 @@ export default function App() {
     const normalized = normalizeTopicIds(toc)
     setAppToc(normalized)
     setAuthorTopicMetadata(current => pruneAuthorTopicMetadata(current, normalized))
+    setReviewModel(current => reconcileReviewModelTopics(
+      current,
+      normalized.map(topic => stableAuthorTopicId(topic)),
+    ))
     setTocRevision(r => r + 1)
     setTocHumanModified(true)
     triggerAutosave()
@@ -14461,6 +14478,7 @@ export default function App() {
       topicContent: topicContentRef.current as Record<string, unknown[]>,
       authorTopicMetadata: authorTopicMetadataRef.current,
       contentRevision,
+      reviewModel,
       findingStatuses: findingStatuses as Record<number, string>,
       aiReviewDone,
       reviewStage,
@@ -14470,7 +14488,7 @@ export default function App() {
       docComments: docComments as unknown[],
       publishConfig: publishConfig as unknown,
     }
-  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, unsupportedAnalysis, appToc, tocProposal, tocRevision, tocGeneratedFromRev, tocGeneratedFromEvidenceSourcesRevision, tocGeneratedFromEvidenceExtractionRevision, tocGeneratedFromConceptBuiltAt, tocGeneratedFromContentType, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
+  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, unsupportedAnalysis, appToc, tocProposal, tocRevision, tocGeneratedFromRev, tocGeneratedFromEvidenceSourcesRevision, tocGeneratedFromEvidenceExtractionRevision, tocGeneratedFromConceptBuiltAt, tocGeneratedFromContentType, tocHumanModified, masterAssignments, contentRevision, reviewModel, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
 
   // Keep latestBuildRef current on every render so autosave never sees stale state
   latestBuildRef.current = buildProjectRecord
@@ -15085,6 +15103,10 @@ export default function App() {
     if (!record.publishConfig) record = { ...record, publishConfig: { selectedFormats: [], activeVariant: '' } }
     if (!record.topicContent) record = { ...record, topicContent: {} }
     if (!record.authorTopicMetadata) record = { ...record, authorTopicMetadata: {} }
+    const restoredReviewModel = hydrateReviewModel(record.reviewModel, record.projectId)
+    const reviewModelNeedsPersistence = JSON.stringify(restoredReviewModel)
+      !== JSON.stringify(record.reviewModel)
+    if (reviewModelNeedsPersistence) record = { ...record, reviewModel: restoredReviewModel }
 
     setProjectId(record.projectId)
     setProjectName(record.projectName ?? '')
@@ -15164,6 +15186,7 @@ export default function App() {
       await saveProject(record)
     }
     setContentRevision(record.contentRevision ?? 0)
+    setReviewModel(restoredReviewModel)
     setFindingStatuses((record.findingStatuses as Record<number, FindingStatus>) ?? {})
     setAiReviewDone(record.aiReviewDone ?? false)
     setReviewStage((record.reviewStage as 1 | 2) ?? 1)
@@ -15172,6 +15195,7 @@ export default function App() {
     setConditionGroups((record.conditionGroups as ConditionGroup[]) ?? DEFAULT_CONDITION_GROUPS)
     setDocComments((record.docComments as DocComment[]) ?? [])
     setPublishConfig((record.publishConfig as PublishConfig) ?? { selectedFormats: [], activeVariant: '' })
+    if (reviewModelNeedsPersistence) await saveProject(record)
     // Restore source files from IndexedDB as stable ProjectSource[]
     try {
       const storedFiles = await loadProjectFiles(record.projectId)
@@ -15254,6 +15278,7 @@ export default function App() {
     authorTopicMetadataRef.current = {}
     setAuthorTopicMetadata({})
     setContentRevision(0)
+    setReviewModel(createEmptyReviewModel(''))
     setFindingStatuses({})
     setAiReviewDone(false)
     setReviewStage(1)
