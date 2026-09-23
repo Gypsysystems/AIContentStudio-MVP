@@ -4,3 +4,4 @@
 - [Grounded analysis isolation](grounded-analysis-isolation.md) — real evidence analysis stays separate from demo and downstream generation state until later milestones.
 - [Unsupported information analysis](unsupported-information-analysis.md) — evaluate only persisted real content; keep unsupported results separate from source conflicts and gaps.
 - [TOC proposal safety](toc-proposal-safety.md) — grounded proposals remain separate from the committed TOC; acceptance preserves existing user structure through explicit merge.
+- [Author grounding metadata](author-grounding-metadata.md) — keep generation provenance separate from authored blocks and link it by stable topic ID.

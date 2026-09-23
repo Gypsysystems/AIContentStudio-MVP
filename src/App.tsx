@@ -37,6 +37,13 @@ import {
   type ProposedTopic,
   type TocProposal,
 } from './tocProposal'
+import {
+  createManualAuthorTopicMetadata,
+  hydrateAuthorTopicMetadata,
+  pruneAuthorTopicMetadata,
+  stableAuthorTopicId,
+  type AuthorTopicMetadataMap,
+} from './authorMetadata'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -13470,7 +13477,8 @@ export default function App() {
   const [tocGeneratedFromConceptBuiltAt, setTocGeneratedFromConceptBuiltAt] = useState(-1)
   const [tocGeneratedFromContentType, setTocGeneratedFromContentType] = useState('')
   const [tocHumanModified, setTocHumanModified] = useState(false)
-  const handleTocChange = (toc: TocItem[]) => { setAppToc(toc); setTocRevision(r => r + 1); setTocHumanModified(true); triggerAutosave() }
+  const [authorTopicMetadata, setAuthorTopicMetadata] = useState<AuthorTopicMetadataMap>({})
+  const authorTopicMetadataRef = useRef<AuthorTopicMetadataMap>({})
 
   // ── Master page topic assignments ──────────────────────────────────────────
   const [masterAssignments, setMasterAssignments] = useState<Record<number, string>>({}) // topicId → masterPageId
@@ -13490,7 +13498,6 @@ export default function App() {
   const handleConditionGroupsChange = (cg: ConditionGroup[]) => { setConditionGroups(cg); triggerAutosave() }
   const handleDocCommentsChange = (c: DocComment[]) => { setDocComments(c); triggerAutosave() }
   const handlePublishConfigChange = (pc: PublishConfig) => { setPublishConfig(pc); triggerAutosave() }
-  const handleTopicContentChange = (tc: Record<string, DocBlock[]>) => { setTopicContent(tc); triggerAutosave() }
 
   // Create persisted project record when user clicks Continue on CreateScreen
   const handleCreateProjectPersist = useCallback(async () => {
@@ -13593,7 +13600,13 @@ export default function App() {
   const handleReviewDone = () => { setReviewRevision(contentRevision); triggerAutosave(true) }
   // Called when TOC is accepted
   const handleTocAccepted = (toc: TocItem[], fromAnalysisRev: number) => {
-    setAppToc(toc); setTocRevision(r => r + 1); setTocGeneratedFromRev(fromAnalysisRev); setTocHumanModified(false); triggerAutosave(true)
+    const normalized = normalizeTopicIds(toc)
+    setAppToc(normalized)
+    setAuthorTopicMetadata(current => pruneAuthorTopicMetadata(current, normalized))
+    setTocRevision(r => r + 1)
+    setTocGeneratedFromRev(fromAnalysisRev)
+    setTocHumanModified(false)
+    triggerAutosave(true)
   }
 
   // Stale detection helpers
@@ -13607,6 +13620,41 @@ export default function App() {
   // Per-topic authored content — topicId → DocBlock[]
   const [topicContent, setTopicContent] = useState<Record<string, DocBlock[]>>({})
   const topicContentRef = useRef<Record<string, DocBlock[]>>({})
+
+  const authorMetadataContext = useCallback(() => ({
+    contentType: projectMeta.contentType,
+    variables: getThemeVars(projectMeta.themeId),
+  }), [projectMeta.contentType, projectMeta.themeId, themeVariables])
+
+  const handleTocChange = (toc: TocItem[]) => {
+    const normalized = normalizeTopicIds(toc)
+    setAppToc(normalized)
+    setAuthorTopicMetadata(current => pruneAuthorTopicMetadata(current, normalized))
+    setTocRevision(r => r + 1)
+    setTocHumanModified(true)
+    triggerAutosave()
+  }
+
+  const handleTopicContentChange = (tc: Record<string, DocBlock[]>) => {
+    setTopicContent(tc)
+    setAuthorTopicMetadata(current => {
+      let next = current
+      for (const [contentKey, blocks] of Object.entries(tc)) {
+        if (!blocks.length) continue
+        const topic = appToc.find(candidate =>
+          stableAuthorTopicId(candidate) === contentKey || String(candidate.id) === contentKey)
+        const topicId = topic ? stableAuthorTopicId(topic) : contentKey
+        if (!next[topicId]) {
+          next = {
+            ...next,
+            [topicId]: createManualAuthorTopicMetadata(topicId, authorMetadataContext(), false),
+          }
+        }
+      }
+      return next
+    })
+    triggerAutosave()
+  }
 
   // Studio / Publish centralized state
   const DEFAULT_CONDITION_GROUPS: ConditionGroup[] = [
@@ -13626,6 +13674,7 @@ export default function App() {
 
   // Keep topicContentRef in sync with state for autosave snapshots
   useEffect(() => { topicContentRef.current = topicContent }, [topicContent])
+  useEffect(() => { authorTopicMetadataRef.current = authorTopicMetadata }, [authorTopicMetadata])
 
   // ── Latest-build ref for autosave (avoids stale closures) ─────────────────
   const latestBuildRef = useRef<() => ProjectRecord | null>(() => null)
@@ -13668,6 +13717,7 @@ export default function App() {
       masterAssignments: masterAssignments as Record<string, string>,
       docBlocks: sharedDocBlocksRef.current as unknown[],
       topicContent: topicContentRef.current as Record<string, unknown[]>,
+      authorTopicMetadata: authorTopicMetadataRef.current,
       contentRevision,
       findingStatuses: findingStatuses as Record<number, string>,
       aiReviewDone,
@@ -13794,7 +13844,9 @@ export default function App() {
   }, [triggerAutosave])
 
   const handleCommitTocProposal = useCallback((items: TocItem[], proposal: TocProposal, mergedExisting: boolean) => {
-    setAppToc(normalizeTopicIds(items))
+    const normalized = normalizeTopicIds(items)
+    setAppToc(normalized)
+    setAuthorTopicMetadata(current => pruneAuthorTopicMetadata(current, normalized))
     setTocRevision(revision => revision + 1)
     setTocGeneratedFromEvidenceSourcesRevision(proposal.evidenceSourcesRevision)
     setTocGeneratedFromEvidenceExtractionRevision(proposal.evidenceExtractionRevision)
@@ -13838,6 +13890,7 @@ export default function App() {
     if (!record.docComments) record = { ...record, docComments: [] }
     if (!record.publishConfig) record = { ...record, publishConfig: { selectedFormats: [], activeVariant: '' } }
     if (!record.topicContent) record = { ...record, topicContent: {} }
+    if (!record.authorTopicMetadata) record = { ...record, authorTopicMetadata: {} }
 
     setProjectId(record.projectId)
     setProjectName(record.projectName ?? '')
@@ -13867,11 +13920,12 @@ export default function App() {
       record.activeStyleProfileId !== reconciledProfileId
       || restoredProjectMeta.styleProfileId !== reconciledProfileId
     ) {
-      await saveProject({
+      record = {
         ...record,
         projectMeta: reconciledProjectMeta,
         activeStyleProfileId: reconciledProfileId,
-      })
+      }
+      await saveProject(record)
     }
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
@@ -13882,7 +13936,8 @@ export default function App() {
     setAnalysisRevision(record.analysisRevision ?? -1)
     setConceptAnalysis((record.conceptAnalysis as ConceptAnalysis | null) ?? null)
     setUnsupportedAnalysis((record.unsupportedAnalysis as UnsupportedAnalysis | null) ?? null)
-    setAppToc(normalizeTopicIds((record.appToc as TocItem[]) ?? []))
+    const restoredToc = normalizeTopicIds((record.appToc as TocItem[]) ?? [])
+    setAppToc(restoredToc)
     const restoredProposal = (record.tocProposal as TocProposal | null) ?? null
     setTocProposal(restoredProposal
       ? { ...restoredProposal, items: normalizeTopicIds(restoredProposal.items) as ProposedTopic[] }
@@ -13899,6 +13954,21 @@ export default function App() {
     const restoredTopicContent = (record.topicContent as Record<string, DocBlock[]>) ?? {}
     topicContentRef.current = restoredTopicContent
     setTopicContent(restoredTopicContent)
+    const restoredAuthorTopicMetadata = hydrateAuthorTopicMetadata(
+      record.authorTopicMetadata,
+      restoredTopicContent,
+      restoredToc,
+      {
+        contentType: reconciledProjectMeta.contentType,
+        variables: ((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)[reconciledProjectMeta.themeId] ?? [],
+      },
+    )
+    authorTopicMetadataRef.current = restoredAuthorTopicMetadata
+    setAuthorTopicMetadata(restoredAuthorTopicMetadata)
+    if (JSON.stringify(restoredAuthorTopicMetadata) !== JSON.stringify(record.authorTopicMetadata ?? {})) {
+      record = { ...record, authorTopicMetadata: restoredAuthorTopicMetadata }
+      await saveProject(record)
+    }
     setContentRevision(record.contentRevision ?? 0)
     setFindingStatuses((record.findingStatuses as Record<number, FindingStatus>) ?? {})
     setAiReviewDone(record.aiReviewDone ?? false)
@@ -13987,6 +14057,8 @@ export default function App() {
     sharedDocBlocksRef.current = []
     topicContentRef.current = {}
     setTopicContent({})
+    authorTopicMetadataRef.current = {}
+    setAuthorTopicMetadata({})
     setContentRevision(0)
     setFindingStatuses({})
     setAiReviewDone(false)

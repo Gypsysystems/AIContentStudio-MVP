@@ -20,6 +20,10 @@ import {
   isTocProposalFresh,
   type TocProposal,
 } from './tocProposal'
+import {
+  remapAuthorTopicMetadata,
+  type AuthorTopicMetadataMap,
+} from './authorMetadata'
 
 export const SCHEMA_VERSION = 2
 const DB_NAME = 'docflow-db'
@@ -86,6 +90,7 @@ export type ProjectRecord = {
   // Content
   docBlocks: unknown[]
   topicContent: Record<string, unknown[]>
+  authorTopicMetadata: AuthorTopicMetadataMap
   contentRevision: number
 
   // Review
@@ -232,6 +237,7 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     evidenceIndex: null,
     docBlocks: [],
     topicContent: {},
+    authorTopicMetadata: {},
     contentRevision: 0,
     findingStatuses: {},
     aiReviewDone: false,
@@ -406,6 +412,14 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     copy.tocGeneratedFromEvidenceExtractionRevision = copiedEvidenceIndex.extractionRevision
     copy.tocGeneratedFromConceptBuiltAt = copiedConceptAnalysis.builtAt
   }
+  copy.authorTopicMetadata = remapAuthorTopicMetadata(
+    source.authorTopicMetadata,
+    newFileIdMap,
+    sourceEvidenceIndex,
+    copiedEvidenceIndex,
+    sourceConceptAnalysis,
+    copiedConceptAnalysis,
+  )
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     await put(ps, copy)
     for (const f of newFiles) await put(fs, f)
