@@ -153,7 +153,8 @@ test("persists an applied style profile and output template edits", async ({
   ).toBeVisible()
 })
 
-test("falls back safely when the persisted style profile ID is missing or invalid", async ({
+for (const persistedId of [undefined, "missing-style-profile"]) {
+test(`falls back safely when the persisted style profile ID is ${persistedId === undefined ? "missing" : "invalid"}`, async ({
   page,
 }) => {
   const projectName = `Style ID Fallback ${Date.now()}`
@@ -177,7 +178,6 @@ test("falls back safely when the persisted style profile ID is missing or invali
     .toBe(true)
   await page.getByRole("button", { name: /Content Studio/ }).click()
 
-  for (const persistedId of [undefined, "missing-style-profile"]) {
     await updateOnlyProject(page, (project) => ({
       ...project,
       activeStyleProfileId: persistedId,
@@ -189,12 +189,28 @@ test("falls back safely when the persisted style profile ID is missing or invali
     await expect(
       page.getByRole("heading", { name: "Theme & Style Profiles" }),
     ).toBeVisible()
-    await expect.soft(
+    await expect(
       page.getByRole("textbox", { name: "Search profiles…" }),
     ).toHaveValue(profileName)
-    await expect.soft(
+    await expect(
       page.getByRole("button", { name: "Apply to Project" }),
     ).toBeVisible()
+    await page.getByRole("button", { name: "Apply to Project" }).click()
+    await expect(
+      page.getByRole("button", { name: "✓ Applied to Project" }),
+    ).toBeVisible()
+    await expect.poll(async () => {
+      const stored = await readOnlyProject(page)
+      const profile = stored.themes.flatMap(theme => theme.styleProfiles)
+        .find(profile => profile.name === profileName)
+      return !!profile && stored.activeStyleProfileId === profile.id
+        && stored.projectMeta?.styleProfileId === profile.id
+    }).toBe(true)
+    await page.reload()
+    await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+    await page.getByRole("button", { name: /Theme$/ }).click()
+    await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(profileName)
+    await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
     await page.getByRole("button", { name: "Sources", exact: true }).click()
-  }
 })
+}

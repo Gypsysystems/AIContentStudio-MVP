@@ -1,0 +1,1 @@
+- [Style profile recovery](style-profile-recovery.md) — selecting a recovery profile should not silently apply different document styling.

@@ -1062,8 +1062,9 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
     })))
   }
   const activeThemeObj = themes.find(t => t.id === projectMeta?.themeId) ?? themes[0]
-  const [editId, setEditId] = useState<string>(activeStyleProfileId || themes.flatMap(t => t.styleProfiles)[0]?.id || '')
-  const editProfile = localProfiles.find(p => p.id === editId) ?? localProfiles[0]
+  const [selectedProfileId, setEditId] = useState<string>(activeStyleProfileId)
+  const editProfile = localProfiles.find(p => p.id === selectedProfileId) ?? localProfiles[0]
+  const editId = editProfile?.id ?? ''
 
   // Profile inline rename
   const [renamingProfileId, setRenamingProfileId] = useState<string | null>(null)
@@ -12127,8 +12128,10 @@ export default function App() {
       styleProfiles: t.styleProfiles.filter(p => !SEED_PROFILE_IDS.has(p.id)),
     }))
     setThemes(restoredThemes)
-    setProjectMeta((record.projectMeta as ProjectMeta) ?? DEFAULT_PROJECT_META)
-    const restoredActiveId = record.activeStyleProfileId && !SEED_PROFILE_IDS.has(record.activeStyleProfileId as string) ? (record.activeStyleProfileId as string) : ''
+    // A fallback may be edited, but must not be treated as applied without user action.
+    const restoredActiveId = restoredThemes.flatMap(t => t.styleProfiles)
+      .find(p => p.id === record.activeStyleProfileId)?.id ?? ''
+    setProjectMeta({ ...((record.projectMeta as ProjectMeta) ?? DEFAULT_PROJECT_META), styleProfileId: restoredActiveId })
     setActiveStyleProfileId(restoredActiveId)
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
