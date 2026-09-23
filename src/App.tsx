@@ -30,6 +30,13 @@ import {
   type AnalyzableContentItem,
   type UnsupportedAnalysis,
 } from './unsupportedAnalysis'
+import {
+  buildTocProposal,
+  isTocProposalFresh,
+  normalizeTopicIds,
+  type ProposedTopic,
+  type TocProposal,
+} from './tocProposal'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -6618,7 +6625,24 @@ function AnalysisScreen({ onNav, files, isDemoMode, analysisStale, onAnalysisDon
 
 // ── Screen: Structure ─────────────────────────────────────────────────────────
 
-type TocItem = { id: number; title: string; level: 1 | 2 | 3 | 4; words: number; parentId?: number; isNew?: boolean; hasGap?: boolean; analysisConceptIds?: number[]; supportingSourceIds?: string[] }
+type TocItem = {
+  id: number
+  topicId?: string
+  title: string
+  level: 1 | 2 | 3 | 4
+  words: number
+  parentId?: number
+  parentTopicId?: string
+  order?: number
+  rationale?: string
+  supportingEvidenceIds?: string[]
+  proposalKind?: 'evidence-backed' | 'optional-structural' | 'manual'
+  sourceSectionPaths?: string[][]
+  isNew?: boolean
+  hasGap?: boolean
+  analysisConceptIds?: number[]
+  supportingSourceIds?: string[]
+}
 
 type AnalysisResult = {
   revision: number
@@ -6679,6 +6703,397 @@ const SUGGEST_SUBSECTIONS: Record<number, string[]> = {
   11: ['Audit logs', 'Data retention settings', 'Billing & subscription'],
   14: ['Webhooks', 'OAuth setup', 'Third-party apps'],
   16: ['Contacting support', 'Error code reference'],
+}
+
+function mergeCommittedToc(existing: TocItem[], proposed: ProposedTopic[]): TocItem[] {
+  const normalizedExisting = normalizeTopicIds(existing)
+  const merged: TocItem[] = normalizedExisting.map(item => ({ ...item }))
+  const topicById = new Map(merged.map(item => [item.topicId!, item]))
+  const topicByTitle = new Map(merged.map(item => [item.title.trim().toLocaleLowerCase('en-US'), item]))
+
+  for (const proposedItem of [...proposed].sort((left, right) => left.order - right.order)) {
+    const existingById = topicById.get(proposedItem.topicId)
+    const existingByTitle = topicByTitle.get(proposedItem.title.trim().toLocaleLowerCase('en-US'))
+    const matched = existingById ?? existingByTitle
+    if (matched) {
+      topicById.set(proposedItem.topicId, matched)
+      continue
+    }
+    const parent = proposedItem.parentTopicId ? topicById.get(proposedItem.parentTopicId) : undefined
+    const next: TocItem = {
+      ...proposedItem,
+      parentId: parent?.id,
+      parentTopicId: parent?.topicId,
+      order: merged.length,
+    }
+    merged.push(next)
+    topicById.set(next.topicId!, next)
+    topicByTitle.set(next.title.trim().toLocaleLowerCase('en-US'), next)
+  }
+
+  return normalizeTopicIds(merged).map((item, order) => ({ ...item, order }))
+}
+
+function RealTocProposalScreen({
+  onNav,
+  toc,
+  proposal,
+  proposalFresh,
+  committedTocStale,
+  evidenceIndex,
+  canGenerate,
+  onGenerate,
+  onProposalChange,
+  onDiscardProposal,
+  onCommit,
+}: {
+  onNav: (screen: Screen) => void
+  toc: TocItem[]
+  proposal: TocProposal | null
+  proposalFresh: boolean
+  committedTocStale: boolean
+  evidenceIndex: EvidenceIndex | null
+  canGenerate: boolean
+  onGenerate: () => void
+  onProposalChange: (proposal: TocProposal) => void
+  onDiscardProposal: () => void
+  onCommit: (items: TocItem[], proposal: TocProposal, mergedExisting: boolean) => void
+}) {
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [manualTitle, setManualTitle] = useState('')
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null)
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null)
+  const [confirmCommit, setConfirmCommit] = useState(false)
+  const evidenceById = new Map((evidenceIndex?.items ?? []).map(item => [item.id, item]))
+
+  const updateItems = (updater: (items: ProposedTopic[]) => ProposedTopic[]) => {
+    if (!proposal) return
+    const nextItems = updater(proposal.items.map(item => ({ ...item }))).map((item, order, all) => {
+      const parent = item.parentTopicId ? all.find(candidate => candidate.topicId === item.parentTopicId) : undefined
+      return {
+        ...item,
+        order,
+        parentId: parent?.id,
+        parentTopicId: parent?.topicId,
+        level: parent ? Math.min(4, parent.level + 1) as 1 | 2 | 3 | 4 : item.level,
+      }
+    })
+    onProposalChange({ ...proposal, items: nextItems })
+  }
+
+  const rename = (topicId: string) => {
+    if (!editTitle.trim()) return setEditingTopicId(null)
+    updateItems(items => items.map(item => item.topicId === topicId ? { ...item, title: editTitle.trim() } : item))
+    setEditingTopicId(null)
+  }
+
+  const move = (topicId: string, direction: -1 | 1) => {
+    updateItems(items => {
+      const index = items.findIndex(item => item.topicId === topicId)
+      const target = index + direction
+      if (index < 0 || target < 0 || target >= items.length) return items
+      const next = [...items]
+      const [item] = next.splice(index, 1)
+      next.splice(target, 0, item)
+      return next
+    })
+  }
+
+  const nest = (topicId: string) => {
+    updateItems(items => {
+      const index = items.findIndex(item => item.topicId === topicId)
+      if (index <= 0) return items
+      const item = items[index]
+      const parent = [...items.slice(0, index)].reverse().find(candidate => candidate.level <= item.level)
+      if (!parent || parent.topicId === item.topicId || parent.level >= 4) return items
+      return items.map(candidate => candidate.topicId === topicId
+        ? { ...candidate, parentTopicId: parent.topicId, parentId: parent.id, level: Math.min(4, parent.level + 1) as 1 | 2 | 3 | 4 }
+        : candidate)
+    })
+  }
+
+  const unnest = (topicId: string) => {
+    updateItems(items => {
+      const item = items.find(candidate => candidate.topicId === topicId)
+      if (!item?.parentTopicId) return items
+      const parent = items.find(candidate => candidate.topicId === item.parentTopicId)
+      const grandparent = parent?.parentTopicId
+        ? items.find(candidate => candidate.topicId === parent.parentTopicId)
+        : undefined
+      return items.map(candidate => candidate.topicId === topicId
+        ? {
+            ...candidate,
+            parentTopicId: grandparent?.topicId,
+            parentId: grandparent?.id,
+            level: grandparent ? Math.min(4, grandparent.level + 1) as 1 | 2 | 3 | 4 : 1,
+          }
+        : candidate)
+    })
+  }
+
+  const rejectTopic = (topicId: string) => {
+    updateItems(items => {
+      const removeIds = new Set([topicId])
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const item of items) {
+          if (item.parentTopicId && removeIds.has(item.parentTopicId) && !removeIds.has(item.topicId)) {
+            removeIds.add(item.topicId)
+            changed = true
+          }
+        }
+      }
+      return items.filter(item => !removeIds.has(item.topicId))
+    })
+    if (selectedTopicId === topicId) setSelectedTopicId(null)
+  }
+
+  const addManualTopic = () => {
+    if (!proposal || !manualTitle.trim()) return
+    const topicId = `manual-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    const id = 900000001 + proposal.items.filter(item => item.proposalKind === 'manual').length
+    updateItems(items => [...items, {
+      id,
+      topicId,
+      title: manualTitle.trim(),
+      level: 1,
+      words: 0,
+      order: items.length,
+      rationale: 'Manually added by the user during proposal review.',
+      supportingEvidenceIds: [],
+      proposalKind: 'manual',
+    }])
+    setManualTitle('')
+  }
+
+  const commit = () => {
+    if (!proposal || !proposalFresh) return
+    const merged = mergeCommittedToc(toc, proposal.items)
+    onCommit(merged, proposal, toc.length > 0)
+    setConfirmCommit(false)
+  }
+
+  if (!proposal) {
+    return (
+      <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in" data-testid="real-toc-screen">
+        <div className="flex items-start justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Proposed TOC</h1>
+            <p className="text-[13px] text-[#6B6B7E]">Build a reviewable structure from current evidence and grounded analysis.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onGenerate}
+            disabled={!canGenerate}
+            data-testid="generate-grounded-toc"
+            className="bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-semibold px-4 py-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Generate grounded proposal
+          </button>
+        </div>
+        {committedTocStale && (
+          <div data-testid="committed-toc-stale" className="mb-5 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3 text-[12px] text-[#92400E]">
+            The committed TOC is stale because its supporting evidence or grounded analysis changed. Existing topics remain unchanged.
+          </div>
+        )}
+        {!canGenerate && (
+          <div className="mb-5 bg-[#FFF7ED] border border-[#FED7AA] rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+            <p className="text-[12px] text-[#9A3412]">A current Evidence Index and grounded analysis are required before generating a proposal.</p>
+            <button type="button" onClick={() => onNav('analysis')} className="text-[11px] font-semibold text-[#9A3412] underline">Open Analysis</button>
+          </div>
+        )}
+        {toc.length > 0 ? (
+          <section className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden" data-testid="committed-toc-panel">
+            <div className="px-5 py-3.5 border-b border-[#E2DED7] flex items-center justify-between">
+              <div>
+                <h2 className="text-[13px] font-semibold text-[#111218]">Current committed TOC</h2>
+                <p className="text-[11px] text-[#9898AB] mt-0.5">A new proposal will not replace this structure unless you explicitly commit it.</p>
+              </div>
+              <span className={`text-[9px] uppercase font-semibold px-2 py-1 rounded-full ${committedTocStale ? 'bg-[#FEF3C7] text-[#B45309]' : 'bg-[#DCFCE7] text-[#15803D]'}`}>
+                {committedTocStale ? 'Stale' : 'Current'}
+              </span>
+            </div>
+            <div className="p-3">
+              {normalizeTopicIds(toc).map(item => (
+                <div key={item.topicId} data-testid="committed-toc-topic" data-topic-id={item.topicId} className="px-3 py-2 flex items-center gap-2" style={{ paddingLeft: `${12 + (item.level - 1) * 20}px` }}>
+                  <span className="text-[10px] text-[#9898AB]">H{item.level}</span>
+                  <span className="text-[12px] text-[#111218]">{item.title}</span>
+                  <span className="ml-auto text-[9px] font-mono text-[#C8C6C0]">{item.topicId}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : (
+          <div className="bg-white border border-[#E2DED7] rounded-xl p-10 text-center">
+            <p className="text-[14px] font-semibold text-[#111218] mb-1">No committed TOC yet</p>
+            <p className="text-[12px] text-[#6B6B7E]">Generate a grounded proposal, review every topic, then commit it.</p>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const selectedTopic = proposal.items.find(item => item.topicId === selectedTopicId) ?? null
+  const selectedEvidence = selectedEvidenceId ? evidenceById.get(selectedEvidenceId) : null
+  return (
+    <div className="flex-1 overflow-auto p-8 max-w-6xl mx-auto w-full fade-in" data-testid="toc-proposal-review">
+      <div className="flex items-start justify-between gap-4 mb-5">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Review TOC proposal</h1>
+            <span data-testid="toc-proposal-freshness" className={`text-[9px] font-semibold uppercase px-2 py-1 rounded-full ${proposalFresh ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEF3C7] text-[#B45309]'}`}>
+              {proposalFresh ? 'Current' : 'Stale'}
+            </span>
+          </div>
+          <p className="text-[12px] text-[#6B6B7E]">
+            Evidence-backed topics and optional structural sections are labeled separately. The current TOC remains unchanged until commit.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={onDiscardProposal} data-testid="discard-toc-proposal" className="text-[12px] text-[#6B6B7E] border border-[#E2DED7] px-3 py-2 rounded-lg hover:bg-[#F9F8F6]">Discard proposal</button>
+          <button type="button" onClick={onGenerate} disabled={!canGenerate} data-testid="regenerate-grounded-toc" className="text-[12px] text-[#5B5BD6] border border-[#B9B9EA] px-3 py-2 rounded-lg disabled:opacity-40">Regenerate</button>
+          <button type="button" onClick={() => toc.length > 0 ? setConfirmCommit(true) : commit()} disabled={!proposalFresh || proposal.items.length === 0} data-testid="commit-toc-proposal" className="text-[12px] font-semibold text-white bg-[#5B5BD6] px-4 py-2 rounded-lg disabled:opacity-40">
+            {toc.length > 0 ? 'Review merge' : 'Commit TOC'}
+          </button>
+        </div>
+      </div>
+
+      {!proposalFresh && (
+        <div className="mb-5 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3 text-[12px] text-[#92400E]">
+          Evidence, grounded analysis, or the selected content type changed. Regenerate before committing.
+        </div>
+      )}
+
+      <div className="grid grid-cols-5 gap-5">
+        <section className="col-span-3 bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#E2DED7] flex items-center justify-between">
+            <span className="text-[13px] font-semibold text-[#111218]">Proposed topics</span>
+            <span className="text-[10px] text-[#9898AB]">{proposal.items.length} topics</span>
+          </div>
+          <div className="p-2 space-y-1">
+            {proposal.items.map((item, index) => (
+              <div
+                key={item.topicId}
+                data-testid="toc-proposal-topic"
+                data-topic-id={item.topicId}
+                data-topic-kind={item.proposalKind}
+                onClick={() => setSelectedTopicId(item.topicId)}
+                className={`group flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer ${selectedTopicId === item.topicId ? 'border-[#B9B9EA] bg-[#F3F0FF]' : 'border-transparent hover:bg-[#F9F8F6]'}`}
+                style={{ marginLeft: `${(item.level - 1) * 18}px` }}
+              >
+                <span className="text-[9px] text-[#9898AB] font-mono">H{item.level}</span>
+                {editingTopicId === item.topicId ? (
+                  <input
+                    autoFocus
+                    value={editTitle}
+                    onChange={event => setEditTitle(event.target.value)}
+                    onBlur={() => rename(item.topicId)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter') rename(item.topicId)
+                      if (event.key === 'Escape') setEditingTopicId(null)
+                    }}
+                    onClick={event => event.stopPropagation()}
+                    data-testid="toc-proposal-rename-input"
+                    className="flex-1 text-[12px] border border-[#5B5BD6] rounded px-2 py-1 outline-none"
+                  />
+                ) : (
+                  <span className="flex-1 text-[12px] font-medium text-[#111218]">{item.title}</span>
+                )}
+                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${item.proposalKind === 'evidence-backed' ? 'bg-[#DCFCE7] text-[#15803D]' : item.proposalKind === 'manual' ? 'bg-[#DBEAFE] text-[#1D4ED8]' : 'bg-[#F4F2EE] text-[#6B6B7E]'}`}>
+                  {item.proposalKind === 'evidence-backed' ? 'Evidence-backed' : item.proposalKind === 'manual' ? 'Manual' : 'Optional structure'}
+                </span>
+                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+                  <button type="button" aria-label="Move topic up" disabled={index === 0} onClick={event => { event.stopPropagation(); move(item.topicId, -1) }} className="px-1 text-[#9898AB] disabled:opacity-20">↑</button>
+                  <button type="button" aria-label="Move topic down" disabled={index === proposal.items.length - 1} onClick={event => { event.stopPropagation(); move(item.topicId, 1) }} className="px-1 text-[#9898AB] disabled:opacity-20">↓</button>
+                  <button type="button" aria-label="Unnest topic" disabled={!item.parentTopicId} onClick={event => { event.stopPropagation(); unnest(item.topicId) }} className="px-1 text-[#9898AB] disabled:opacity-20">←</button>
+                  <button type="button" aria-label="Nest topic" disabled={index === 0} onClick={event => { event.stopPropagation(); nest(item.topicId) }} className="px-1 text-[#9898AB] disabled:opacity-20">→</button>
+                  <button type="button" aria-label="Rename topic" onClick={event => { event.stopPropagation(); setEditingTopicId(item.topicId); setEditTitle(item.title) }} className="px-1 text-[#5B5BD6]">✎</button>
+                  <button type="button" aria-label="Reject topic" onClick={event => { event.stopPropagation(); rejectTopic(item.topicId) }} className="px-1 text-[#DC2626]">×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-[#E2DED7] p-3 flex items-center gap-2">
+            <input value={manualTitle} onChange={event => setManualTitle(event.target.value)} onKeyDown={event => event.key === 'Enter' && addManualTopic()} placeholder="Add a manual topic…" data-testid="manual-topic-title" className="flex-1 text-[12px] bg-[#F9F8F6] border border-[#E2DED7] rounded-lg px-3 py-2 outline-none focus:border-[#5B5BD6]" />
+            <button type="button" onClick={addManualTopic} disabled={!manualTitle.trim()} data-testid="add-manual-topic" className="text-[11px] font-semibold text-[#5B5BD6] border border-[#B9B9EA] px-3 py-2 rounded-lg disabled:opacity-40">Add manual topic</button>
+          </div>
+        </section>
+
+        <aside className="col-span-2 bg-white border border-[#E2DED7] rounded-xl p-5 h-fit" data-testid="toc-topic-details">
+          {selectedTopic ? (
+            <>
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-[#9898AB]">Topic rationale</p>
+                  <h2 className="text-[14px] font-semibold text-[#111218] mt-1">{selectedTopic.title}</h2>
+                </div>
+                <span className="text-[9px] font-mono text-[#9898AB]">{selectedTopic.topicId}</span>
+              </div>
+              <p className="text-[12px] text-[#6B6B7E] leading-relaxed mb-4">{selectedTopic.rationale}</p>
+              {selectedTopic.sourceSectionPaths?.length ? (
+                <div className="mb-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-1">Source paths</p>
+                  {selectedTopic.sourceSectionPaths.map(path => <p key={path.join('/')} className="text-[11px] text-[#6B6B7E]">{path.join(' › ')}</p>)}
+                </div>
+              ) : null}
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB] mb-2">Supporting evidence</p>
+              {selectedTopic.supportingEvidenceIds.length ? (
+                <div className="space-y-2">
+                  {selectedTopic.supportingEvidenceIds.map(evidenceId => {
+                    const evidence = evidenceById.get(evidenceId)
+                    return evidence ? (
+                      <button key={evidenceId} type="button" data-testid="toc-supporting-evidence" onClick={() => setSelectedEvidenceId(evidenceId)} className="w-full text-left border border-[#E2DED7] rounded-lg px-3 py-2 hover:border-[#B9B9EA]">
+                        <p className="text-[11px] font-semibold text-[#5B5BD6]">{evidence.sourceFileName}</p>
+                        <p className="text-[10px] text-[#9898AB]">{evidence.location}</p>
+                        <p className="text-[11px] text-[#3D3D4E] line-clamp-2 mt-1">{evidence.text}</p>
+                      </button>
+                    ) : (
+                      <p key={evidenceId} className="text-[11px] text-[#B45309]">Evidence reference unavailable: {evidenceId}</p>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="text-[11px] text-[#9898AB]">No evidence is claimed for this optional or manual structural topic.</p>
+              )}
+            </>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-[12px] font-semibold text-[#111218]">Select a proposed topic</p>
+              <p className="text-[11px] text-[#9898AB] mt-1">Review its rationale and supporting evidence before committing.</p>
+            </div>
+          )}
+        </aside>
+      </div>
+
+      {selectedEvidence && (
+        <div className="fixed inset-0 bg-black/35 z-50 flex items-center justify-center p-4" onClick={() => setSelectedEvidenceId(null)}>
+          <div className="bg-white rounded-2xl border border-[#E2DED7] shadow-xl p-6 max-w-2xl w-full" onClick={event => event.stopPropagation()} data-testid="toc-evidence-dialog">
+            <h3 className="text-[14px] font-semibold text-[#111218]">{selectedEvidence.sourceFileName}</h3>
+            <p className="text-[11px] text-[#9898AB] mt-1">{selectedEvidence.location} · {selectedEvidence.blockType}</p>
+            <p className="text-[13px] text-[#3D3D4E] leading-relaxed mt-4 whitespace-pre-wrap">{selectedEvidence.text}</p>
+            <button type="button" onClick={() => setSelectedEvidenceId(null)} className="mt-5 w-full text-[12px] border border-[#E2DED7] rounded-lg py-2">Close</button>
+          </div>
+        </div>
+      )}
+
+      {confirmCommit && (
+        <div className="fixed inset-0 bg-black/35 z-50 flex items-center justify-center p-4" onClick={() => setConfirmCommit(false)}>
+          <div className="bg-white rounded-2xl border border-[#E2DED7] shadow-xl p-6 max-w-md w-full" onClick={event => event.stopPropagation()} data-testid="toc-merge-confirmation">
+            <h3 className="text-[15px] font-semibold text-[#111218] mb-2">Merge proposal into the current TOC?</h3>
+            <p className="text-[12px] text-[#6B6B7E] leading-relaxed mb-5">
+              Existing committed topics, IDs, order, and user edits will be preserved. Only genuinely new proposed topics will be appended.
+            </p>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setConfirmCommit(false)} className="flex-1 text-[12px] border border-[#E2DED7] rounded-lg py-2">Cancel</button>
+              <button type="button" onClick={commit} data-testid="confirm-toc-merge" className="flex-1 text-[12px] font-semibold text-white bg-[#5B5BD6] rounded-lg py-2">Merge and commit</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysisResult, analysisRevision, sourcesRevision, tocGeneratedFromRev, tocHumanModified, onTocAccepted }: {
@@ -13048,7 +13463,11 @@ export default function App() {
 
   // ── Lifted TOC state ───────────────────────────────────────────────────────
   const [appToc, setAppToc] = useState<TocItem[]>([]) // empty until generated from analysis
+  const [tocProposal, setTocProposal] = useState<TocProposal | null>(null)
   const [tocGeneratedFromRev, setTocGeneratedFromRev] = useState<number>(-1)
+  const [tocGeneratedFromEvidenceSourcesRevision, setTocGeneratedFromEvidenceSourcesRevision] = useState(-1)
+  const [tocGeneratedFromEvidenceExtractionRevision, setTocGeneratedFromEvidenceExtractionRevision] = useState('')
+  const [tocGeneratedFromConceptBuiltAt, setTocGeneratedFromConceptBuiltAt] = useState(-1)
   const [tocHumanModified, setTocHumanModified] = useState(false)
   const handleTocChange = (toc: TocItem[]) => { setAppToc(toc); setTocRevision(r => r + 1); setTocHumanModified(true); triggerAutosave() }
 
@@ -13237,8 +13656,12 @@ export default function App() {
       conceptAnalysis: conceptAnalysis as unknown,
       unsupportedAnalysis: unsupportedAnalysis as unknown,
       appToc: appToc as unknown[],
+      tocProposal: tocProposal as unknown,
       tocRevision,
       tocGeneratedFromRev,
+      tocGeneratedFromEvidenceSourcesRevision,
+      tocGeneratedFromEvidenceExtractionRevision,
+      tocGeneratedFromConceptBuiltAt,
       tocHumanModified,
       masterAssignments: masterAssignments as Record<string, string>,
       docBlocks: sharedDocBlocksRef.current as unknown[],
@@ -13253,7 +13676,7 @@ export default function App() {
       docComments: docComments as unknown[],
       publishConfig: publishConfig as unknown,
     }
-  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, unsupportedAnalysis, appToc, tocRevision, tocGeneratedFromRev, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
+  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, unsupportedAnalysis, appToc, tocProposal, tocRevision, tocGeneratedFromRev, tocGeneratedFromEvidenceSourcesRevision, tocGeneratedFromEvidenceExtractionRevision, tocGeneratedFromConceptBuiltAt, tocHumanModified, masterAssignments, contentRevision, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
 
   // Keep latestBuildRef current on every render so autosave never sees stale state
   latestBuildRef.current = buildProjectRecord
@@ -13296,6 +13719,21 @@ export default function App() {
       contentRevision,
       analyzableContentItems,
     )
+  const tocProposalFresh = !isDemoMode && isTocProposalFresh(
+    tocProposal,
+    evidenceIndex,
+    conceptAnalysis,
+    projectMeta.contentType,
+  )
+  const committedTocStale = !isDemoMode
+    && appToc.length > 0
+    && (
+      !evidenceIndex
+      || !conceptAnalysis
+      || tocGeneratedFromEvidenceSourcesRevision !== evidenceIndex.sourcesRevision
+      || tocGeneratedFromEvidenceExtractionRevision !== evidenceIndex.extractionRevision
+      || tocGeneratedFromConceptBuiltAt !== conceptAnalysis.builtAt
+    )
   const handleRebuildEvidence = useCallback(() => {
     if (!canRebuildEvidence || isDemoMode) return
     setEvidenceIndex(buildEvidenceIndex(sourceExtractions, sourcesRevision))
@@ -13335,6 +13773,33 @@ export default function App() {
     isDemoMode,
     triggerAutosave,
   ])
+
+  const handleGenerateTocProposal = useCallback(() => {
+    if (isDemoMode || !evidenceIndex || !evidenceFresh || !conceptAnalysis || !conceptAnalysisFresh) return
+    setTocProposal(buildTocProposal(evidenceIndex, conceptAnalysis, projectMeta.contentType))
+    triggerAutosave()
+  }, [conceptAnalysis, conceptAnalysisFresh, evidenceFresh, evidenceIndex, isDemoMode, projectMeta.contentType, triggerAutosave])
+
+  const handleTocProposalChange = useCallback((proposal: TocProposal) => {
+    setTocProposal(proposal)
+    triggerAutosave()
+  }, [triggerAutosave])
+
+  const handleDiscardTocProposal = useCallback(() => {
+    setTocProposal(null)
+    triggerAutosave()
+  }, [triggerAutosave])
+
+  const handleCommitTocProposal = useCallback((items: TocItem[], proposal: TocProposal, mergedExisting: boolean) => {
+    setAppToc(normalizeTopicIds(items))
+    setTocRevision(revision => revision + 1)
+    setTocGeneratedFromEvidenceSourcesRevision(proposal.evidenceSourcesRevision)
+    setTocGeneratedFromEvidenceExtractionRevision(proposal.evidenceExtractionRevision)
+    setTocGeneratedFromConceptBuiltAt(proposal.groundedAnalysisBuiltAt)
+    setTocHumanModified(mergedExisting)
+    setTocProposal(null)
+    triggerAutosave()
+  }, [triggerAutosave])
 
   // ── Startup: check for active project or show dashboard ───────────────────
   const [appLoading, setAppLoading] = useState(true)
@@ -13413,9 +13878,16 @@ export default function App() {
     setAnalysisRevision(record.analysisRevision ?? -1)
     setConceptAnalysis((record.conceptAnalysis as ConceptAnalysis | null) ?? null)
     setUnsupportedAnalysis((record.unsupportedAnalysis as UnsupportedAnalysis | null) ?? null)
-    setAppToc((record.appToc as TocItem[]) ?? [])
+    setAppToc(normalizeTopicIds((record.appToc as TocItem[]) ?? []))
+    const restoredProposal = (record.tocProposal as TocProposal | null) ?? null
+    setTocProposal(restoredProposal
+      ? { ...restoredProposal, items: normalizeTopicIds(restoredProposal.items) as ProposedTopic[] }
+      : null)
     setTocRevision(record.tocRevision ?? 0)
     setTocGeneratedFromRev(record.tocGeneratedFromRev ?? -1)
+    setTocGeneratedFromEvidenceSourcesRevision(record.tocGeneratedFromEvidenceSourcesRevision ?? -1)
+    setTocGeneratedFromEvidenceExtractionRevision(record.tocGeneratedFromEvidenceExtractionRevision ?? '')
+    setTocGeneratedFromConceptBuiltAt(record.tocGeneratedFromConceptBuiltAt ?? -1)
     setTocHumanModified(record.tocHumanModified ?? false)
     setMasterAssignments((record.masterAssignments as Record<number, string>) ?? {})
     sharedDocBlocksRef.current = (record.docBlocks as DocBlock[]) ?? []
@@ -13498,8 +13970,12 @@ export default function App() {
     setConceptAnalysis(null)
     setUnsupportedAnalysis(null)
     setAppToc([])
+    setTocProposal(null)
     setTocRevision(0)
     setTocGeneratedFromRev(-1)
+    setTocGeneratedFromEvidenceSourcesRevision(-1)
+    setTocGeneratedFromEvidenceExtractionRevision('')
+    setTocGeneratedFromConceptBuiltAt(-1)
     setTocHumanModified(false)
     setMasterAssignments({})
     sharedDocBlocksRef.current = []
@@ -13564,7 +14040,9 @@ export default function App() {
       case 'analysis':  return isDemoMode
         ? <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
         : <EvidenceAnalysisScreen onNav={navigate} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} analysis={conceptAnalysis} analysisFresh={conceptAnalysisFresh} onRebuild={handleRebuildConceptAnalysis} unsupportedAnalysis={unsupportedAnalysis} unsupportedFresh={unsupportedAnalysisFresh} canBuildUnsupported={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onRebuildUnsupported={handleRebuildUnsupportedAnalysis} />
-      case 'structure': return <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
+      case 'structure': return isDemoMode
+        ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
+        : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
@@ -13607,7 +14085,7 @@ export default function App() {
             : conceptAnalysis
               ? (conceptAnalysisFresh && (!unsupportedAnalysis || unsupportedAnalysisFresh) ? 'complete' : 'stale')
               : (sources.length > 0 ? 'in-progress' : 'not-started'),
-          structure: appToc.length > 0 ? (analysisRevision > tocGeneratedFromRev && !tocHumanModified ? 'stale' : 'complete') : 'not-started',
+          structure: appToc.length > 0 ? (isDemoMode ? (analysisRevision > tocGeneratedFromRev && !tocHumanModified ? 'stale' : 'complete') : (committedTocStale ? 'stale' : 'complete')) : (tocProposal ? (tocProposalFresh ? 'in-progress' : 'stale') : 'not-started'),
           studio:    contentRevision > 0 ? (reviewStaleContent ? 'in-progress' : 'complete') : 'not-started',
           quality:   aiReviewDone ? (reviewStaleContent ? 'stale' : 'complete') : (contentRevision > 0 ? 'in-progress' : 'not-started'),
           publish:   'not-started',

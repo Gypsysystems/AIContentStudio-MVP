@@ -16,6 +16,7 @@ import {
   remapUnsupportedAnalysis,
   type UnsupportedAnalysis,
 } from './unsupportedAnalysis'
+import type { TocProposal } from './tocProposal'
 
 export const SCHEMA_VERSION = 2
 const DB_NAME = 'docflow-db'
@@ -65,8 +66,12 @@ export type ProjectRecord = {
 
   // TOC
   appToc: unknown[]
+  tocProposal: unknown | null
   tocRevision: number
   tocGeneratedFromRev: number
+  tocGeneratedFromEvidenceSourcesRevision: number
+  tocGeneratedFromEvidenceExtractionRevision: string
+  tocGeneratedFromConceptBuiltAt: number
   tocHumanModified: boolean
   masterAssignments: Record<string, string>
 
@@ -210,8 +215,12 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     conceptAnalysis: null,
     unsupportedAnalysis: null,
     appToc: [],
+    tocProposal: null,
     tocRevision: 0,
     tocGeneratedFromRev: -1,
+    tocGeneratedFromEvidenceSourcesRevision: -1,
+    tocGeneratedFromEvidenceExtractionRevision: '',
+    tocGeneratedFromConceptBuiltAt: -1,
     tocHumanModified: false,
     masterAssignments: {},
     sourceExtractions: {},
@@ -349,6 +358,32 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
       && sourceUnsupportedAnalysis.evidenceSourcesRevision === sourceEvidenceIndex.sourcesRevision
       && sourceUnsupportedAnalysis.evidenceExtractionRevision === sourceEvidenceIndex.extractionRevision,
   )
+  const copiedEvidenceIndex = copy.evidenceIndex as EvidenceIndex | null
+  const copiedConceptAnalysis = copy.conceptAnalysis as ConceptAnalysis | null
+  const sourceTocProposal = source.tocProposal as TocProposal | null
+  copy.tocProposal = sourceTocProposal && copiedEvidenceIndex && copiedConceptAnalysis
+    ? {
+        ...sourceTocProposal,
+        evidenceSourcesRevision: copiedEvidenceIndex.sourcesRevision,
+        evidenceExtractionRevision: copiedEvidenceIndex.extractionRevision,
+        groundedAnalysisBuiltAt: copiedConceptAnalysis.builtAt,
+        items: sourceTocProposal.items.map(item => ({
+          ...item,
+          supportingEvidenceIds: [...item.supportingEvidenceIds],
+          sourceSectionPaths: item.sourceSectionPaths?.map(path => [...path]),
+        })),
+      }
+    : sourceTocProposal
+  const committedTocWasCurrent = !!sourceEvidenceIndex
+    && !!sourceConceptAnalysis
+    && source.tocGeneratedFromEvidenceSourcesRevision === sourceEvidenceIndex.sourcesRevision
+    && source.tocGeneratedFromEvidenceExtractionRevision === sourceEvidenceIndex.extractionRevision
+    && source.tocGeneratedFromConceptBuiltAt === sourceConceptAnalysis.builtAt
+  if (committedTocWasCurrent && copiedEvidenceIndex && copiedConceptAnalysis) {
+    copy.tocGeneratedFromEvidenceSourcesRevision = copiedEvidenceIndex.sourcesRevision
+    copy.tocGeneratedFromEvidenceExtractionRevision = copiedEvidenceIndex.extractionRevision
+    copy.tocGeneratedFromConceptBuiltAt = copiedConceptAnalysis.builtAt
+  }
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     await put(ps, copy)
     for (const f of newFiles) await put(fs, f)

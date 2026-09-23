@@ -1,7 +1,7 @@
 import type { ConceptAnalysis } from './conceptAnalysis'
 import type { EvidenceIndex, EvidenceItem } from './evidenceIndex'
 
-export type ProposalTopicKind = 'evidence-backed' | 'optional-structural'
+export type ProposalTopicKind = 'evidence-backed' | 'optional-structural' | 'manual'
 
 export type ProposedTopic = {
   id: number

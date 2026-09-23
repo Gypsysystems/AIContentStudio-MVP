@@ -12,6 +12,7 @@ export type EvidenceItem = {
   sourceFileName: string
   text: string
   blockType: ExtractedBlockType
+  headingLevel?: number
   order: number
   location: string
   sectionPath?: string[]
@@ -63,6 +64,7 @@ export function buildEvidence(extraction: SourceExtraction): EvidenceItem[] {
       sourceFileName: extraction.fileName,
       text: block.text,
       blockType: block.type,
+      headingLevel: block.headingLevel,
       order: block.order,
       location: locationFor(extraction, block),
       sectionPath: block.sectionPath ? [...block.sectionPath] : undefined,

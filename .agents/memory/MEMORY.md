@@ -3,3 +3,4 @@
 - [HTML master topic destinations](html-master-topic-destinations.md) — navigation cards store central TOC IDs and resolve current titles and paths at preview time.
 - [Grounded analysis isolation](grounded-analysis-isolation.md) — real evidence analysis stays separate from demo and downstream generation state until later milestones.
 - [Unsupported information analysis](unsupported-information-analysis.md) — evaluate only persisted real content; keep unsupported results separate from source conflicts and gaps.
+- [TOC proposal safety](toc-proposal-safety.md) — grounded proposals remain separate from the committed TOC; acceptance preserves existing user structure through explicit merge.
