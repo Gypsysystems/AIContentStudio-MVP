@@ -8,6 +8,7 @@ type StoredTopic = {
   title: string
   level: 1 | 2 | 3 | 4
   words: number
+  isNew?: boolean
 }
 
 type AuthorTopicMetadata = {
@@ -45,7 +46,15 @@ type StoredProject = {
   evidenceIndex: {
     sourcesRevision: number
     extractionRevision: string
-    items: Array<{ id: string; fileId: string; sourceId: string; sectionPath?: string[] }>
+    items: Array<{
+      id: string
+      fileId: string
+      sourceId: string
+      sourceFileName: string
+      location: string
+      text: string
+      sectionPath?: string[]
+    }>
   } | null
   conceptAnalysis: { builtAt: number } | null
   analysisRevision: number
@@ -338,4 +347,96 @@ test("does not create Author grounding metadata from demo-only document content"
   const project = await readProject(page, projectName)
   expect(project.topicContent).toEqual({})
   expect(project.isDemoMode).toBe(true)
+})
+
+test("uses only persisted project sources and evidence in Author and reloads source selection by stable file ID", async ({ page }) => {
+  test.setTimeout(60_000)
+  const projectName = `Author real source context ${Date.now()}`
+  await createProject(page, projectName)
+  const sourceInput = page.locator('input[type="file"]')
+  await sourceInput.setInputFiles({
+    name: "access-control.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# Access Control\n\nAdministrators must review privileged access every quarter."),
+  })
+  await expect.poll(async () => (await readProject(page, projectName)).sourceFileIds.length)
+    .toBe(1)
+  await page.getByRole("button", { name: "Analyze Sources" }).click()
+  await expect.poll(async () => (await readProject(page, projectName)).evidenceIndex?.items.length ?? 0)
+    .toBeGreaterThan(0)
+
+  const uploaded = await readProject(page, projectName)
+  expect(uploaded.sourceFileIds).toHaveLength(1)
+  const accessEvidence = uploaded.evidenceIndex!.items.find(item =>
+    item.sourceFileName === "access-control.md")
+  if (!accessEvidence) throw new Error("Expected extracted access-control evidence")
+
+  await patchProject(page, projectName, {
+    appToc: [{
+      id: 1,
+      topicId: "topic-real-sources",
+      title: "Access requirements",
+      level: 1,
+      words: 0,
+      isNew: true,
+    }],
+    topicContent: {
+      "topic-real-sources": [{
+        id: "real-source-heading",
+        type: "h1",
+        content: "Access requirements",
+      }],
+    },
+    authorTopicMetadata: {
+      "topic-real-sources": metadata("topic-real-sources", {
+        generationStatus: "not-generated",
+        contentOrigin: "manual",
+        evidenceIds: [],
+        sourcePaths: [],
+        sourceFileIds: [],
+        generatedAt: null,
+        generatedFreshness: "not-applicable",
+      }),
+    },
+  })
+
+  await page.reload()
+  await page.getByRole("button", { name: "Author", exact: true }).click()
+  await page.locator('[title="Access requirements — double-click to open"]').dblclick()
+  await page.getByRole("button", { name: /Generate with AI/ }).click()
+
+  const sourceOptions = page.getByTestId("author-source-option")
+  await expect(sourceOptions).toHaveCount(1)
+  await expect(page.getByText("access-control.md", { exact: true })).toBeVisible()
+  await expect(page.getByText("Nexus_Technical_Specification_v3.2.pdf", { exact: true })).toHaveCount(0)
+
+  const accessSourceId = accessEvidence.fileId
+  await page.locator(`[data-testid="author-source-option"][data-source-id="${accessSourceId}"]`).click()
+  await expect.poll(async () =>
+    (await readProject(page, projectName)).authorTopicMetadata?.["topic-real-sources"].sourceFileIds,
+  ).toEqual([accessSourceId])
+  await expect.poll(async () =>
+    (await readProject(page, projectName)).authorTopicMetadata?.["topic-real-sources"].evidenceIds,
+  ).toContain(accessEvidence.id)
+
+  await page.reload()
+  await page.getByRole("button", { name: "Author", exact: true }).click()
+  await page.locator('[title="Access requirements — double-click to open"]').dblclick()
+  await page.getByRole("button", { name: /Generate with AI/ }).click()
+  await expect(page.locator(`[data-testid="author-source-option"][data-source-id="${accessSourceId}"]`))
+    .toContainText("✓")
+
+  await page.getByRole("button", { name: "Back" }).click()
+  await page.getByRole("button", { name: /Browse sources/ }).click()
+  await expect(page.getByText(/Administrators must review privileged access every quarter/)).toBeVisible()
+  await expect(page.getByText(/Source excerpt preview not yet available/)).toHaveCount(0)
+
+  await page.getByRole("button", { name: "Sources", exact: true }).click()
+  await expect(page.getByTestId("author-topic-source-context")).toContainText("access-control.md")
+  await expect(page.getByTestId("author-topic-source-context")).toContainText(accessEvidence.location)
+
+  await page.getByRole("button", { name: /AI/ }).click()
+  await page.getByRole("button", { name: "Improve", exact: true }).click()
+  await expect(page.getByText(/not available yet for real projects/)).toBeVisible()
+  await expect(page.getByRole("button", { name: "Apply", exact: true })).toHaveCount(0)
 })

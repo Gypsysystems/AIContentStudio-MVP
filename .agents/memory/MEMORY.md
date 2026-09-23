@@ -5,3 +5,4 @@
 - [Unsupported information analysis](unsupported-information-analysis.md) — evaluate only persisted real content; keep unsupported results separate from source conflicts and gaps.
 - [TOC proposal safety](toc-proposal-safety.md) — grounded proposals remain separate from the committed TOC; acceptance preserves existing user structure through explicit merge.
 - [Author grounding metadata](author-grounding-metadata.md) — keep generation provenance separate from authored blocks and link it by stable topic ID.
+- [Author real-source isolation](author-real-source-isolation.md) — real Author context is stable-ID-backed; never fall back to demo filenames, excerpts, references, or AI output.

@@ -42,6 +42,7 @@ import {
   hydrateAuthorTopicMetadata,
   pruneAuthorTopicMetadata,
   stableAuthorTopicId,
+  type AuthorTopicMetadata,
   type AuthorTopicMetadataMap,
 } from './authorMetadata'
 
@@ -148,6 +149,7 @@ type ConditionGroup = { id: string; group: string; tags: string[] }
 type DocComment = { id: string; blockId: string; anchor: string; text: string; resolved: boolean }
 type PublishConfig = { selectedFormats: string[]; activeVariant: string }
 type ProjectSource = { fileId: string; file: File }
+type AuthorProjectSource = { fileId: string; name: string }
 
 type BrandSuggestion = {
   id: string
@@ -8531,7 +8533,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [outlineOpen, setOutlineOpen] = useState(true)
   const [tocWidth, setTocWidth] = useState(260)
@@ -8561,7 +8563,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
     setTopicAiContent(null)
     setTopicAiWarning(null)
     setTopicMode('choose')
-    setTopicExtraSources([])
   }
 
   // Suggest titles based on the style of existing topic titles
@@ -8666,6 +8667,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const [aiPopover, setAiPopover] = useState<{ visible: boolean; x: number; y: number; text: string } | null>(null)
   const [aiAction, setAiAction] = useState<string | null>(null)
   const [aiResult, setAiResult] = useState<string | null>(null)
+  const [aiResultUnavailable, setAiResultUnavailable] = useState(false)
   const [sourceRef, setSourceRef] = useState(false)
   // New-topic AI assistance
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([])
@@ -8676,8 +8678,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   const titleSugTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Guided mode for empty new topics: 'choose' | 'write' | 'ai' | 'sources'
   const [topicMode, setTopicMode] = useState<'choose' | 'write' | 'ai' | 'sources'>('choose')
-  const [topicExtraSources, setTopicExtraSources] = useState<string[]>([]) // extra source names added in-topic
-  const topicSourceFileRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
 
   // --- Authoring state ---
@@ -9101,6 +9101,74 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
     const next = typeof updater === 'function' ? updater(studioToc) : updater
     onTocChange?.(next)
   }
+  const activeTopic = activeTopicId === null
+    ? null
+    : studioToc.find(topic => topic.id === activeTopicId) ?? null
+  const activeStableTopicId = activeTopic ? stableAuthorTopicId(activeTopic) : null
+  const activeAuthorMetadata = activeStableTopicId
+    ? authorTopicMetadata?.[activeStableTopicId]
+    : undefined
+  const availableAuthorSources: AuthorProjectSource[] = isDemoMode
+    ? SOURCE_FILES.map(source => ({ fileId: `demo-source-${source.id}`, name: source.name }))
+    : (projectSources ?? [])
+  const evidenceItems = isDemoMode ? [] : (evidenceIndex?.items ?? [])
+  const committedEvidenceIds = activeTopic?.supportingEvidenceIds ?? []
+  const committedEvidenceItems = evidenceItems.filter(item => committedEvidenceIds.includes(item.id))
+  const committedSourceIds = [
+    ...(activeTopic?.supportingSourceIds ?? []),
+    ...committedEvidenceItems.flatMap(item => [item.fileId, item.sourceId]),
+  ]
+  const persistedSourceIds = activeAuthorMetadata?.sourceFileIds ?? []
+  const selectedTopicSourceIds = [...new Set(
+    persistedSourceIds.length > 0 ? persistedSourceIds : committedSourceIds,
+  )].filter(fileId => availableAuthorSources.some(source => source.fileId === fileId))
+  const persistedEvidenceIds = activeAuthorMetadata?.evidenceIds ?? []
+  const topicEvidenceItems = evidenceItems.filter(item =>
+    (persistedEvidenceIds.length > 0
+      ? persistedEvidenceIds.includes(item.id)
+      : committedEvidenceIds.length > 0
+        ? committedEvidenceIds.includes(item.id)
+        : selectedTopicSourceIds.includes(item.fileId) || selectedTopicSourceIds.includes(item.sourceId)))
+  const selectedTopicSources = availableAuthorSources.filter(source =>
+    selectedTopicSourceIds.includes(source.fileId))
+  const primaryTopicEvidence = topicEvidenceItems[0]
+  const groundedSourceReference = primaryTopicEvidence
+    ? `[Source: ${primaryTopicEvidence.sourceFileName} · ${primaryTopicEvidence.location}]`
+    : null
+
+  const setTopicSourceSelection = (nextSourceIds: string[]) => {
+    if (!activeStableTopicId || isDemoMode || !onAuthorTopicMetadataChange) return
+    const sourceIds = [...new Set(nextSourceIds)].filter(fileId =>
+      availableAuthorSources.some(source => source.fileId === fileId))
+    const selectedEvidence = evidenceItems.filter(item =>
+      sourceIds.includes(item.fileId) || sourceIds.includes(item.sourceId))
+    const base = activeAuthorMetadata ?? createManualAuthorTopicMetadata(
+      activeStableTopicId,
+      { contentType: documentType ?? '', variables: docVariables },
+      false,
+    )
+    onAuthorTopicMetadataChange(activeStableTopicId, {
+      ...base,
+      evidenceIds: selectedEvidence.map(item => item.id),
+      sourcePaths: selectedEvidence
+        .map(item => item.sectionPath)
+        .filter((path): path is string[] => !!path)
+        .map(path => [...path]),
+      sourceFileIds: sourceIds,
+      provenance: {
+        ...base.provenance,
+        sourcesRevision: evidenceIndex?.sourcesRevision ?? base.provenance.sourcesRevision,
+        evidenceExtractionRevision: evidenceIndex?.extractionRevision ?? base.provenance.evidenceExtractionRevision,
+        contentType: documentType ?? base.provenance.contentType,
+      },
+    })
+  }
+
+  const toggleTopicSource = (fileId: string) => {
+    setTopicSourceSelection(selectedTopicSourceIds.includes(fileId)
+      ? selectedTopicSourceIds.filter(sourceId => sourceId !== fileId)
+      : [...selectedTopicSourceIds, fileId])
+  }
 
   const handleSelection = useCallback(() => {
     const sel = window.getSelection()
@@ -9220,9 +9288,14 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
       savedRangeRef.current = sel.getRangeAt(0).cloneRange()
     }
     setAiAction(action)
+    setAiResultUnavailable(!isDemoMode)
     setAiPopover(null)
     setTimeout(() => {
-      const demoResults: Record<string, string> = isDemoMode ? {
+      if (!isDemoMode) {
+        setAiResult('This action is not available yet for real projects. It requires grounded project evidence and a generation pipeline before it can safely modify authored content.')
+        return
+      }
+      const demoResults: Record<string, string> = {
         'Improve': 'The Nexus Platform is an enterprise-grade solution for distributed teams managing complex, multi-stakeholder projects with precision and clarity.',
         'Shorten': 'Nexus is an enterprise collaboration platform for complex projects.',
         'Expand': 'The Nexus Platform represents a new paradigm in enterprise project management. Designed from the ground up for distributed teams, it unifies project tracking, stakeholder communication, document management, and real-time collaboration into a single, coherent workspace.',
@@ -9233,12 +9306,14 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
         'Generate Example': 'Example: A project manager at Acme Corp uses Nexus to coordinate a 12-person team across three time zones, with all deliverables tracked and visible to stakeholders in real-time.',
         'Check Terminology': '✓ All terms are consistent with the Nexus style guide. "workspace" used correctly throughout.',
         'Rewrite': 'Nexus Platform delivers enterprise-grade project coordination built for distributed teams tackling high-stakes, multi-stakeholder work.',
-      } : {}
-      const genericResults: Record<string, string> = {
         'Check Grammar': '✓ No grammar issues detected in the selected text.',
-        'Verify vs Source': '✓ The selected content is consistent with the uploaded source documents.',
+        'Verify vs Source': '✓ The selected content is consistent with the demo source documents.',
+        'Verify Against Source': '✓ The selected content is consistent with the demo source documents.',
       }
-      setAiResult(demoResults[action] ?? genericResults[action] ?? '✓ The selected content has been refined for clarity and consistency.')
+      const demoFallbacks: Record<string, string> = {
+        'Check Grammar': '✓ No grammar issues detected in the selected text.',
+      }
+      setAiResult(demoResults[action] ?? demoFallbacks[action] ?? 'Demo response: the selected content has been refined for clarity and consistency.')
     }, 1200)
   }
 
@@ -9627,12 +9702,18 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                           setShowRefsMenu(false)
                           if (focusedBlockId) {
                             const b = docBlocks.find(x => x.id === focusedBlockId)
-                            const srcLabel = `[Source: Technical Spec §${Math.floor(Math.random() * 8) + 1}]`
-                            updateBlock(focusedBlockId, { content: (b?.content ?? '') + ' ' + srcLabel })
+                            const sourceLabel = isDemoMode
+                              ? `[Source: Technical Spec §${Math.floor(Math.random() * 8) + 1}]`
+                              : groundedSourceReference
+                            if (sourceLabel) {
+                              updateBlock(focusedBlockId, { content: `${b?.content ?? ''} ${sourceLabel}` })
+                            } else {
+                              setSourceRef(true)
+                            }
                           }
                         }}
-                        className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left"
-                      >Add Source Reference</button>
+                        className={`w-full flex items-center px-3 py-1.5 text-[12px] hover:bg-[#F4F2EE] transition-colors text-left ${!isDemoMode && !groundedSourceReference ? 'text-[#9898AB]' : 'text-[#3D3D4E]'}`}
+                      >{!isDemoMode && !groundedSourceReference ? 'No grounded source available' : 'Add Source Reference'}</button>
                     </div>
                   )}
                 </div>
@@ -9995,7 +10076,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
               {/* ── New topic guided flow ─────────────────────────────── */}
               {activeTopicId !== null && (studioToc.find(t => t.id === activeTopicId)?.isNew || docBlocks.length <= 1) && (() => {
                 const currentTitle = docBlocks[0]?.content?.trim() ?? ''
-                const allSources = [...SOURCE_FILES.map(s => s.name), ...topicExtraSources]
+                const allSources = availableAuthorSources
 
                 /* ── Step 0: Choose how to start ── */
                 if (topicMode === 'choose') return (
@@ -10070,12 +10151,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <p className="text-[11px] font-semibold text-[#6B6B7E] uppercase tracking-wide">Generate content</p>
-                          <span className="text-[10px] text-[#9898AB]">{allSources.length} source{allSources.length !== 1 ? 's' : ''}</span>
+                          <span className="text-[10px] text-[#9898AB]">{selectedTopicSourceIds.length} selected source{selectedTopicSourceIds.length !== 1 ? 's' : ''}</span>
                         </div>
                         {contentSugLoading ? (
                           <div className="flex items-center gap-2 p-3 bg-white border border-[#E2DED7] rounded-lg text-[11px] text-[#9898AB]">
                             <div className="w-3.5 h-3.5 rounded-full border-2 border-[#5B5BD6]/30 border-t-[#5B5BD6] animate-spin flex-shrink-0"/>
-                            Searching {allSources.length} source file{allSources.length !== 1 ? 's' : ''}…
+                            Checking {selectedTopicSourceIds.length} selected source file{selectedTopicSourceIds.length !== 1 ? 's' : ''}…
                           </div>
                         ) : topicAiWarning ? (
                           <div className="space-y-2">
@@ -10087,7 +10168,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                               </div>
                             </div>
                             <div className="flex gap-2">
-                              <button onClick={() => topicSourceFileRef.current?.click()} className="h-7 px-3 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-medium hover:bg-[#4A4AC4] transition-colors flex items-center gap-1.5">
+                              <button onClick={() => onNav('sources')} className="h-7 px-3 bg-[#5B5BD6] text-white rounded-lg text-[11px] font-medium hover:bg-[#4A4AC4] transition-colors flex items-center gap-1.5">
                                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="white" strokeWidth="1.5" strokeLinecap="round"/></svg>
                                 Add source document
                               </button>
@@ -10109,7 +10190,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                         ) : (
                           <button onClick={() => generateTopicContent(currentTitle || 'New Topic')}
                             className="w-full flex items-center justify-center gap-2 h-10 bg-[#5B5BD6] text-white rounded-xl text-[12px] font-medium hover:bg-[#4A4AC4] transition-colors">
-                            <span className="text-[14px]">✦</span> Generate from {allSources.length} source file{allSources.length !== 1 ? 's' : ''}
+                            <span className="text-[14px]">✦</span> Generate from {selectedTopicSourceIds.length} selected source file{selectedTopicSourceIds.length !== 1 ? 's' : ''}
                           </button>
                         )}
                       </div>
@@ -10118,19 +10199,35 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <p className="text-[10px] text-[#9898AB] font-medium uppercase tracking-wide">Source files</p>
-                          <button onClick={() => topicSourceFileRef.current?.click()} className="flex items-center gap-1 text-[10px] text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors font-medium">
+                          <button onClick={() => onNav('sources')} className="flex items-center gap-1 text-[10px] text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors font-medium">
                             <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M4.5 1v7M1 4.5h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
-                            Add source
+                            Manage sources
                           </button>
                         </div>
-                        <div className="space-y-1">
-                          {allSources.map((name, i) => (
-                            <div key={i} className="flex items-center gap-2 px-2 py-1 bg-white border border-[#F4F2EE] rounded-lg">
-                              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" className="text-[#9898AB] flex-shrink-0"><rect x="1" y="1" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.1"/><path d="M3 4h5M3 6h3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
-                              <span className="text-[10px] text-[#6B6B7E] truncate flex-1">{name}</span>
-                              {i >= SOURCE_FILES.length && <button onClick={() => setTopicExtraSources(prev => prev.filter((_, pi) => pi !== i - SOURCE_FILES.length))} className="text-[#C8C6C0] hover:text-[#DC2626] text-[9px]">✕</button>}
+                        <div className="space-y-1" data-testid="author-source-list">
+                          {allSources.length === 0 && (
+                            <div className="px-3 py-3 bg-white border border-dashed border-[#E2DED7] rounded-lg text-[10px] text-[#9898AB]">
+                              No project sources uploaded yet.
                             </div>
-                          ))}
+                          )}
+                          {allSources.map(source => {
+                            const selected = isDemoMode || selectedTopicSourceIds.includes(source.fileId)
+                            return (
+                            <button
+                              type="button"
+                              key={source.fileId}
+                              data-testid="author-source-option"
+                              data-source-id={source.fileId}
+                              onClick={() => !isDemoMode && toggleTopicSource(source.fileId)}
+                              className={`w-full flex items-center gap-2 px-2 py-1 bg-white border rounded-lg text-left ${selected ? 'border-[#5B5BD6]/30' : 'border-[#F4F2EE]'}`}
+                            >
+                              <span className={`w-3 h-3 rounded border flex items-center justify-center text-[8px] ${selected ? 'bg-[#5B5BD6] border-[#5B5BD6] text-white' : 'border-[#C8C6C0]'}`}>
+                                {selected ? '✓' : ''}
+                              </span>
+                              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" className="text-[#9898AB] flex-shrink-0"><rect x="1" y="1" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.1"/><path d="M3 4h5M3 6h3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
+                              <span className="text-[10px] text-[#6B6B7E] truncate flex-1">{source.name}</span>
+                            </button>
+                          )})}
                         </div>
                       </div>
                     </div>
@@ -10146,26 +10243,51 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                       <button onClick={() => setTopicMode('choose')} className="ml-auto text-[#9898AB] hover:text-[#6B6B7E] transition-colors text-[11px]">← Back</button>
                     </div>
                     <div className="divide-y divide-[#F4F2EE]">
-                      {allSources.map((name, si) => {
+                      {allSources.length === 0 && (
+                        <div className="px-4 py-8 text-center">
+                          <p className="text-[11px] text-[#9898AB] mb-2">No project sources are available.</p>
+                          <button onClick={() => onNav('sources')} className="text-[11px] font-medium text-[#5B5BD6]">Add sources</button>
+                        </div>
+                      )}
+                      {allSources.map(source => {
                         const DEMO_EXCERPTS: Record<string, string[]> = isDemoMode ? {
                           'Nexus_Technical_Specification_v3.2.pdf': ['§2 Installation — Navigate to nexus.example.com and sign in with org credentials.', '§4 Dashboard — Central workspace with project overview, tasks, and notifications.', '§7 Authentication — SAML 2.0 and OAuth 2.0 SSO supported.', '§14 API — REST API, OAuth 2.0, base URL https://api.nexus.example.com/v1.'],
                           'UX_Research_Findings_Q3.docx': ['p.8 Dashboard — 83% of users preferred compact card view; sticky filters rated highly.', 'p.12 Login — 91% completion rate in user testing.', 'p.15 Collaboration — Real-time editing used by 74% of enterprise teams.'],
                           'Product_Roadmap_Deck.pptx': ['Q1 — Mobile app launch for iOS and Android.', 'Q2 — Advanced analytics dashboard with custom reports.', 'Q3 — Integration marketplace with 50+ connectors.'],
                           'Support_Ticket_Analysis_Oct.pdf': ['#1 Login issues — clear browser cache, verify SSO config.', '#2 Notification delay — check email provider settings.', '#3 Performance — recommended 16 GB RAM for large workspaces.'],
                         } : {}
-                        const excerpts = DEMO_EXCERPTS[name] ?? ['Source excerpt preview not yet available for this file.']
+                        const excerpts = isDemoMode
+                          ? (DEMO_EXCERPTS[source.name] ?? []).map((text, index) => ({ id: `demo-${source.fileId}-${index}`, text }))
+                          : evidenceItems
+                              .filter(item => item.fileId === source.fileId || item.sourceId === source.fileId)
+                              .slice(0, 8)
+                              .map(item => ({ id: item.id, text: `${item.location} — ${item.text}` }))
+                        const selected = isDemoMode || selectedTopicSourceIds.includes(source.fileId)
                         return (
-                          <div key={si} className="px-4 py-3">
+                          <div key={source.fileId} className="px-4 py-3" data-testid="author-source-evidence" data-source-id={source.fileId}>
                             <p className="text-[11px] font-semibold text-[#111218] mb-2 flex items-center gap-1.5">
                               <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="text-[#9898AB]"><rect x="1" y="1" width="8" height="8" rx="1.2" stroke="currentColor" strokeWidth="1.1"/></svg>
-                              {name}
+                              {source.name}
+                              {!isDemoMode && (
+                                <button
+                                  onClick={() => toggleTopicSource(source.fileId)}
+                                  className={`ml-auto text-[9px] font-medium px-1.5 py-0.5 rounded ${selected ? 'bg-[#EEEEFF] text-[#5B5BD6]' : 'bg-[#F4F2EE] text-[#9898AB]'}`}
+                                >
+                                  {selected ? 'Selected' : 'Select source'}
+                                </button>
+                              )}
                             </p>
                             <div className="space-y-1">
-                              {excerpts.map((exc, ei) => (
-                                <button key={ei} onClick={() => { const para: DocBlock = { id: `src-${Date.now()}-${ei}`, type: 'para', content: exc }; setDocBlocks(prev => [...prev, para]); setTopicMode('write'); triggerSave() }}
+                              {excerpts.length === 0 && (
+                                <p className="px-2.5 py-2 text-[10px] text-[#9898AB] border border-dashed border-[#E2DED7] rounded-lg">
+                                  No extracted evidence is available for this source.
+                                </p>
+                              )}
+                              {excerpts.map((excerpt, excerptIndex) => (
+                                <button key={excerpt.id} onClick={() => { const para: DocBlock = { id: `src-${Date.now()}-${excerptIndex}`, type: 'para', content: excerpt.text }; setDocBlocks(prev => [...prev, para]); setTopicMode('write'); triggerSave() }}
                                   className="w-full text-left flex items-start gap-2 px-2.5 py-2 rounded-lg border border-[#F4F2EE] hover:border-[#5B5BD6]/30 hover:bg-[#FAFAFF] transition-all group">
                                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 mt-0.5 text-[#C8C6C0] group-hover:text-[#5B5BD6] transition-colors"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-                                  <span className="text-[11px] text-[#3D3D4E] leading-relaxed">{exc}</span>
+                                  <span className="text-[11px] text-[#3D3D4E] leading-relaxed">{excerpt.text}</span>
                                 </button>
                               ))}
                             </div>
@@ -10174,9 +10296,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                       })}
                     </div>
                     <div className="px-4 py-3 border-t border-[#F4F2EE] bg-[#F9F8F6] flex items-center justify-between">
-                      <button onClick={() => topicSourceFileRef.current?.click()} className="flex items-center gap-1.5 text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium transition-colors">
+                      <button onClick={() => onNav('sources')} className="flex items-center gap-1.5 text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium transition-colors">
                         <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
-                        Add source document
+                        Manage source documents
                       </button>
                       <button onClick={() => setTopicMode('write')} className="text-[11px] text-[#6B6B7E] hover:text-[#111218] transition-colors">Switch to manual writing →</button>
                     </div>
@@ -10191,10 +10313,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                   </div>
                 ) : null
               })()}
-
-              {/* Hidden file input for source document upload */}
-              <input ref={topicSourceFileRef} type="file" accept=".pdf,.docx,.pptx,.txt,.md" className="hidden"
-                onChange={e => { const f = e.target.files?.[0]; if (f) { setTopicExtraSources(prev => [...prev, f.name]); e.target.value = '' } }} />
 
               {/* Block-based document */}
               {docBlocks.map((block) => {
@@ -10798,9 +10916,32 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
 
               {/* Source reference badge */}
               {sourceRef && (
-                <div className="inline-flex items-center gap-1.5 bg-[#F3F0FF] border border-[#DDD6FE] px-2 py-0.5 rounded text-[11px] text-[#7C3AED] font-medium cursor-pointer hover:bg-[#EDE9FE] transition-colors mt-4">
-                  <div className="w-3 h-3 rounded-sm bg-[#8B5CF6] flex items-center justify-center"><span className="text-white text-[8px]">S</span></div>
-                  Technical Spec v3.2 · §1.1
+                <div data-testid="author-topic-source-context" className="mt-4 flex flex-wrap gap-1.5">
+                  {isDemoMode ? (
+                    <div className="inline-flex items-center gap-1.5 bg-[#F3F0FF] border border-[#DDD6FE] px-2 py-0.5 rounded text-[11px] text-[#7C3AED] font-medium">
+                      <div className="w-3 h-3 rounded-sm bg-[#8B5CF6] flex items-center justify-center"><span className="text-white text-[8px]">S</span></div>
+                      Technical Spec v3.2 · §1.1
+                    </div>
+                  ) : topicEvidenceItems.length > 0 ? (
+                    topicEvidenceItems.slice(0, 6).map(item => (
+                      <div key={item.id} data-testid="author-evidence-badge" data-evidence-id={item.id} data-source-id={item.fileId}
+                        className="inline-flex items-center gap-1.5 bg-[#F3F0FF] border border-[#DDD6FE] px-2 py-0.5 rounded text-[11px] text-[#7C3AED] font-medium">
+                        <div className="w-3 h-3 rounded-sm bg-[#8B5CF6] flex items-center justify-center"><span className="text-white text-[8px]">S</span></div>
+                        {item.sourceFileName} · {item.location}
+                      </div>
+                    ))
+                  ) : selectedTopicSources.length > 0 ? (
+                    selectedTopicSources.map(source => (
+                      <div key={source.fileId} data-testid="author-source-badge" data-source-id={source.fileId}
+                        className="inline-flex items-center gap-1.5 bg-[#F9F8F6] border border-[#E2DED7] px-2 py-0.5 rounded text-[11px] text-[#6B6B7E] font-medium">
+                        {source.name} · no extracted evidence
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-[11px] text-[#9898AB] bg-[#F9F8F6] border border-dashed border-[#D8D4CE] rounded px-2.5 py-1.5">
+                      No grounded source context is selected for this topic.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -10887,7 +11028,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
 
       {/* AI Action Result Modal */}
       {aiAction && (
-        <div className="fixed inset-0 bg-black/20 z-40 flex items-center justify-center fade-in" onClick={() => { setAiAction(null); setAiResult(null) }}>
+        <div className="fixed inset-0 bg-black/20 z-40 flex items-center justify-center fade-in" onClick={() => { setAiAction(null); setAiResult(null); setAiResultUnavailable(false) }}>
           <div className="bg-white rounded-2xl popover-shadow max-w-md w-full mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-[#E2DED7] flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -10896,7 +11037,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                 </div>
                 <span className="text-[13px] font-semibold text-[#111218]">{aiAction}</span>
               </div>
-              <button onClick={() => { setAiAction(null); setAiResult(null) }} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+              <button onClick={() => { setAiAction(null); setAiResult(null); setAiResultUnavailable(false) }} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
                 </svg>
@@ -10913,11 +11054,13 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                 <div>
                   <p className="text-[13px] text-[#2A2A3A] font-doc leading-relaxed mb-4 whitespace-pre-line">{aiResult}</p>
                   <div className="flex gap-2">
-                    <button onClick={applyAiResult} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">
-                      Apply
-                    </button>
-                    <button onClick={() => { setAiAction(null); setAiResult(null); savedRangeRef.current = null }} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
-                      Discard
+                    {!aiResultUnavailable && (
+                      <button onClick={applyAiResult} className="flex-1 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium py-2 rounded-lg transition-colors">
+                        Apply
+                      </button>
+                    )}
+                    <button onClick={() => { setAiAction(null); setAiResult(null); setAiResultUnavailable(false); savedRangeRef.current = null }} className="flex-1 border border-[#E2DED7] text-[#6B6B7E] text-[12px] font-medium py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
+                      {aiResultUnavailable ? 'Close' : 'Discard'}
                     </button>
                   </div>
                 </div>
@@ -13656,6 +13799,29 @@ export default function App() {
     triggerAutosave()
   }
 
+  const handleAuthorTopicMetadataChange = (topicId: string, metadata: AuthorTopicMetadata) => {
+    setAuthorTopicMetadata(current => {
+      const next = {
+        ...current,
+        [topicId]: {
+        ...metadata,
+        topicId,
+        provenance: {
+          ...metadata.provenance,
+          sourcesRevision,
+          evidenceExtractionRevision: evidenceIndex?.extractionRevision ?? metadata.provenance.evidenceExtractionRevision,
+          analysisBuiltAt: conceptAnalysis?.builtAt ?? metadata.provenance.analysisBuiltAt,
+          analysisRevision,
+          contentType: projectMeta.contentType,
+        },
+      },
+      }
+      authorTopicMetadataRef.current = next
+      return next
+    })
+    triggerAutosave()
+  }
+
   // Studio / Publish centralized state
   const DEFAULT_CONDITION_GROUPS: ConditionGroup[] = [
     { id: 'cg1', group: 'Audience', tags: ['Beginner', 'Advanced', 'Administrator'] },
@@ -14121,7 +14287,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
+      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
       case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
