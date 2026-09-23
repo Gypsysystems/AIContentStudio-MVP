@@ -246,6 +246,30 @@ export async function deleteProject(projectId: string): Promise<void> {
   })
 }
 
+function remapExtractionFileReferences(
+  value: unknown,
+  fileIdMap: Record<string, string>,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => remapExtractionFileReferences(item, fileIdMap))
+  }
+  if (!value || typeof value !== 'object') return value
+
+  const remapped: Record<string, unknown> = {}
+  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    if (
+      (key === 'sourceId' || key === 'fileId')
+      && typeof nestedValue === 'string'
+      && fileIdMap[nestedValue]
+    ) {
+      remapped[key] = fileIdMap[nestedValue]
+    } else {
+      remapped[key] = remapExtractionFileReferences(nestedValue, fileIdMap)
+    }
+  }
+  return remapped
+}
+
 export async function duplicateProject(sourceId: string, newName: string): Promise<ProjectRecord | null> {
   const source = await loadProject(sourceId)
   if (!source) return null
@@ -264,7 +288,20 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     newFileIdMap[sf.fileId] = newFileId
     return { ...sf, fileId: newFileId, projectId: newId }
   })
-  copy.sourceFileIds = source.sourceFileIds.map(id => newFileIdMap[id] ?? id)
+  copy.sourceFileIds = source.sourceFileIds.flatMap(id => {
+    const copiedFileId = newFileIdMap[id]
+    return copiedFileId ? [copiedFileId] : []
+  })
+  copy.sourceExtractions = Object.fromEntries(
+    Object.entries(source.sourceExtractions ?? {}).flatMap(([fileId, extraction]) => {
+      const copiedFileId = newFileIdMap[fileId]
+      if (!copiedFileId) return []
+      return [[
+        copiedFileId,
+        remapExtractionFileReferences(extraction, newFileIdMap),
+      ]]
+    }),
+  )
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     await put(ps, copy)
     for (const f of newFiles) await put(fs, f)

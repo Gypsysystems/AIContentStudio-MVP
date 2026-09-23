@@ -41,6 +41,12 @@ type StoredProject = {
   sourceExtractions: Record<string, StoredExtraction>
 }
 
+type StoredFileState = {
+  fileId: string
+  projectId: string
+  name: string
+}
+
 async function createProjectAtSources(page: Page, name: string) {
   await page.goto("/")
   await page.getByRole("button", { name: /New Project/ }).first().click()
@@ -71,6 +77,29 @@ async function readStoredState(page: Page): Promise<{
     return {
       project: projects[0],
       storedFileIds: files.map(file => file.fileId),
+    }
+  })
+}
+
+async function readAllStoredState(page: Page): Promise<{
+  projects: StoredProject[]
+  files: StoredFileState[]
+}> {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("docflow-db", 2)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const readAll = <T,>(storeName: string) =>
+      new Promise<T[]>((resolve, reject) => {
+        const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll()
+        request.onsuccess = () => resolve(request.result as T[])
+        request.onerror = () => reject(request.error)
+      })
+    return {
+      projects: await readAll<StoredProject>("projects"),
+      files: await readAll<StoredFileState>("files"),
     }
   })
 }
@@ -362,4 +391,85 @@ test("extracts structured DOCX content and page-provenance PDF text", async ({ p
   expect(pdfExtraction.blocks.map(block => block.page)).toEqual([1, 2])
   expect(pdfExtraction.blocks.every(block => block.type === "paragraph")).toBe(true)
   expect(pdfExtraction.blocks.some(block => block.headingLevel != null)).toBe(false)
+})
+
+test("duplicates extracted sources with copied file IDs and preserves searchable extraction state", async ({ page }) => {
+  test.setTimeout(60_000)
+  const projectName = `Duplicate Source ${Date.now()}`
+  const duplicateName = `${projectName} Copy`
+  const searchableText = "Duplicated project keeps this amber-orbit source searchable."
+
+  await createProjectAtSources(page, projectName)
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "duplicate-source.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from([
+      "# Duplication Evidence",
+      "",
+      searchableText,
+      "",
+      "- Preserve copied extraction links",
+    ].join("\n")),
+  })
+
+  const sourceRow = page.getByTestId("source-file-row").filter({ hasText: "duplicate-source.md" })
+  await expect(sourceRow.getByTestId("extraction-status")).toContainText("Extracted")
+
+  let originalBefore: StoredProject | undefined
+  await expect.poll(async () => {
+    const state = await readAllStoredState(page)
+    originalBefore = state.projects.find(project => project.projectName === projectName)
+    const fileId = originalBefore?.sourceFileIds[0]
+    return fileId ? originalBefore?.sourceExtractions[fileId]?.status : undefined
+  }).toBe("extracted")
+  if (!originalBefore) throw new Error("Expected original project")
+
+  const originalFileId = originalBefore.sourceFileIds[0]
+  const originalExtraction = originalBefore.sourceExtractions[originalFileId]
+  const originalBlockIds = originalExtraction.blocks.map(block => block.id)
+
+  await page.getByRole("button", { name: /Content Studio/ }).click()
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
+  await page.getByRole("button", { name: "Duplicate", exact: true }).click()
+  await expect(page.getByText(duplicateName, { exact: true })).toBeVisible()
+
+  const duplicatedState = await readAllStoredState(page)
+  const originalAfter = duplicatedState.projects.find(project => project.projectName === projectName)!
+  const duplicate = duplicatedState.projects.find(project => project.projectName === duplicateName)!
+  const duplicateFileId = duplicate.sourceFileIds[0]
+  const duplicateExtraction = duplicate.sourceExtractions[duplicateFileId]
+  const duplicateFiles = duplicatedState.files.filter(file => file.projectId === duplicate.projectId)
+
+  expect(duplicateFileId).toBeTruthy()
+  expect(duplicateFileId).not.toBe(originalFileId)
+  expect(Object.keys(duplicate.sourceExtractions)).toEqual([duplicateFileId])
+  expect(duplicateExtraction).toBeTruthy()
+  expect(duplicateExtraction.sourceId).toBe(duplicateFileId)
+  expect(duplicateExtraction.blocks.every(block => block.sourceId === duplicateFileId)).toBe(true)
+  expect(duplicateExtraction.blocks.map(block => block.id)).toEqual(originalBlockIds)
+  expect(duplicateFiles.map(file => file.fileId)).toEqual([duplicateFileId])
+  expect(duplicateFiles.every(file => file.fileId !== originalFileId)).toBe(true)
+
+  expect(originalAfter.sourceFileIds).toEqual(originalBefore.sourceFileIds)
+  expect(originalAfter.sourceExtractions).toEqual(originalBefore.sourceExtractions)
+
+  await page.getByText(duplicateName, { exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  await page.reload()
+  const duplicateRow = page.getByTestId("source-file-row").filter({ hasText: "duplicate-source.md" })
+  await expect(duplicateRow.getByTestId("extraction-status")).toContainText("Extracted")
+
+  const search = await openSearch(page)
+  await search.fill("amber-orbit")
+  await expect(page.getByText("1 match across sources")).toBeVisible()
+  await expect(page.getByText(searchableText, { exact: false })).toBeVisible()
+
+  const reloadedState = await readAllStoredState(page)
+  const reloadedDuplicate = reloadedState.projects.find(project => project.projectId === duplicate.projectId)!
+  expect(reloadedDuplicate.sourceFileIds).toEqual([duplicateFileId])
+  expect(Object.keys(reloadedDuplicate.sourceExtractions)).toEqual([duplicateFileId])
+  expect(reloadedDuplicate.sourceExtractions[duplicateFileId].sourceId).toBe(duplicateFileId)
+  expect(reloadedDuplicate.sourceExtractions[duplicateFileId].blocks.every(
+    block => block.sourceId === duplicateFileId,
+  )).toBe(true)
 })
