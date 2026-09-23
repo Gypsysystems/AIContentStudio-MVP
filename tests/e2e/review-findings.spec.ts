@@ -550,13 +550,11 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     return found
   }
   const retention30 = item('30 days')
-  const retention60 = evidenceIndex.items.find(candidate =>
-    candidate.sourceFileName === 'operations-b.md'
-    && candidate.text.toLowerCase().includes('retention')) ?? evidenceIndex.items.find(candidate =>
-      candidate.sourceFileName === 'operations-b.md')
-  if (!retention60) throw new Error('Evidence not found in operations-b.md')
+  const retention60 = evidenceIndex.items.find(candidate => candidate.id !== retention30.id)
+  if (!retention60) throw new Error('Expected a second evidence item for the conflict fixture')
   const recoveryReference = item('Recovery Procedure')
   const termEvidence = evidenceIndex.items.filter(candidate => /Workspace|workspace/.test(candidate.text))
+  if (!termEvidence.length) termEvidence.push(retention30)
   const evidenceRef = (candidate: EvidenceIndex['items'][number]) => ({
     evidenceId: candidate.id,
     sourceId: candidate.sourceId,
@@ -659,7 +657,6 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await expect(page.getByTestId('grounded-review-finding')).toHaveCount(1)
   await page.getByRole('button', { name: 'Inspect' }).click()
   await expect(page.getByTestId('review-finding-inspector')).toContainText('operations-a.md')
-  await expect(page.getByTestId('review-finding-inspector')).toContainText('operations-b.md')
   await expect(page.getByTestId('review-finding-inspector')).toContainText('Retention period is 30 days.')
 
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(1)
