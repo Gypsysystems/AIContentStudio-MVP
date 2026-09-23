@@ -153,6 +153,71 @@ test("persists an applied style profile and output template edits", async ({
   ).toBeVisible()
 })
 
+test("clears a deleted applied profile until a remaining profile is explicitly applied", async ({
+  page,
+}) => {
+  const projectName = `Profile Deletion ${Date.now()}`
+  await createProject(page, projectName)
+
+  for (const name of ["Remaining Profile", "Applied Profile"]) {
+    await page.getByRole("button", { name: "+ New" }).click()
+    const modal = page.getByRole("heading", {
+      name: "Create Brand & Style Profile",
+    }).locator("..")
+    await modal.getByRole("textbox").fill(name)
+    await modal.getByRole("button", { name: "Create", exact: true }).click()
+  }
+  await page.getByRole("button", { name: "Apply to Project", exact: true }).click()
+  await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    const applied = stored.themes.flatMap(theme => theme.styleProfiles)
+      .find(profile => profile.name === "Applied Profile")
+    return !!applied && stored.activeStyleProfileId === applied.id
+      && stored.projectMeta?.styleProfileId === applied.id
+  }).toBe(true)
+
+  page.once("dialog", dialog => dialog.accept())
+  await page.getByRole("button", { name: "Delete", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Apply to Project", exact: true })).toBeVisible()
+  const expectUnapplied = async () => {
+    await expect.poll(async () => {
+      const stored = await readOnlyProject(page)
+      return stored.activeStyleProfileId === ""
+        && stored.projectMeta?.styleProfileId === ""
+        && !stored.themes.flatMap(theme => theme.styleProfiles)
+          .some(profile => profile.name === "Applied Profile")
+    }).toBe(true)
+  }
+  await expectUnapplied()
+
+  await page.reload()
+  await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+  await page.getByRole("button", { name: /Theme$/ }).click()
+  await expect(page.getByRole("button", { name: "Apply to Project", exact: true })).toBeVisible()
+  await expectUnapplied()
+
+  await page.getByRole("textbox", { name: "Search profiles…" }).click()
+  await page.getByRole("button", { name: "Remaining Profile Reusable", exact: true }).click()
+  await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue("Remaining Profile")
+  await expect(page.getByRole("button", { name: "Apply to Project", exact: true })).toBeVisible()
+  await expectUnapplied()
+  await page.getByRole("button", { name: "Apply to Project", exact: true }).click()
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    const remaining = stored.themes.flatMap(theme => theme.styleProfiles)
+      .find(profile => profile.name === "Remaining Profile")
+    return !!remaining && stored.activeStyleProfileId === remaining.id
+      && stored.projectMeta?.styleProfileId === remaining.id
+  }).toBe(true)
+
+  await page.reload()
+  await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+  await page.getByRole("button", { name: /Theme$/ }).click()
+  await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue("Remaining Profile")
+  await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
+})
+
 for (const persistedId of [undefined, "missing-style-profile"]) {
 test(`falls back safely when the persisted style profile ID is ${persistedId === undefined ? "missing" : "invalid"}`, async ({
   page,

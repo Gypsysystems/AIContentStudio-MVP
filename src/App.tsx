@@ -2059,6 +2059,10 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, onProjectMetaCha
                     if (!confirm(`Delete "${editProfile.name}"?`)) return
                     const remaining = localProfiles.filter(p => p.id !== editId)
                     setLocalProfiles(remaining)
+                    if (editId === activeStyleProfileId) {
+                      onSetActiveStyleProfileId('')
+                      onProjectMetaChange({ styleProfileId: '' })
+                    }
                     setEditId(remaining[0]?.id ?? '')
                   }} title="Delete" className="h-8 w-8 flex items-center justify-center text-[#C8C6C0] border border-[#E2DED7] rounded-lg hover:bg-[#FEF2F2] hover:text-[#EF4444] hover:border-[#FECACA] transition-colors">
                     <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V2.5A.5.5 0 015.5 2h3a.5.5 0 01.5.5V4M5.5 6.5v4M8.5 6.5v4M3 4l.7 7.5A.5.5 0 004.2 12h5.6a.5.5 0 00.5-.5L11 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
