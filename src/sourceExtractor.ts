@@ -30,11 +30,19 @@ export type ExtractedBlock = {
   sectionPath?: string[]
   page?: number
   tableData?: string[][]
+  links?: ExtractedLink[]
+  listLevel?: number
+  orderedList?: boolean
   inferred?: boolean
 }
 
+export type ExtractedLink = {
+  text: string
+  url: string
+}
+
 export type ExtractionStatus =
-  | 'pending'
+  | 'not-extracted'
   | 'extracting'
   | 'extracted'
   | 'partial'
@@ -50,6 +58,8 @@ export type SourceExtraction = {
   extractedText: string
   warnings: string[]
   extractedAt?: number
+  sourceRevision: number
+  extractionRevision: number
   extractionError?: string
   pageCount?: number
   charCount?: number
@@ -68,19 +78,28 @@ export type EvidenceItem = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function mkId(): string {
-  return `blk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+function stableHash(value: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
 }
 
-function mkEvidenceId(): string {
-  return `ev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+function mkId(sourceId: string, order: number, type: ExtractedBlockType, text: string): string {
+  return `blk-${stableHash(`${sourceId}|${order}|${type}|${text}`)}`
+}
+
+function mkEvidenceId(sourceId: string, blockId: string): string {
+  return `ev-${stableHash(`${sourceId}|${blockId}`)}`
 }
 
 export function buildEvidence(extraction: SourceExtraction): EvidenceItem[] {
   return extraction.blocks
     .filter(b => b.text.trim().length > 10)
     .map(b => ({
-      id: mkEvidenceId(),
+      id: mkEvidenceId(b.sourceId, b.id),
       sourceId: b.sourceId,
       blockId: b.id,
       text: b.text,
