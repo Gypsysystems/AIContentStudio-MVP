@@ -13,7 +13,19 @@ import type {
 
 export type AuthorGenerationStatus = 'not-generated' | 'draft' | 'generated' | 'failed'
 export type AuthorContentOrigin = 'manual' | 'generated' | 'mixed' | 'approved'
-export type AuthorGeneratedFreshness = 'not-applicable' | 'current' | 'stale'
+export type AuthorGeneratedFreshness = 'not-applicable' | 'current' | 'stale' | 'needs-grounding'
+export type AuthorGeneratedStalenessReason =
+  | 'grounding-missing'
+  | 'sources-changed'
+  | 'extraction-changed'
+  | 'evidence-index-changed'
+  | 'analysis-changed'
+  | 'toc-changed'
+  | 'content-type-changed'
+  | 'variables-changed'
+  | 'language-changed'
+  | 'style-guidance-changed'
+  | 'grounding-changed'
 
 export type AuthorTopicMetadata = {
   topicId: string
@@ -30,10 +42,13 @@ export type AuthorTopicMetadata = {
   provenance: {
     sourcesRevision: number | null
     evidenceExtractionRevision: string | null
+    evidenceIndexBuiltAt: number | null
     analysisBuiltAt: number | null
     analysisRevision: number | null
+    tocRevision: number | null
     contentType: string
     variableSnapshot: Record<string, string>
+    variableFingerprint: string | null
     groundingContextId: string | null
     language: string
     styleProfileId: string | null
@@ -41,6 +56,7 @@ export type AuthorTopicMetadata = {
   }
   generatedAt: number | null
   generatedFreshness: AuthorGeneratedFreshness
+  generatedFreshnessReason: AuthorGeneratedStalenessReason | null
   manualEdited: boolean
   approved: boolean
   legacyHydrated: boolean
@@ -92,10 +108,13 @@ export function createManualAuthorTopicMetadata(
     provenance: {
       sourcesRevision: null,
       evidenceExtractionRevision: null,
+      evidenceIndexBuiltAt: null,
       analysisBuiltAt: null,
       analysisRevision: null,
+      tocRevision: null,
       contentType: context.contentType,
       variableSnapshot: variableSnapshot(context.variables),
+      variableFingerprint: null,
       groundingContextId: null,
       language: '',
       styleProfileId: null,
@@ -103,6 +122,7 @@ export function createManualAuthorTopicMetadata(
     },
     generatedAt: null,
     generatedFreshness: 'not-applicable',
+    generatedFreshnessReason: null,
     manualEdited: true,
     approved: false,
     legacyHydrated,
@@ -142,17 +162,24 @@ export function hydrateAuthorTopicMetadata(
           provenance: {
             sourcesRevision: provenance?.sourcesRevision ?? null,
             evidenceExtractionRevision: provenance?.evidenceExtractionRevision ?? null,
+            evidenceIndexBuiltAt: provenance?.evidenceIndexBuiltAt ?? null,
             analysisBuiltAt: provenance?.analysisBuiltAt ?? null,
             analysisRevision: provenance?.analysisRevision ?? null,
+            tocRevision: provenance?.tocRevision ?? null,
             contentType: provenance?.contentType ?? context.contentType,
             variableSnapshot: { ...(provenance?.variableSnapshot ?? {}) },
-            groundingContextId: provenance?.groundingContextId ?? metadata.draft?.groundingContextId ?? null,
+            variableFingerprint: provenance?.variableFingerprint ?? null,
+            groundingContextId: provenance?.groundingContextId
+              ?? metadata.draft?.groundingContextId
+              ?? metadata.groundingContext?.contextId
+              ?? null,
             language: provenance?.language ?? metadata.draft?.language ?? '',
             styleProfileId: provenance?.styleProfileId ?? metadata.draft?.styleProvenance.styleProfileId ?? null,
             styleFingerprint: provenance?.styleFingerprint ?? metadata.draft?.styleProvenance.styleFingerprint ?? null,
           },
           generatedAt: metadata.generatedAt ?? null,
           generatedFreshness: metadata.generatedFreshness ?? 'not-applicable',
+          generatedFreshnessReason: metadata.generatedFreshnessReason ?? null,
           manualEdited: metadata.manualEdited ?? metadata.contentOrigin !== 'generated',
           approved: metadata.approved ?? metadata.contentOrigin === 'approved',
           legacyHydrated: metadata.legacyHydrated ?? false,
@@ -196,8 +223,7 @@ export function remapAuthorTopicMetadata(
 
   return Object.fromEntries(
     Object.entries(metadata ?? {}).map(([topicId, item]) => {
-      const wasCurrent = item.generatedFreshness === 'current'
-        && !!sourceEvidenceIndex
+      const evidenceProvenanceMatchesSource = !!sourceEvidenceIndex
         && !!sourceConceptAnalysis
         && item.provenance.sourcesRevision === sourceEvidenceIndex.sourcesRevision
         && item.provenance.evidenceExtractionRevision === sourceEvidenceIndex.extractionRevision
@@ -254,17 +280,59 @@ export function remapAuthorTopicMetadata(
           blockStates: { ...(item.blockStates ?? {}) },
           provenance: {
             ...item.provenance,
-            ...(wasCurrent && copiedEvidenceIndex && copiedConceptAnalysis
+            ...(evidenceProvenanceMatchesSource && copiedEvidenceIndex && copiedConceptAnalysis
               ? {
                   sourcesRevision: copiedEvidenceIndex.sourcesRevision,
                   evidenceExtractionRevision: copiedEvidenceIndex.extractionRevision,
+                  evidenceIndexBuiltAt: copiedEvidenceIndex.builtAt,
                   analysisBuiltAt: copiedConceptAnalysis.builtAt,
                 }
               : {}),
             variableSnapshot: { ...(item.provenance?.variableSnapshot ?? {}) },
+            groundingContextId: groundingContext?.contextId ?? item.provenance.groundingContextId,
           },
         },
       ]
     }),
   )
+}
+
+export type AuthorGeneratedFreshnessEvaluation = {
+  status: AuthorGeneratedFreshness
+  reason: AuthorGeneratedStalenessReason | null
+}
+
+export function evaluateAuthorGeneratedFreshness(
+  metadata: AuthorTopicMetadata | null | undefined,
+  expectedContext: TopicGroundingContext | null,
+): AuthorGeneratedFreshnessEvaluation {
+  const hasGeneratedContent = !!metadata && (
+    metadata.generationStatus === 'generated'
+    || metadata.contentOrigin === 'generated'
+    || metadata.contentOrigin === 'mixed'
+    || metadata.contentOrigin === 'approved'
+    || !!metadata.appliedBaseline
+  )
+  if (!hasGeneratedContent) return { status: 'not-applicable', reason: null }
+  if (!metadata?.provenance.groundingContextId || !expectedContext) {
+    return { status: 'needs-grounding', reason: 'grounding-missing' }
+  }
+  const stored = metadata.provenance
+  const expected = expectedContext.provenance
+  if (stored.sourcesRevision !== expected.sourcesRevision) return { status: 'stale', reason: 'sources-changed' }
+  if (stored.evidenceExtractionRevision !== expected.evidenceExtractionRevision) return { status: 'stale', reason: 'extraction-changed' }
+  if (stored.evidenceIndexBuiltAt !== expected.evidenceIndexBuiltAt) return { status: 'stale', reason: 'evidence-index-changed' }
+  if (stored.analysisBuiltAt !== expected.analysisBuiltAt || stored.analysisRevision !== expected.analysisRevision) {
+    return { status: 'stale', reason: 'analysis-changed' }
+  }
+  if (stored.tocRevision !== expected.tocRevision) return { status: 'stale', reason: 'toc-changed' }
+  if (stored.contentType !== expected.contentType) return { status: 'stale', reason: 'content-type-changed' }
+  if (stored.variableFingerprint !== expected.variableFingerprint) return { status: 'stale', reason: 'variables-changed' }
+  if (stored.language !== expectedContext.writingGuidance.language) return { status: 'stale', reason: 'language-changed' }
+  if (stored.styleFingerprint !== expected.styleFingerprint
+    || stored.styleProfileId !== expectedContext.writingGuidance.styleProfileId) {
+    return { status: 'stale', reason: 'style-guidance-changed' }
+  }
+  if (stored.groundingContextId !== expectedContext.contextId) return { status: 'stale', reason: 'grounding-changed' }
+  return { status: 'current', reason: null }
 }

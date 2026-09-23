@@ -39,11 +39,13 @@ import {
 } from './tocProposal'
 import {
   createManualAuthorTopicMetadata,
+  evaluateAuthorGeneratedFreshness,
   hydrateAuthorTopicMetadata,
   pruneAuthorTopicMetadata,
   stableAuthorTopicId,
   type AuthorTopicMetadata,
   type AuthorTopicMetadataMap,
+  type AuthorGeneratedStalenessReason,
 } from './authorMetadata'
 import {
   buildTopicGroundingContext,
@@ -9110,6 +9112,23 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   )
   const activeProposalMatchesContent = !!activeRegenerationProposal
     && activeRegenerationProposal.currentContentFingerprint === authorContentFingerprint(docBlocks)
+  const activeGeneratedFreshness = activeAuthorMetadata?.generatedFreshness ?? 'not-applicable'
+  const freshnessReasonText: Record<AuthorGeneratedStalenessReason, string> = {
+    'grounding-missing': 'Generated content has no current grounding provenance.',
+    'sources-changed': 'Project sources changed after this content was applied.',
+    'extraction-changed': 'Source extraction changed after this content was applied.',
+    'evidence-index-changed': 'The Evidence Index was rebuilt after this content was applied.',
+    'analysis-changed': 'Grounded analysis changed after this content was applied.',
+    'toc-changed': 'The committed TOC changed after this content was applied.',
+    'content-type-changed': 'The selected content type changed.',
+    'variables-changed': 'Project variables changed.',
+    'language-changed': 'The project language changed.',
+    'style-guidance-changed': 'Applicable style or brand guidance changed.',
+    'grounding-changed': 'Topic grounding changed after this content was applied.',
+  }
+  const activeGeneratedFreshnessReason = activeAuthorMetadata?.generatedFreshnessReason
+    ? freshnessReasonText[activeAuthorMetadata.generatedFreshnessReason]
+    : null
   const availableAuthorSources: AuthorProjectSource[] = isDemoMode
     ? SOURCE_FILES.map(source => ({ fileId: `demo-source-${source.id}`, name: source.name }))
     : (projectSources ?? [])
@@ -9548,6 +9567,32 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                   Draft
                   <span className={`w-1.5 h-1.5 rounded-full ${activeDraftFresh ? 'bg-[#16A34A]' : activeDraft ? 'bg-[#D97706]' : 'bg-[#C8C6C0]'}`} />
                 </button>
+                <div
+                  data-testid="author-generated-freshness"
+                  title={activeGeneratedFreshnessReason ?? undefined}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[10px] font-semibold ${
+                    activeGeneratedFreshness === 'current'
+                      ? 'bg-[#DCFCE7] text-[#15803D]'
+                      : activeGeneratedFreshness === 'stale'
+                        ? 'bg-[#FEF3C7] text-[#B45309]'
+                        : activeGeneratedFreshness === 'needs-grounding'
+                          ? 'bg-[#FEE2E2] text-[#B91C1C]'
+                          : 'bg-[#F1F5F9] text-[#64748B]'
+                  }`}
+                >
+                  {activeGeneratedFreshness === 'current'
+                    ? 'Current'
+                    : activeGeneratedFreshness === 'stale'
+                      ? 'Stale'
+                      : activeGeneratedFreshness === 'needs-grounding'
+                        ? 'Needs grounding'
+                        : 'Manual-only'}
+                  {activeGeneratedFreshnessReason && (
+                    <span data-testid="author-generated-freshness-reason" className="font-normal max-w-[220px] truncate">
+                      · {activeGeneratedFreshnessReason}
+                    </span>
+                  )}
+                </div>
               </>
             )}
             <button
@@ -14571,6 +14616,27 @@ export default function App() {
       base.approved,
       base.blockStates,
     )
+    const hasAppliedGeneratedContent = base.generationStatus === 'generated'
+      || base.contentOrigin === 'generated'
+      || base.contentOrigin === 'mixed'
+      || base.contentOrigin === 'approved'
+      || !!base.appliedBaseline
+    const draftProvenance = {
+      ...base.provenance,
+      sourcesRevision: context.provenance.sourcesRevision,
+      evidenceExtractionRevision: context.provenance.evidenceExtractionRevision,
+      evidenceIndexBuiltAt: context.provenance.evidenceIndexBuiltAt,
+      analysisBuiltAt: context.provenance.analysisBuiltAt,
+      analysisRevision: context.provenance.analysisRevision,
+      tocRevision: context.provenance.tocRevision,
+      contentType: draft.contentType,
+      variableSnapshot: { ...draft.variableSnapshot },
+      variableFingerprint: context.provenance.variableFingerprint,
+      groundingContextId: context.contextId,
+      language: draft.language,
+      styleProfileId: draft.styleProvenance.styleProfileId,
+      styleFingerprint: draft.styleProvenance.styleFingerprint,
+    }
     setAuthorTopicMetadata(current => {
       const next = {
         ...current,
@@ -14582,21 +14648,14 @@ export default function App() {
           evidenceIds: [...draft.evidenceIdsUsed],
           sourcePaths: usedEvidence.map(item => [...item.sectionPath]),
           sourceFileIds: [...base.sourceFileIds],
-          provenance: {
-            ...base.provenance,
-            sourcesRevision: context.provenance.sourcesRevision,
-            evidenceExtractionRevision: context.provenance.evidenceExtractionRevision,
-            analysisBuiltAt: context.provenance.analysisBuiltAt,
-            analysisRevision: context.provenance.analysisRevision,
-            contentType: draft.contentType,
-            variableSnapshot: { ...draft.variableSnapshot },
-            groundingContextId: context.contextId,
-            language: draft.language,
-            styleProfileId: draft.styleProvenance.styleProfileId,
-            styleFingerprint: draft.styleProvenance.styleFingerprint,
-          },
+          provenance: hasAppliedGeneratedContent ? base.provenance : draftProvenance,
           generatedAt: draft.generatedAt,
-          generatedFreshness: 'current' as const,
+          generatedFreshness: hasAppliedGeneratedContent
+            ? base.generatedFreshness
+            : 'not-applicable' as const,
+          generatedFreshnessReason: hasAppliedGeneratedContent
+            ? base.generatedFreshnessReason
+            : null,
           approved: base.approved,
         },
       }
@@ -14756,6 +14815,23 @@ export default function App() {
               ? 'approved' as const
               : 'manual' as const,
           generatedFreshness: 'current' as const,
+          generatedFreshnessReason: null,
+          provenance: {
+            ...currentMetadata.provenance,
+            sourcesRevision: context.provenance.sourcesRevision,
+            evidenceExtractionRevision: context.provenance.evidenceExtractionRevision,
+            evidenceIndexBuiltAt: context.provenance.evidenceIndexBuiltAt,
+            analysisBuiltAt: context.provenance.analysisBuiltAt,
+            analysisRevision: context.provenance.analysisRevision,
+            tocRevision: context.provenance.tocRevision,
+            contentType: draft.contentType,
+            variableSnapshot: { ...draft.variableSnapshot },
+            variableFingerprint: context.provenance.variableFingerprint,
+            groundingContextId: context.contextId,
+            language: draft.language,
+            styleProfileId: draft.styleProvenance.styleProfileId,
+            styleFingerprint: draft.styleProvenance.styleFingerprint,
+          },
           manualEdited: hasManual,
           approved: hasGenerated,
           blockStates,
@@ -14778,23 +14854,29 @@ export default function App() {
 
   useEffect(() => {
     if (appLoading || isDemoMode) return
-    const staleTopicIds = appToc.flatMap(topic => {
+    const evaluations = new Map(appToc.map(topic => {
       const topicId = stableAuthorTopicId(topic)
       const metadata = authorTopicMetadataRef.current[topicId]
-      if (!metadata?.draft || metadata.generatedFreshness !== 'current') return []
-      return isAuthorDraftFresh(
-        metadata.draft,
-        metadata.groundingContext,
-        groundingFreshnessByTopic[topicId] ?? false,
-      ) ? [] : [topicId]
+      const expectedContext = buildTopicGroundingContext(buildGroundingInput(topic))
+      return [topicId, evaluateAuthorGeneratedFreshness(metadata, expectedContext)] as const
+    }))
+    const changed = [...evaluations].some(([topicId, evaluation]) => {
+      const metadata = authorTopicMetadataRef.current[topicId]
+      return !!metadata && (
+        metadata.generatedFreshness !== evaluation.status
+        || metadata.generatedFreshnessReason !== evaluation.reason
+      )
     })
-    if (staleTopicIds.length === 0) return
-    const staleSet = new Set(staleTopicIds)
+    if (!changed) return
     setAuthorTopicMetadata(current => {
       const next = Object.fromEntries(Object.entries(current).map(([topicId, metadata]) => [
         topicId,
-        staleSet.has(topicId)
-          ? { ...metadata, generatedFreshness: 'stale' as const }
+        evaluations.has(topicId)
+          ? {
+              ...metadata,
+              generatedFreshness: evaluations.get(topicId)!.status,
+              generatedFreshnessReason: evaluations.get(topicId)!.reason,
+            }
           : metadata,
       ]))
       authorTopicMetadataRef.current = next
@@ -14804,7 +14886,15 @@ export default function App() {
   }, [
     appLoading,
     appToc,
-    groundingFreshnessByTopic,
+    buildGroundingInput,
+    evidenceIndex,
+    conceptAnalysis,
+    projectMeta,
+    themeVariables,
+    activeStyleProfileId,
+    tocRevision,
+    sourcesRevision,
+    analysisRevision,
     isDemoMode,
     triggerAutosave,
   ])

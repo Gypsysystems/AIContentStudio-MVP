@@ -36,17 +36,21 @@ type AuthorTopicMetadata = {
   provenance: {
     sourcesRevision: number | null
     evidenceExtractionRevision: string | null
+    evidenceIndexBuiltAt: number | null
     analysisBuiltAt: number | null
     analysisRevision: number | null
+    tocRevision: number | null
     contentType: string
     variableSnapshot: Record<string, string>
+    variableFingerprint: string | null
     groundingContextId: string | null
     language: string
     styleProfileId: string | null
     styleFingerprint: string | null
   }
   generatedAt: number | null
-  generatedFreshness: "not-applicable" | "current" | "stale"
+  generatedFreshness: "not-applicable" | "current" | "stale" | "needs-grounding"
+  generatedFreshnessReason: string | null
   manualEdited: boolean
   approved: boolean
   legacyHydrated: boolean
@@ -88,10 +92,13 @@ function metadata(
     provenance: {
       sourcesRevision: null,
       evidenceExtractionRevision: null,
+      evidenceIndexBuiltAt: null,
       analysisBuiltAt: null,
       analysisRevision: null,
+      tocRevision: null,
       contentType: "user-guide",
       variableSnapshot: { product: "Orbital Console" },
+      variableFingerprint: null,
       groundingContextId: null,
       language: "",
       styleProfileId: null,
@@ -99,6 +106,7 @@ function metadata(
     },
     generatedAt: 1_700_000_000_000,
     generatedFreshness: "current",
+    generatedFreshnessReason: null,
     manualEdited: false,
     approved: false,
     legacyHydrated: false,
@@ -310,10 +318,17 @@ test("duplicates Author metadata and remaps copied source provenance consistentl
     provenance: {
       sourcesRevision: original.evidenceIndex.sourcesRevision,
       evidenceExtractionRevision: original.evidenceIndex.extractionRevision,
+      evidenceIndexBuiltAt: original.evidenceIndex.builtAt,
       analysisBuiltAt: original.conceptAnalysis.builtAt,
       analysisRevision: original.analysisRevision,
+      tocRevision: original.tocRevision ?? 0,
       contentType: original.projectMeta.contentType,
-      variableSnapshot: { product: "Orbital Console" },
+      variableSnapshot: {},
+      variableFingerprint: null,
+      groundingContextId: null,
+      language: "English",
+      styleProfileId: "",
+      styleFingerprint: null,
     },
   })
   generated.groundingContext = buildTopicGroundingContext({
@@ -333,18 +348,50 @@ test("duplicates Author metadata and remaps copied source provenance consistentl
     analysisRevision: original.analysisRevision,
     tocRevision: original.tocRevision ?? 0,
     contentType: original.projectMeta.contentType,
-    variables: [],
+    variables: [
+      { id: "v1", name: "ProductName", value: "", description: "Full product name" },
+      { id: "v2", name: "Version", value: "1.0", description: "Current version number" },
+      { id: "v3", name: "CompanyName", value: "", description: "Company or organization name" },
+      { id: "v4", name: "ReleaseDate", value: "", description: "Release date" },
+      { id: "v5", name: "SupportEmail", value: "", description: "Support contact email" },
+    ],
     selectedSourceFileIds: [originalFileId],
     writingGuidance: {
-      language: "English",
-      styleProfileId: "",
-      styleProfileName: "Default",
+      language: (original.projectMeta as any).language ?? "en-US",
+      styleProfileId: "legacy-rich-th1-bp1",
+      styleProfileName: "Presight Brand",
       styleProfileScope: "project",
       brandNames: [],
     },
   })
+  generated.provenance = {
+    ...generated.provenance,
+    sourcesRevision: generated.groundingContext.provenance.sourcesRevision,
+    evidenceExtractionRevision: generated.groundingContext.provenance.evidenceExtractionRevision,
+    evidenceIndexBuiltAt: generated.groundingContext.provenance.evidenceIndexBuiltAt,
+    analysisBuiltAt: generated.groundingContext.provenance.analysisBuiltAt,
+    analysisRevision: generated.groundingContext.provenance.analysisRevision,
+    tocRevision: generated.groundingContext.provenance.tocRevision,
+    contentType: generated.groundingContext.provenance.contentType,
+    variableSnapshot: { ...generated.groundingContext.writingGuidance.variables },
+    variableFingerprint: generated.groundingContext.provenance.variableFingerprint,
+    groundingContextId: generated.groundingContext.contextId,
+    language: generated.groundingContext.writingGuidance.language,
+    styleProfileId: generated.groundingContext.writingGuidance.styleProfileId,
+    styleFingerprint: generated.groundingContext.provenance.styleFingerprint,
+  }
   await patchProject(page, projectName, {
-    appToc: [{ id: 1, topicId: "topic-grounded", title: "Grounded", level: 1, words: 100 }],
+    appToc: [{
+      id: 1,
+      topicId: "topic-grounded",
+      title: "Grounded",
+      level: 1,
+      words: 100,
+      rationale: "Evidence-backed test topic.",
+      supportingEvidenceIds: [evidence.id],
+      sourceSectionPaths: [evidence.sectionPath ?? ["Author Grounding"]],
+      proposalKind: "evidence-backed",
+    }],
     topicContent: {
       "topic-grounded": [{ id: "grounded-h1", type: "h1", content: "Existing content" }],
     },
@@ -354,6 +401,13 @@ test("duplicates Author metadata and remaps copied source provenance consistentl
   await expect.poll(async () =>
     (await readProject(page, projectName)).authorTopicMetadata?.["topic-grounded"]?.evidenceIds,
   ).toEqual([evidence.id])
+  await expect.poll(async () => {
+    const stored = (await readProject(page, projectName)).authorTopicMetadata!["topic-grounded"]
+    return {
+      freshness: stored.generatedFreshness,
+      reason: stored.generatedFreshnessReason,
+    }
+  }).toEqual({ freshness: "current", reason: null })
   const originalWithMetadata = await readProject(page, projectName)
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
@@ -370,11 +424,20 @@ test("duplicates Author metadata and remaps copied source provenance consistentl
   expect(copied.provenance.sourcesRevision).toBe(duplicate.evidenceIndex!.sourcesRevision)
   expect(copied.provenance.evidenceExtractionRevision).toBe(duplicate.evidenceIndex!.extractionRevision)
   expect(copied.provenance.analysisBuiltAt).toBe(duplicate.conceptAnalysis!.builtAt)
-  expect(copied.provenance.variableSnapshot).toEqual({ product: "Orbital Console" })
+  expect(copied.provenance.variableSnapshot).toEqual({
+    ProductName: "",
+    Version: "1.0",
+    CompanyName: "",
+    ReleaseDate: "",
+    SupportEmail: "",
+  })
   expect((copied.groundingContext as any).requiredEvidence[0].fileId).toBe(copiedFileId)
   expect((copied.groundingContext as any).sourceExtractions[0].fileId).toBe(copiedFileId)
   expect((copied.groundingContext as any).contextId).not.toBe((generated.groundingContext as any).contextId)
-  expect(copied.generatedFreshness).toBe("current")
+  expect({
+    freshness: copied.generatedFreshness,
+    reason: copied.generatedFreshnessReason,
+  }).toEqual({ freshness: "current", reason: null })
   expect(duplicate.topicContent).toEqual(originalWithMetadata.topicContent)
   expect(duplicate.evidenceIndex!.items.every(item =>
     item.fileId === copiedFileId && item.sourceId === copiedFileId,

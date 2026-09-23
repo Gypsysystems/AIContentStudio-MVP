@@ -7,6 +7,11 @@ import {
 } from "../../src/authorDraftGeneration"
 import type { TopicGroundingContext } from "../../src/authorGroundingContext"
 import type { ConceptAnalysis } from "../../src/conceptAnalysis"
+import {
+  createManualAuthorTopicMetadata,
+  evaluateAuthorGeneratedFreshness,
+  type AuthorTopicMetadata,
+} from "../../src/authorMetadata"
 
 function grounding(overrides: Partial<TopicGroundingContext> = {}): TopicGroundingContext {
   return {
@@ -74,6 +79,7 @@ function grounding(overrides: Partial<TopicGroundingContext> = {}): TopicGroundi
     provenance: {
       sourcesRevision: 1,
       evidenceExtractionRevision: "extract-1",
+      evidenceIndexBuiltAt: 1_690_000_000_000,
       analysisBuiltAt: 1_700_000_000_000,
       analysisRevision: 4,
       tocRevision: 3,
@@ -165,6 +171,81 @@ test("builds an evidence-only deterministic draft with generation provenance and
   expect(isAuthorDraftFresh(draft, context, true)).toBe(true)
   expect(isAuthorDraftFresh(draft, { ...context, contextId: "grounding-new" }, true)).toBe(false)
   expect(isAuthorDraftFresh(draft, context, false)).toBe(false)
+})
+
+function generatedMetadata(context: TopicGroundingContext): AuthorTopicMetadata {
+  const metadata = createManualAuthorTopicMetadata(
+    context.topic.topicId,
+    { contentType: context.writingGuidance.contentType, variables: [] },
+    false,
+  )
+  return {
+    ...metadata,
+    generationStatus: "generated",
+    contentOrigin: "mixed",
+    groundingContext: context,
+    generatedFreshness: "current",
+    generatedFreshnessReason: null,
+    provenance: {
+      sourcesRevision: context.provenance.sourcesRevision,
+      evidenceExtractionRevision: context.provenance.evidenceExtractionRevision,
+      evidenceIndexBuiltAt: context.provenance.evidenceIndexBuiltAt,
+      analysisBuiltAt: context.provenance.analysisBuiltAt,
+      analysisRevision: context.provenance.analysisRevision,
+      tocRevision: context.provenance.tocRevision,
+      contentType: context.provenance.contentType,
+      variableSnapshot: { ...context.writingGuidance.variables },
+      variableFingerprint: context.provenance.variableFingerprint,
+      groundingContextId: context.contextId,
+      language: context.writingGuidance.language,
+      styleProfileId: context.writingGuidance.styleProfileId,
+      styleFingerprint: context.provenance.styleFingerprint,
+    },
+  }
+}
+
+test("evaluates every major generated-content staleness trigger without flagging manual-only content", () => {
+  const applied = grounding()
+  const metadata = generatedMetadata(applied)
+  expect(evaluateAuthorGeneratedFreshness(metadata, applied)).toEqual({
+    status: "current",
+    reason: null,
+  })
+
+  const triggers: Array<[string, TopicGroundingContext, string]> = [
+    ["sources", grounding({ contextId: "sources", provenance: { ...applied.provenance, sourcesRevision: 2 } }), "sources-changed"],
+    ["extraction", grounding({ contextId: "extraction", provenance: { ...applied.provenance, evidenceExtractionRevision: "extract-2" } }), "extraction-changed"],
+    ["evidence index", grounding({ contextId: "index", provenance: { ...applied.provenance, evidenceIndexBuiltAt: 1_700_000_000_001 } }), "evidence-index-changed"],
+    ["analysis", grounding({ contextId: "analysis", provenance: { ...applied.provenance, analysisBuiltAt: 1_700_000_000_001 } }), "analysis-changed"],
+    ["TOC", grounding({ contextId: "toc", provenance: { ...applied.provenance, tocRevision: 4 } }), "toc-changed"],
+    ["content type", grounding({ contextId: "content-type", provenance: { ...applied.provenance, contentType: "api-reference" } }), "content-type-changed"],
+    ["variables", grounding({ contextId: "variables", provenance: { ...applied.provenance, variableFingerprint: "variables-2" } }), "variables-changed"],
+    ["language", grounding({ contextId: "language", writingGuidance: { ...applied.writingGuidance, language: "Arabic" } }), "language-changed"],
+    ["style", grounding({ contextId: "style", provenance: { ...applied.provenance, styleFingerprint: "style-2" } }), "style-guidance-changed"],
+  ]
+  for (const [label, expectedContext, reason] of triggers) {
+    expect(evaluateAuthorGeneratedFreshness(metadata, expectedContext), label).toEqual({
+      status: "stale",
+      reason,
+    })
+  }
+
+  const manual = createManualAuthorTopicMetadata(
+    "topic-manual",
+    { contentType: "runbook", variables: [] },
+    true,
+  )
+  expect(evaluateAuthorGeneratedFreshness(manual, triggers[0][1])).toEqual({
+    status: "not-applicable",
+    reason: null,
+  })
+  expect(evaluateAuthorGeneratedFreshness({
+    ...metadata,
+    provenance: { ...metadata.provenance, groundingContextId: null },
+  }, applied)).toEqual({
+    status: "needs-grounding",
+    reason: "grounding-missing",
+  })
 })
 
 test("creates warning-only output when a current topic has no supporting evidence", () => {
@@ -367,7 +448,7 @@ test("persists a reviewable draft without overwriting manual content and applies
   expect(persisted.topicContent).toEqual(manualContent)
   expect(persisted.authorTopicMetadata["topic-access"]).toMatchObject({
     generationStatus: "draft",
-    generatedFreshness: "current",
+    generatedFreshness: "not-applicable",
     approved: false,
     evidenceIds: [required.id],
     draft: {
@@ -446,6 +527,8 @@ test("persists a reviewable draft without overwriting manual content and applies
   await page.getByTestId("author-draft-toggle").click()
   await expect(page.getByTestId("author-draft-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("apply-author-draft")).toBeDisabled()
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Stale")
+  await expect(page.getByTestId("author-generated-freshness-reason")).toContainText("content type changed")
   expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
 
   await page.getByTestId("author-draft-toggle").click()
@@ -457,6 +540,7 @@ test("persists a reviewable draft without overwriting manual content and applies
   await page.getByTestId("regenerate-author-draft").click()
 
   await expect(page.getByTestId("author-regeneration-diff")).toBeVisible()
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Stale")
   await expect(page.locator('[data-diff-status="manually-edited"]').filter({ hasText: manuallyEditedText }))
     .toBeVisible()
   await expect(page.locator('[data-diff-status="protected"]').filter({ hasText: "Reference details" }))

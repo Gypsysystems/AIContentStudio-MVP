@@ -65,6 +65,7 @@ export type TopicGroundingContext = {
   provenance: {
     sourcesRevision: number
     evidenceExtractionRevision: string
+    evidenceIndexBuiltAt: number | null
     analysisBuiltAt: number | null
     analysisRevision: number
     tocRevision: number
@@ -326,6 +327,9 @@ export function buildTopicGroundingContext(
       evidenceExtractionRevision: evidenceFresh
         ? input.evidenceIndex?.extractionRevision ?? ''
         : '',
+      evidenceIndexBuiltAt: evidenceFresh
+        ? input.evidenceIndex?.builtAt ?? null
+        : null,
       analysisBuiltAt: analysis?.builtAt ?? null,
       analysisRevision: input.analysisRevision,
       tocRevision: input.tocRevision,
@@ -374,6 +378,7 @@ export function remapTopicGroundingContext(
       ...context.provenance,
       sourcesRevision: copiedEvidenceIndex?.sourcesRevision ?? context.provenance.sourcesRevision,
       evidenceExtractionRevision: copiedEvidenceIndex?.extractionRevision ?? context.provenance.evidenceExtractionRevision,
+      evidenceIndexBuiltAt: copiedEvidenceIndex?.builtAt ?? context.provenance.evidenceIndexBuiltAt,
       analysisBuiltAt: copiedConceptAnalysis?.builtAt ?? context.provenance.analysisBuiltAt,
     },
   }
