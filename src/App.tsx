@@ -77,10 +77,16 @@ export type Theme = {
 type OutputVariant = { id: string; name: string; themeId: string; styleProfileId: string; templatePackId: string; formats: ('pdf' | 'word' | 'html')[]; conditions: string[] }
 export type ProjectMeta = { themeId: string; styleProfileId: string; templatePackId: string; language: string; version: string; contentType: string; themeCustomized?: boolean }
 type PageLayoutZoneElement = { id: string; label: string; alignment: 'left' | 'center' | 'right'; visible: boolean }
+type PageLayoutBrandOverrides = {
+  bgColor?: string
+}
 type PageLayout = {
   id: string; name: string; clientId: string; layoutType: 'cover' | 'content' | 'chapter' | 'custom'
   pageSize: 'A4' | 'Letter'; orientation: 'portrait' | 'landscape'
   marginTop: number; marginBottom: number; marginLeft: number; marginRight: number; bgColor: string
+  // Undefined means a legacy layout whose stored bgColor remains authoritative.
+  // An object means brand inheritance is enabled; only listed values are local overrides.
+  brandOverrides?: PageLayoutBrandOverrides
   topZone: PageLayoutZoneElement[]; centerZone: PageLayoutZoneElement[]; bottomZone: PageLayoutZoneElement[]
   headerZone: PageLayoutZoneElement[]; footerZone: PageLayoutZoneElement[]
 }
@@ -254,6 +260,40 @@ export function resolveEffectiveStyleProfile({
   return SAFE_DEFAULT_STYLE_PROFILE
 }
 
+type ResolvedPageLayoutPresentation = {
+  bgColor: string
+  headingColor: string
+  bodyColor: string
+  borderColor: string
+  headingFont: string
+  bodyFont: string
+  logoDataUrl?: string
+  logoLabel: string
+}
+
+const resolvePageLayoutPresentation = (
+  layout: PageLayout,
+  profile: StyleProfile,
+): ResolvedPageLayoutPresentation => {
+  const inheritedBackground = layout.layoutType === 'cover' || layout.layoutType === 'chapter'
+    ? profile.primaryColor ?? profile.bgColor ?? '#FFFFFF'
+    : profile.bgColor ?? '#FFFFFF'
+  const legacyBackgroundOverride = layout.brandOverrides === undefined
+    ? layout.bgColor
+    : undefined
+
+  return {
+    bgColor: layout.brandOverrides?.bgColor ?? legacyBackgroundOverride ?? inheritedBackground,
+    headingColor: profile.headingTextColor ?? profile.h1.color,
+    bodyColor: profile.bodyTextColor ?? profile.body.color,
+    borderColor: profile.borderColorToken ?? profile.tables.borderColor,
+    headingFont: profile.headingFont ?? profile.h1.fontFamily,
+    bodyFont: profile.bodyFont ?? profile.body.fontFamily,
+    logoDataUrl: profile.logoDataUrl,
+    logoLabel: profile.logoLabel ?? profile.name.slice(0, 6).toUpperCase(),
+  }
+}
+
 const INITIAL_THEMES: Theme[] = [
   {
     id: 'th1', name: 'Presight', description: 'Clean, modern documentation with Presight brand identity',
@@ -315,7 +355,7 @@ const mkZoneEl = (id: string, label: string, alignment: 'left' | 'center' | 'rig
 const INITIAL_PAGE_LAYOUTS: PageLayout[] = [
   {
     id: 'pl1', name: 'Presight Standard Cover', clientId: 'th1', layoutType: 'cover',
-    pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#1D4ED8',
+    pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#1D4ED8', brandOverrides: {},
     topZone: [mkZoneEl('logo', 'Logo', 'left')],
     centerZone: [mkZoneEl('title', 'Document Title', 'center'), mkZoneEl('subtitle', 'Subtitle', 'center'), mkZoneEl('product', 'Product Name', 'center')],
     bottomZone: [mkZoneEl('version', 'Version', 'left'), mkZoneEl('date', 'Date', 'left'), mkZoneEl('conf', 'Confidentiality', 'right')],
@@ -323,7 +363,7 @@ const INITIAL_PAGE_LAYOUTS: PageLayout[] = [
   },
   {
     id: 'pl2', name: 'Presight Standard Content', clientId: 'th1', layoutType: 'content',
-    pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#FFFFFF',
+    pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#FFFFFF', brandOverrides: {},
     topZone: [], centerZone: [], bottomZone: [],
     headerZone: [mkZoneEl('logo', 'Logo', 'left'), mkZoneEl('chaptertitle', 'Chapter Title', 'center'), mkZoneEl('version', 'Version', 'right')],
     footerZone: [mkZoneEl('copyright', 'Copyright', 'left'), mkZoneEl('conf', 'Confidentiality', 'center'), mkZoneEl('pagenum', 'Page Number', 'right')],
@@ -1275,6 +1315,29 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
   const [editLayoutId, setEditLayoutId] = useState<string>(pageLayouts[0]?.id ?? '')
   const editLayout = pageLayouts.find(pl => pl.id === editLayoutId) ?? pageLayouts[0]
   const patchLayout = (patch: Partial<PageLayout>) => onPageLayoutsChange(pageLayouts.map(pl => pl.id === editLayoutId ? { ...pl, ...patch } : pl))
+  const patchLayoutBrandOverride = (patch: PageLayoutBrandOverrides) => {
+    if (!editLayout) return
+    const existingOverrides = editLayout.brandOverrides ?? { bgColor: editLayout.bgColor }
+    patchLayout({ brandOverrides: { ...existingOverrides, ...patch }, ...('bgColor' in patch && patch.bgColor ? { bgColor: patch.bgColor } : {}) })
+  }
+  const resetLayoutBackgroundToBrand = () => {
+    if (!editLayout) return
+    const { bgColor: _removed, ...remainingOverrides } = editLayout.brandOverrides ?? {}
+    patchLayout({ brandOverrides: remainingOverrides })
+  }
+  const resolvedLayoutPresentation = editLayout
+    ? resolvePageLayoutPresentation(editLayout, effectiveStyleProfile)
+    : null
+  const layoutBackgroundIsOverridden = !!editLayout && (
+    editLayout.brandOverrides === undefined
+    || editLayout.brandOverrides.bgColor !== undefined
+  )
+  const appliedBrandColors = [
+    effectiveStyleProfile.primaryColor,
+    effectiveStyleProfile.secondaryColor,
+    effectiveStyleProfile.accentColor,
+    effectiveStyleProfile.bgColor,
+  ].filter(Boolean) as string[]
   const [layoutSubTab, setLayoutSubTab] = useState<'cover' | 'content'>('cover')
   // Inline rename for layout
   const [renamingLayoutId, setRenamingLayoutId] = useState<string | null>(null)
@@ -2814,28 +2877,26 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
           <div className="col-span-3 space-y-4">
 
             {/* Brand color sync banner */}
-            {editProfile && brandColors.length > 0 && (
+            {appliedBrandColors.length > 0 && (
               <div className="bg-[#F5F4FF] border border-[#C7C5F4] rounded-xl px-4 py-3 flex items-center gap-3">
                 <div className="flex gap-1 flex-shrink-0">
-                  {brandColors.slice(0, 4).map((c, i) => (
+                  {appliedBrandColors.slice(0, 4).map((c, i) => (
                     <div key={i} className="w-3.5 h-3.5 rounded-sm border border-white/50 shadow-sm" style={{ backgroundColor: c }} />
                   ))}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[11px] font-semibold text-[#3D3D4E]">Brand colors from <span className="text-[#5B5BD6]">{editProfile.name}</span></p>
-                  <p className="text-[10px] text-[#9898AB]">Apply to all cover and content page backgrounds</p>
+                  <p className="text-[11px] font-semibold text-[#3D3D4E]">Layout defaults from <span className="text-[#5B5BD6]">{effectiveStyleProfile.name}</span></p>
+                  <p className="text-[10px] text-[#9898AB]">Inherited values update when the applied Brand Profile changes</p>
                 </div>
                 <button
                   onClick={() => {
-                    const primaryCol = editProfile.primaryColor ?? brandColors[0]
-                    const bgCol = editProfile.bgColor ?? '#FFFFFF'
-                    onPageLayoutsChange(pageLayouts.map(pl => ({
-                      ...pl,
-                      bgColor: (pl.layoutType === 'cover' || pl.layoutType === 'chapter') ? primaryCol : bgCol,
-                    })))
+                    onPageLayoutsChange(pageLayouts.map(pl => {
+                      const { bgColor: _removed, ...remainingOverrides } = pl.brandOverrides ?? {}
+                      return { ...pl, brandOverrides: remainingOverrides }
+                    }))
                   }}
                   className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold text-[#5B5BD6] bg-white border border-[#C7C5F4] rounded-lg hover:bg-[#EEEEFF] transition-colors whitespace-nowrap">
-                  Sync All
+                  Reset All to Brand
                 </button>
               </div>
             )}
@@ -2865,7 +2926,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   <button onClick={() => {
                     const newPl: PageLayout = {
                       id: `pl${Date.now()}`, name: 'New Layout', clientId: projectMeta?.themeId || 'th1', layoutType: 'cover',
-                      pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#FFFFFF',
+                      pageSize: 'A4', orientation: 'portrait', marginTop: 25, marginBottom: 25, marginLeft: 25, marginRight: 25, bgColor: '#FFFFFF', brandOverrides: {},
                       topZone: [], centerZone: [], bottomZone: [], headerZone: [], footerZone: [],
                     }
                     onPageLayoutsChange([...pageLayouts, newPl])
@@ -2929,23 +2990,34 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-[10px] text-[#9898AB] uppercase tracking-wide">Background Color</label>
-                      {brandColors.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span data-testid="layout-background-source" className={`text-[9px] font-medium ${layoutBackgroundIsOverridden ? 'text-[#D97706]' : 'text-[#16A34A]'}`}>
+                          {layoutBackgroundIsOverridden ? 'Layout override' : 'Inherited from Brand'}
+                        </span>
+                        {layoutBackgroundIsOverridden && (
+                          <button onClick={resetLayoutBackgroundToBrand}
+                            className="text-[9px] font-semibold text-[#5B5BD6] hover:text-[#4A4AC4]">
+                            Reset to Brand
+                          </button>
+                        )}
+                      </div>
+                      {appliedBrandColors.length > 0 && (
                         <div className="flex items-center gap-1">
                           <span className="text-[9px] text-[#9898AB]">Brand:</span>
                           {([
-                            [editProfile?.primaryColor, 'Primary'],
-                            [editProfile?.accentColor, 'Accent'],
-                            [editProfile?.bgColor, 'Bg'],
+                            [effectiveStyleProfile.primaryColor, 'Primary'],
+                            [effectiveStyleProfile.accentColor, 'Accent'],
+                            [effectiveStyleProfile.bgColor, 'Bg'],
                           ] as [string | undefined, string][]).filter(([c]) => !!c).map(([c, label]) => (
                             <button key={label} title={`Use ${label} (${c})`}
-                              onClick={() => patchLayout({ bgColor: c! })}
-                              className={`w-4 h-4 rounded border-2 transition-all hover:scale-110 ${editLayout.bgColor === c ? 'border-[#5B5BD6] shadow-sm' : 'border-white shadow-sm'}`}
+                              onClick={() => patchLayoutBrandOverride({ bgColor: c! })}
+                              className={`w-4 h-4 rounded border-2 transition-all hover:scale-110 ${resolvedLayoutPresentation?.bgColor === c ? 'border-[#5B5BD6] shadow-sm' : 'border-white shadow-sm'}`}
                               style={{ backgroundColor: c }} />
                           ))}
                         </div>
                       )}
                     </div>
-                    <ColorPicker value={editLayout.bgColor} onChange={v => patchLayout({ bgColor: v })} brandColors={brandColors} />
+                    <ColorPicker value={resolvedLayoutPresentation?.bgColor ?? editLayout.bgColor} onChange={v => patchLayoutBrandOverride({ bgColor: v })} brandColors={appliedBrandColors} />
                   </div>
                 </div>
 
@@ -2992,49 +3064,65 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
             {editLayout && (
               <div>
                 {(editLayout.layoutType === 'cover' || editLayout.layoutType === 'chapter') ? (
-                  <div className="rounded-xl overflow-hidden border border-[#E2DED7] shadow-sm flex flex-col"
-                    style={{ aspectRatio: editLayout.orientation === 'landscape' ? '297/210' : '210/297', backgroundColor: editLayout.bgColor, padding: `${editLayout.marginTop * 0.7}px ${editLayout.marginLeft * 0.7}px`, minHeight: 260 }}>
-                    <div className="border border-white/20 rounded-lg p-2 mb-2 min-h-[40px]">
-                      <p className="text-white/50 text-[8px] uppercase tracking-wide mb-1">Top</p>
+                  <div data-testid="page-layout-preview"
+                    data-background-color={resolvedLayoutPresentation?.bgColor}
+                    data-heading-color={resolvedLayoutPresentation?.headingColor}
+                    data-heading-font={resolvedLayoutPresentation?.headingFont}
+                    data-body-font={resolvedLayoutPresentation?.bodyFont}
+                    className="rounded-xl overflow-hidden border shadow-sm flex flex-col"
+                    style={{ aspectRatio: editLayout.orientation === 'landscape' ? '297/210' : '210/297', backgroundColor: resolvedLayoutPresentation?.bgColor, borderColor: resolvedLayoutPresentation?.borderColor, color: resolvedLayoutPresentation?.bodyColor, fontFamily: resolvedLayoutPresentation?.bodyFont, padding: `${editLayout.marginTop * 0.7}px ${editLayout.marginLeft * 0.7}px`, minHeight: 260 }}>
+                    <div className="border rounded-lg p-2 mb-2 min-h-[40px]" style={{ borderColor: resolvedLayoutPresentation?.borderColor }}>
+                      <p className="text-[8px] uppercase tracking-wide mb-1 opacity-60">Top</p>
                       <div className="flex gap-1 flex-wrap">
                         {editLayout.topZone.filter(e => e.visible).map(e => (
-                          <span key={e.id} className="text-white text-[9px] font-medium bg-white/20 px-1.5 py-0.5 rounded">{e.label}</span>
+                          e.label.toLowerCase().includes('logo')
+                            ? resolvedLayoutPresentation?.logoDataUrl
+                              ? <img key={e.id} src={resolvedLayoutPresentation.logoDataUrl} alt={resolvedLayoutPresentation.logoLabel} className="h-5 max-w-20 object-contain" />
+                              : <span key={e.id} className="text-[9px] font-bold px-1.5 py-0.5 rounded border" style={{ borderColor: resolvedLayoutPresentation?.borderColor }}>{resolvedLayoutPresentation?.logoLabel}</span>
+                            : <span key={e.id} className="text-[9px] font-medium px-1.5 py-0.5 rounded">{e.label}</span>
                         ))}
                       </div>
                     </div>
-                    <div className="flex-1 border border-white/20 rounded-lg p-2 my-1 flex flex-col justify-center">
-                      <p className="text-white/50 text-[8px] uppercase tracking-wide mb-1">Center</p>
+                    <div className="flex-1 border rounded-lg p-2 my-1 flex flex-col justify-center" style={{ borderColor: resolvedLayoutPresentation?.borderColor }}>
+                      <p className="text-[8px] uppercase tracking-wide mb-1 opacity-60">Center</p>
                       {editLayout.centerZone.filter(e => e.visible).map(e => (
-                        <div key={e.id} className={`text-white font-${e.label === 'Document Title' ? 'bold text-[14px]' : 'normal text-[9px]'} text-${e.alignment} mb-0.5`}>{e.label}</div>
+                        <div key={e.id} className={`${e.label === 'Document Title' ? 'font-bold text-[14px]' : 'font-normal text-[9px]'} text-${e.alignment} mb-0.5`}
+                          style={e.label === 'Document Title' || e.label.includes('Title') ? { color: resolvedLayoutPresentation?.headingColor, fontFamily: resolvedLayoutPresentation?.headingFont } : undefined}>{e.label}</div>
                       ))}
                     </div>
-                    <div className="border border-white/20 rounded-lg p-2 mt-2 min-h-[40px]">
-                      <p className="text-white/50 text-[8px] uppercase tracking-wide mb-1">Bottom</p>
+                    <div className="border rounded-lg p-2 mt-2 min-h-[40px]" style={{ borderColor: resolvedLayoutPresentation?.borderColor }}>
+                      <p className="text-[8px] uppercase tracking-wide mb-1 opacity-60">Bottom</p>
                       <div className="flex gap-1 flex-wrap">
                         {editLayout.bottomZone.filter(e => e.visible).map(e => (
-                          <span key={e.id} className="text-white/70 text-[8px] bg-white/10 px-1.5 py-0.5 rounded">{e.label}</span>
+                          <span key={e.id} className="text-[8px] px-1.5 py-0.5 rounded opacity-80">{e.label}</span>
                         ))}
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-xl overflow-hidden border border-[#E2DED7] shadow-sm bg-white"
-                    style={{ aspectRatio: editLayout.orientation === 'landscape' ? '297/210' : '210/297', minHeight: 260 }}>
-                    <div className="border-b border-[#E2DED7] px-4 py-2 flex items-center gap-2">
+                  <div data-testid="page-layout-preview"
+                    data-background-color={resolvedLayoutPresentation?.bgColor}
+                    data-heading-color={resolvedLayoutPresentation?.headingColor}
+                    data-heading-font={resolvedLayoutPresentation?.headingFont}
+                    data-body-font={resolvedLayoutPresentation?.bodyFont}
+                    className="rounded-xl overflow-hidden border shadow-sm"
+                    style={{ aspectRatio: editLayout.orientation === 'landscape' ? '297/210' : '210/297', minHeight: 260, backgroundColor: resolvedLayoutPresentation?.bgColor, borderColor: resolvedLayoutPresentation?.borderColor, color: resolvedLayoutPresentation?.bodyColor, fontFamily: resolvedLayoutPresentation?.bodyFont }}>
+                    <div className="border-b px-4 py-2 flex items-center gap-2" style={{ borderColor: resolvedLayoutPresentation?.borderColor }}>
                       {editLayout.headerZone.filter(e => e.visible).map(e => (
-                        <span key={e.id} className={`text-[9px] text-[#6B6B7E] ${e.alignment === 'right' ? 'ml-auto' : e.alignment === 'center' ? 'mx-auto' : ''}`}>{e.label}</span>
+                        e.label.toLowerCase().includes('logo')
+                          ? resolvedLayoutPresentation?.logoDataUrl
+                            ? <img key={e.id} src={resolvedLayoutPresentation.logoDataUrl} alt={resolvedLayoutPresentation.logoLabel} className={`h-4 max-w-16 object-contain ${e.alignment === 'right' ? 'ml-auto' : e.alignment === 'center' ? 'mx-auto' : ''}`} />
+                            : <span key={e.id} className={`text-[9px] font-bold ${e.alignment === 'right' ? 'ml-auto' : e.alignment === 'center' ? 'mx-auto' : ''}`}>{resolvedLayoutPresentation?.logoLabel}</span>
+                          : <span key={e.id} className={`text-[9px] ${e.alignment === 'right' ? 'ml-auto' : e.alignment === 'center' ? 'mx-auto' : ''}`}>{e.label}</span>
                       ))}
                     </div>
                     <div className="px-4 py-3 flex-1">
-                      <div className="h-1.5 bg-[#F4F2EE] rounded w-2/3 mb-2" />
-                      <div className="h-1 bg-[#F4F2EE] rounded w-full mb-1" />
-                      <div className="h-1 bg-[#F4F2EE] rounded w-4/5 mb-1" />
-                      <div className="h-1 bg-[#F4F2EE] rounded w-full mb-1" />
-                      <div className="h-1 bg-[#F4F2EE] rounded w-3/4" />
+                      <p className="text-[13px] font-bold mb-2" style={{ color: resolvedLayoutPresentation?.headingColor, fontFamily: resolvedLayoutPresentation?.headingFont }}>Document Heading</p>
+                      <p className="text-[9px] leading-relaxed" style={{ color: resolvedLayoutPresentation?.bodyColor, fontFamily: resolvedLayoutPresentation?.bodyFont }}>Body content inherits its font and text color from the applied Brand Profile.</p>
                     </div>
-                    <div className="border-t border-[#E2DED7] px-4 py-2 flex items-center gap-2">
+                    <div className="border-t px-4 py-2 flex items-center gap-2" style={{ borderColor: resolvedLayoutPresentation?.borderColor }}>
                       {editLayout.footerZone.filter(e => e.visible).map(e => (
-                        <span key={e.id} className={`text-[9px] text-[#9898AB] ${e.alignment === 'right' ? 'ml-auto' : e.alignment === 'center' ? 'mx-auto' : ''}`}>{e.label}</span>
+                        <span key={e.id} className={`text-[9px] opacity-70 ${e.alignment === 'right' ? 'ml-auto' : e.alignment === 'center' ? 'mx-auto' : ''}`}>{e.label}</span>
                       ))}
                     </div>
                   </div>

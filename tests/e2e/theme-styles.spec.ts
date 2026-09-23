@@ -586,3 +586,101 @@ test("resolves rich profiles by project, active, then active-theme priority acro
   expect(reloaded.pageLayouts).toEqual(stored.pageLayouts)
   expect(reloaded.htmlMasterPages).toEqual(stored.htmlMasterPages)
 })
+
+test("page layouts inherit the applied profile while preserving and resetting local overrides", async ({
+  page,
+}) => {
+  test.setTimeout(90_000)
+  await createProject(page, `Layout Brand Inheritance ${Date.now()}`)
+
+  const profiles = [
+    { name: "Layout Brand A", primaryColor: "#C2410C", headingFont: "Georgia", bodyFont: "Verdana" },
+    { name: "Layout Brand B", primaryColor: "#0369A1", headingFont: "Arial", bodyFont: "Tahoma" },
+  ]
+
+  const createStyledProfile = async (profile: typeof profiles[number]) => {
+    await page.getByRole("button", { name: "+ New" }).click()
+    const modal = page.getByRole("heading", {
+      name: "Create Brand & Style Profile",
+    }).locator("..")
+    await modal.getByRole("textbox").fill(profile.name)
+    await modal.getByRole("button", { name: "Create", exact: true }).click()
+
+    await page.getByRole("button", { name: "Colors", exact: true }).click()
+    const primaryRow = page.getByText("Primary", { exact: true }).locator("..")
+    await primaryRow.getByRole("button").first().click()
+    await primaryRow.locator("input").fill(profile.primaryColor)
+    await primaryRow.getByRole("button", { name: "Apply", exact: true }).click()
+    await page.getByRole("button", { name: "Save Colors" }).click()
+
+    await page.getByRole("button", { name: "Typography", exact: true }).click()
+    await chooseFont(page, "Heading Font", profile.headingFont)
+    await chooseFont(page, "Body Font", profile.bodyFont)
+    await page.getByRole("button", { name: "Save Typography" }).click()
+  }
+
+  const selectAndApplyProfile = async (profile: typeof profiles[number]) => {
+    await page.getByRole("textbox", { name: "Search profiles…" }).click()
+    await page.getByRole("button", { name: new RegExp(`^${profile.name}`) }).click()
+    await page.getByRole("button", { name: "Apply to Project", exact: true }).click()
+    await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
+  }
+
+  const expectLayoutPreview = async (profile: typeof profiles[number], background: string) => {
+    const preview = page.getByTestId("page-layout-preview")
+    await expect(preview).toHaveAttribute("data-background-color", background)
+    await expect(preview).toHaveAttribute("data-heading-color", /^#[0-9A-Fa-f]{6}$/)
+    await expect(preview).toHaveAttribute("data-heading-font", profile.headingFont)
+    await expect(preview).toHaveAttribute("data-body-font", profile.bodyFont)
+  }
+
+  await createStyledProfile(profiles[0])
+  await page.getByRole("button", { name: "Apply to Project", exact: true }).click()
+  await page.getByRole("button", { name: "Output Templates", exact: true }).click()
+  await expect(page.getByTestId("layout-background-source")).toHaveText("Inherited from Brand")
+  await expectLayoutPreview(profiles[0], profiles[0].primaryColor)
+
+  await page.getByRole("button", { name: "Brand & Style", exact: true }).click()
+  await createStyledProfile(profiles[1])
+  await page.getByRole("button", { name: "Apply to Project", exact: true }).click()
+  await page.getByRole("button", { name: "Output Templates", exact: true }).click()
+  await expectLayoutPreview(profiles[1], profiles[1].primaryColor)
+
+  await page.getByTitle(`Use Primary (${profiles[1].primaryColor})`).click()
+  await expect(page.getByTestId("layout-background-source")).toHaveText("Layout override")
+
+  await page.getByRole("button", { name: "Brand & Style", exact: true }).click()
+  await selectAndApplyProfile(profiles[0])
+  await page.getByRole("button", { name: "Output Templates", exact: true }).click()
+  await expectLayoutPreview(profiles[0], profiles[1].primaryColor)
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    return stored.pageLayouts.find(layout => layout.layoutType === "cover")?.brandOverrides
+  }).toEqual({ bgColor: profiles[1].primaryColor })
+
+  await page.reload()
+  await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.getByRole("button", { name: "Output Templates", exact: true }).click()
+  await expect(page.getByTestId("layout-background-source")).toHaveText("Layout override")
+  await expectLayoutPreview(profiles[0], profiles[1].primaryColor)
+
+  await page.getByRole("button", { name: "Reset to Brand", exact: true }).click()
+  await expect(page.getByTestId("layout-background-source")).toHaveText("Inherited from Brand")
+  await expectLayoutPreview(profiles[0], profiles[0].primaryColor)
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    return stored.pageLayouts.find(layout => layout.layoutType === "cover")?.brandOverrides
+  }).toEqual({})
+
+  await page.reload()
+  await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.getByRole("button", { name: "Output Templates", exact: true }).click()
+  await expect(page.getByTestId("layout-background-source")).toHaveText("Inherited from Brand")
+  await expectLayoutPreview(profiles[0], profiles[0].primaryColor)
+
+  const stored = await readOnlyProject(page)
+  const cover = stored.pageLayouts.find(layout => layout.layoutType === "cover")
+  expect(cover?.brandOverrides).toEqual({})
+})
