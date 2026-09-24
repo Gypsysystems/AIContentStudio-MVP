@@ -222,12 +222,18 @@ async function extractPdfText(file: File): Promise<{
     for (const item of items) {
       const x = item.transform[4]
       const y = item.transform[5]
-      const fontName = item.fontName?.replace(/^[A-Z]{6}\+/, '').trim()
-      if (fontName && item.str.trim().length > 3 && fontName.length > 2) {
-        pdfFontNameSet.add(fontName)
+      const internalFontName = item.fontName?.trim()
+      const metadataFontFamily = internalFontName
+        ? content.styles[internalFontName]?.fontFamily?.trim()
+        : undefined
+      const fontFamily = metadataFontFamily && metadataFontFamily !== internalFontName
+        ? normalizeFamily(metadataFontFamily)
+        : undefined
+      if (fontFamily && item.str.trim().length > 3 && fontFamily.length > 2) {
+        pdfFontNameSet.add(fontFamily)
       }
       if (item.str.trim()) {
-        pagePositioned.push({ str: item.str, x, y, fontName })
+        pagePositioned.push({ str: item.str, x, y, fontName: fontFamily })
       }
     }
     positionedItems.push(pagePositioned)
