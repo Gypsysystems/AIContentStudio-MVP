@@ -179,10 +179,12 @@ const INVALID_FONT_CANDIDATES = new Set([
   '100', '200', '300', '400', '500', '600', '700', '800', '900',
 ])
 
+const GENERIC_FONT_FAMILIES = new Set(['sans-serif', 'serif', 'monospace'])
+
 function isValidFontFamily(value: string): boolean {
   if (!value || value.length < 2) return false
   const lower = value.toLowerCase().trim()
-  if (INVALID_FONT_CANDIDATES.has(lower)) return false
+  if (INVALID_FONT_CANDIDATES.has(lower) || GENERIC_FONT_FAMILIES.has(lower)) return false
   // Must contain at least one letter, not be all digits/punctuation
   if (!/[a-zA-Z]/.test(value)) return false
   // Must be 2+ chars
@@ -226,8 +228,11 @@ async function extractPdfText(file: File): Promise<{
       const metadataFontFamily = internalFontName
         ? content.styles[internalFontName]?.fontFamily?.trim()
         : undefined
-      const fontFamily = metadataFontFamily && metadataFontFamily !== internalFontName
+      const candidateFontFamily = metadataFontFamily && metadataFontFamily !== internalFontName
         ? normalizeFamily(metadataFontFamily)
+        : undefined
+      const fontFamily = candidateFontFamily && isValidFontFamily(candidateFontFamily)
+        ? candidateFontFamily
         : undefined
       if (fontFamily && item.str.trim().length > 3 && fontFamily.length > 2) {
         pdfFontNameSet.add(fontFamily)
@@ -601,10 +606,12 @@ export function extractFonts(
   const seen = new Set<string>()
 
   const addFont = (family: string, role: string, snippet: string, method: ExtractedFont['detectionMethod'], confidence: ExtractedFont['confidence']) => {
-    const key = family.toLowerCase()
-    if (seen.has(key) || family.length < 2) return
+    const normalizedFamily = normalizeFamily(family)
+    if (!isValidFontFamily(normalizedFamily)) return
+    const key = normalizedFamily.toLowerCase()
+    if (seen.has(key)) return
     seen.add(key)
-    results.push({ id: `fnt-${results.length}`, family, suggestedRole: role, sourceSnippet: snippet, detectionMethod: method, confidence })
+    results.push({ id: `fnt-${results.length}`, family: normalizedFamily, suggestedRole: role, sourceSnippet: snippet, detectionMethod: method, confidence })
   }
 
   // ── Strategy 1: Explicit prose patterns ("Heading font: Inter") ────────────
