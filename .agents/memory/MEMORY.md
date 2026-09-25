@@ -14,3 +14,4 @@
 - [Review-to-Author navigation](review-author-navigation.md) — treat locating and focusing an authored block as a read-only operation; guard stale IDs first.
 - [Review suggestion boundary](review-suggestion-boundary.md) — only exact deterministic spelling diffs can edit Author text; decisions and history remain separate from content.
 - [Brand guideline font evidence](brand-guideline-font-evidence.md) — map font families to typography roles only from explicit document evidence; metadata cannot fill unresolved roles.
+- [Publish snapshot boundary](publish-snapshot-boundary.md) — export uses a read-only committed-TOC projection; never infer project content from the active Author document.

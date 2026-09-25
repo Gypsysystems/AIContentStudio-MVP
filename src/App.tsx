@@ -87,6 +87,7 @@ import {
   buildGroundedReviewRun,
   markReviewHistoryFreshness,
 } from './reviewFindings'
+import { buildPublishProjection, flattenPublishBlocks, type PublishProjection } from './publishProjection'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -190,6 +191,7 @@ type Snippet = { id: string; name: string; content: string }
 type ConditionGroup = { id: string; group: string; tags: string[] }
 type DocComment = { id: string; blockId: string; anchor: string; text: string; resolved: boolean }
 type PublishConfig = { selectedFormats: string[]; activeVariant: string }
+type ProjectPublishProjection = PublishProjection<DocBlock, StyleProfile, BrandProfile, PageLayout, HtmlMasterPage, OutputTemplatePack>
 type ProjectSource = { fileId: string; file: File }
 type AuthorProjectSource = { fileId: string; name: string }
 
@@ -13567,26 +13569,19 @@ function PreviewScreen({ onNav, isDemoMode, projectName, toc, topicContent }: {
 }
 
 // ── Screen: Export ────────────────────────────────────────────────────────────
-function PublishScreen({ onNav, themes, projectMeta, projectName, variables, htmlMasterPages, pageLayouts, getDocBlocks, toc, masterAssignments, reviewStaleContent, publishConfig, onPublishConfigChange }: {
+function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, onPublishConfigChange }: {
   onNav: (s: Screen) => void
-  themes: Theme[]
-  projectMeta: ProjectMeta
-  projectName: string
-  variables?: Variable[]
-  htmlMasterPages: HtmlMasterPage[]
-  pageLayouts: PageLayout[]
-  getDocBlocks: () => DocBlock[]
-  toc?: TocItem[]
-  masterAssignments?: Record<number, string>
+  projection: ProjectPublishProjection
   reviewStaleContent?: boolean
   publishConfig?: PublishConfig
   onPublishConfigChange?: (pc: PublishConfig) => void
 }) {
-  const allProfiles = themes.flatMap(t => t.styleProfiles)
-  const activeTheme = themes.find(t => t.id === projectMeta.themeId) ?? themes[0]
-  const activeProfile = allProfiles.find(p => p.id === projectMeta.styleProfileId) ?? allProfiles[0]
-  const activeBrand = activeTheme?.brandProfiles[0]
-  const activePack = activeTheme?.outputTemplatePacks.find(p => p.id === projectMeta.templatePackId) ?? activeTheme?.outputTemplatePacks[0]
+  const { projectName, pageLayouts, htmlMasters: htmlMasterPages } = projection
+  const activeTheme = projection.theme
+  const activeProfile = projection.styleProfile
+  const activeBrand = projection.legacyBrandProfile
+  const activePack = projection.templatePack
+  const blocks = flattenPublishBlocks(projection)
 
   const selectedFormats = (publishConfig?.selectedFormats ?? ['pdf', 'word', 'html']) as ('pdf' | 'word' | 'html')[]
   const setSelectedFormats = (updater: ('pdf'|'word'|'html')[] | ((prev: ('pdf'|'word'|'html')[]) => ('pdf'|'word'|'html')[])) => {
@@ -13611,20 +13606,9 @@ function PublishScreen({ onNav, themes, projectMeta, projectName, variables, htm
 
   const safeFilename = projectName.replace(/[^a-zA-Z0-9 ._-]/g, '').trim().replace(/\s+/g, '-') || 'Document'
 
-  // Resolve variables in text
-  const resolveVars = (text: string) => {
-    let out = text
-    for (const v of variables ?? []) {
-      out = out.replace(new RegExp(`\\{\\{${v.name}\\}\\}`, 'g'), v.value)
-    }
-    return out
-  }
-
-  // Flatten doc blocks into a clean representation
-  const buildContent = () => {
-    const blocks = getDocBlocks()
-    return blocks.map(b => ({ ...b, content: resolveVars(b.content ?? '') }))
-  }
+  // Existing renderers still call this helper; all fields were resolved by the
+  // projection, so re-substituting here would corrupt nested values.
+  const resolveVars = (text: string) => text
 
   const step = async (msg: string, ms = 300) => {
     setGenStep(msg)
@@ -14088,7 +14072,6 @@ ${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${ne
   }
 
   const handleGenerate = async () => {
-    const blocks = buildContent()
     const newBlobs: Partial<Record<'pdf' | 'word' | 'html', Blob>> = {}
     const newErrors: Partial<Record<'pdf' | 'word' | 'html', string>> = {}
     setBlobs({})
@@ -14143,25 +14126,14 @@ ${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${ne
     html: { label: 'HTML', icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3l1.5 10L8 14.5l4.5-1.5L14 3H2z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/><path d="M5 6h6M4.5 9.5l1.5.5 1-3 1 3 1.5-.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>, desc: 'Web-ready, responsive', color: '#059669' },
   }
 
-  // Variable validation
-  const blocks = getDocBlocks()
-  const varPattern = /\{\{(\w+)\}\}/g
-  const unresolvedVars = new Set<string>()
-  const knownVarNames = new Set((variables ?? []).map(v => v.name))
-  for (const b of blocks) {
-    const text = b.content ?? ''
-    let m: RegExpExecArray | null
-    while ((m = varPattern.exec(text)) !== null) {
-      if (!knownVarNames.has(m[1])) unresolvedVars.add(m[1])
-    }
-  }
+  const unresolvedVars = new Set(projection.unresolvedVariables.map(warning => warning.name))
   const hasUnresolvedVars = unresolvedVars.size > 0
 
   // ── Shared resolved config — single source of truth for BOTH preview and generation ──
-  const homeMaster = htmlMasterPages.find(m => m.masterType === 'home') ?? htmlMasterPages[0]
-  const topicMaster = htmlMasterPages.find(m => m.masterType === 'topic') ?? htmlMasterPages[1]
-  const coverLayout = pageLayouts.find(pl => pl.layoutType === 'cover') ?? pageLayouts[0]
-  const contentLayout = pageLayouts.find(pl => pl.layoutType === 'content') ?? pageLayouts[1]
+  const homeMaster = projection.homeMaster
+  const topicMaster = projection.defaultTopicMaster
+  const coverLayout = projection.coverLayout
+  const contentLayout = projection.contentLayout
 
   const cfg = {
     primary: activeBrand?.primaryColor ?? '#5B5BD6',
@@ -16143,7 +16115,23 @@ export default function App() {
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
-      case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
+      case 'publish': {
+        const theme = themes.find(t => t.id === projectMeta.themeId) ?? themes[0]
+        const projection = buildPublishProjection({
+          projectName: displayName,
+          topics: appToc,
+          topicContent,
+          masterAssignments,
+          variables: getThemeVars(projectMeta.themeId),
+          theme: theme ? { id: theme.id, name: theme.name } : null,
+          styleProfile: effectiveStyleProfile,
+          legacyBrandProfile: theme?.brandProfiles[0] ?? null,
+          templatePack: theme?.outputTemplatePacks.find(pack => pack.id === projectMeta.templatePackId) ?? theme?.outputTemplatePacks[0] ?? null,
+          pageLayouts,
+          htmlMasters: htmlMasterPages,
+        })
+        return <PublishScreen onNav={navigate} projection={projection} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
+      }
       default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
     }
   }
