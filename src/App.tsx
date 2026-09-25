@@ -62,6 +62,7 @@ import {
   type AuthorDraftDiff,
   type AuthorTopicDraft,
 } from './authorDraftGeneration'
+import { initializeAcceptedTopicDrafts } from './authorInitialDraft'
 import {
   searchAuthorTopicContent,
   type AuthorSearchResult,
@@ -8602,7 +8603,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
     setTitleSuggestions([])
     setTopicAiContent(null)
     setTopicAiWarning(null)
-    setTopicMode('choose')
+    setTopicMode(existing?.length && authorTopicMetadata?.[nextKey]?.contentOrigin === 'generated'
+      ? 'write'
+      : 'choose')
   }
 
   // Suggest titles based on the style of existing topic titles
@@ -9132,7 +9135,18 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   )
   const activeProposalMatchesContent = !!activeRegenerationProposal
     && activeRegenerationProposal.currentContentFingerprint === authorContentFingerprint(docBlocks)
-  const activeGeneratedFreshness = activeAuthorMetadata?.generatedFreshness ?? 'not-applicable'
+  const initialTopicNeedsGrounding = !!activeTopic
+    && !!activeGroundingContext
+    && activeAuthorMetadata?.generationStatus === 'not-generated'
+    && (activeTopic.hasGap
+      || activeGroundingContext.evidenceStatus !== 'available'
+      || !activeGroundingContext.requiredEvidence.some(item =>
+        evidenceIndex?.items.some(evidence =>
+          evidence.id === item.evidenceId && evidence.blockType !== 'heading')))
+    && docBlocks.every(block => block.type === 'h1' && block.content === activeTopic.title)
+  const activeGeneratedFreshness = initialTopicNeedsGrounding
+    ? 'needs-grounding'
+    : activeAuthorMetadata?.generatedFreshness ?? 'not-applicable'
   const freshnessReasonText: Record<AuthorGeneratedStalenessReason, string> = {
     'grounding-missing': 'Generated content has no current grounding provenance.',
     'sources-changed': 'Project sources changed after this content was applied.',
@@ -9629,7 +9643,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                     : activeGeneratedFreshness === 'stale'
                       ? 'Stale'
                       : activeGeneratedFreshness === 'needs-grounding'
-                        ? 'Needs grounding'
+                        ? 'Needs Grounding'
                         : 'Manual-only'}
                   {activeGeneratedFreshnessReason && (
                     <span data-testid="author-generated-freshness-reason" className="font-normal max-w-[220px] truncate">
@@ -15573,9 +15587,45 @@ export default function App() {
 
   const handleCommitTocProposal = useCallback((items: TocItem[], proposal: TocProposal, mergedExisting: boolean) => {
     const normalized = normalizeTopicIds(items)
+    const nextRevision = tocRevision + 1
+    const initialized = initializeAcceptedTopicDrafts({
+      topics: normalized,
+      previousTopicIds: new Set(appToc.map(stableAuthorTopicId)),
+      topicContent: topicContentRef.current,
+      authorMetadata: authorTopicMetadataRef.current,
+      metadataContext: authorMetadataContext(),
+      evidenceIndex,
+      canGenerate: !isDemoMode && evidenceFresh && conceptAnalysisFresh,
+      contextFor: topic => {
+        const input = buildGroundingInput(topic)
+        const sourceFileIds = [...new Set((topic.supportingEvidenceIds ?? [])
+          .map(id => evidenceIndex?.items.find(item => item.id === id)?.fileId)
+          .filter((id): id is string => !!id))]
+        return buildTopicGroundingContext({
+          ...input,
+          tocRevision: nextRevision,
+          selectedSourceFileIds: sourceFileIds,
+        })
+      },
+      toBlock: (block, id): DocBlock => ({
+        id,
+        type: block.type,
+        content: block.content,
+        ...(block.type === 'callout'
+          ? { calloutVariant: block.calloutVariant === 'warning' ? 'warning' as const : 'note' as const }
+          : {}),
+      }),
+    })
     setAppToc(normalized)
-    setAuthorTopicMetadata(current => pruneAuthorTopicMetadata(current, normalized))
-    setTocRevision(revision => revision + 1)
+    if (initialized.generatedCount > 0) {
+      topicContentRef.current = initialized.topicContent
+      setTopicContent(initialized.topicContent)
+      setContentRevision(revision => revision + 1)
+    }
+    const nextMetadata = pruneAuthorTopicMetadata(initialized.authorMetadata, normalized)
+    authorTopicMetadataRef.current = nextMetadata
+    setAuthorTopicMetadata(nextMetadata)
+    setTocRevision(nextRevision)
     setTocGeneratedFromEvidenceSourcesRevision(proposal.evidenceSourcesRevision)
     setTocGeneratedFromEvidenceExtractionRevision(proposal.evidenceExtractionRevision)
     setTocGeneratedFromConceptBuiltAt(proposal.groundedAnalysisBuiltAt)
@@ -15583,7 +15633,17 @@ export default function App() {
     setTocHumanModified(mergedExisting)
     setTocProposal(null)
     triggerAutosave()
-  }, [triggerAutosave])
+  }, [
+    appToc,
+    authorMetadataContext,
+    buildGroundingInput,
+    conceptAnalysisFresh,
+    evidenceFresh,
+    evidenceIndex,
+    isDemoMode,
+    tocRevision,
+    triggerAutosave,
+  ])
 
   // ── Startup: check for active project or show dashboard ───────────────────
   useEffect(() => {

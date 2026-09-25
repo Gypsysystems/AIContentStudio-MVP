@@ -6,6 +6,8 @@ import {
   type AuthorAppliedBaseline,
 } from "../../src/authorDraftGeneration"
 import type { TopicGroundingContext } from "../../src/authorGroundingContext"
+import type { EvidenceIndex } from "../../src/evidenceIndex"
+import { initializeAcceptedTopicDrafts } from "../../src/authorInitialDraft"
 import type { ConceptAnalysis } from "../../src/conceptAnalysis"
 import {
   createManualAuthorTopicMetadata,
@@ -90,6 +92,76 @@ function grounding(overrides: Partial<TopicGroundingContext> = {}): TopicGroundi
     ...overrides,
   }
 }
+
+test("initial drafts write only new empty topics with substantive required evidence", () => {
+  const topics = [
+    { id: 1, topicId: "fresh", title: "Fresh", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["evidence-required"] },
+    { id: 2, topicId: "manual", title: "Manual", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["evidence-required"] },
+    { id: 3, topicId: "legacy", title: "Legacy", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["evidence-required"] },
+    { id: 4, topicId: "approved", title: "Approved", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["evidence-required"] },
+    { id: 5, topicId: "mixed", title: "Mixed", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["evidence-required"] },
+    { id: 6, topicId: "existing", title: "Existing", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["evidence-required"] },
+    { id: 7, topicId: "heading-only", title: "Heading", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["heading"] },
+    { id: 8, topicId: "missing", title: "Missing", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["missing-evidence"] },
+    { id: 9, topicId: "structural", title: "Structural", proposalKind: "optional-structural" as const, supportingEvidenceIds: [] },
+    { id: 10, topicId: "gap", title: "Gap", proposalKind: "evidence-backed" as const, supportingEvidenceIds: ["evidence-required"], hasGap: true },
+  ]
+  const content = {
+    manual: [{ id: "manual-body", type: "para", content: "Writer's content." }],
+    "3": [{ id: "legacy-body", type: "para", content: "Legacy content." }],
+  }
+  const base = createManualAuthorTopicMetadata("approved", { contentType: "runbook", variables: [] }, false)
+  const metadata = {
+    approved: { ...base, generationStatus: "generated" as const, contentOrigin: "approved" as const, approved: true },
+    mixed: { ...base, topicId: "mixed", contentOrigin: "mixed" as const },
+  }
+  const evidenceIndex = {
+    items: [
+      { id: "evidence-required", fileId: "file-real", sourceId: "file-real", blockId: "block-1", sourceFileName: "operations.md", text: "Quarterly access reviews are required.", blockType: "paragraph" as const, order: 1, location: "Access" },
+      { id: "heading", fileId: "file-real", sourceId: "file-real", blockId: "block-2", sourceFileName: "operations.md", text: "Access", blockType: "heading" as const, order: 2, location: "Access" },
+    ],
+    sourcesRevision: 1, extractionRevision: "extract-1", builtAt: 1,
+  } satisfies EvidenceIndex
+  const result = initializeAcceptedTopicDrafts({
+    topics,
+    previousTopicIds: new Set(["existing"]),
+    topicContent: content,
+    authorMetadata: metadata,
+    metadataContext: { contentType: "runbook", variables: [] },
+    evidenceIndex,
+    canGenerate: true,
+    contextFor: topic => grounding({
+      contextId: `context-${topic.topicId}`,
+      topic: { ...grounding().topic, topicId: topic.topicId, title: topic.title },
+      evidenceStatus: topic.topicId === "missing" ? "unavailable" : topic.topicId === "structural" ? "no-supporting-evidence" : "available",
+      requiredEvidence: topic.topicId === "heading-only"
+        ? [{ ...grounding().requiredEvidence[0], evidenceId: "heading" }]
+        : topic.topicId === "missing" || topic.topicId === "structural"
+          ? []
+          : grounding().requiredEvidence,
+    }),
+    toBlock: (block, id) => ({ id, type: block.type, content: block.content }),
+  })
+  expect(result.generatedCount).toBe(1)
+  expect(result.topicContent.fresh.some(block => block.type === "para"
+    && block.content.includes("quarterly access reviews"))).toBe(true)
+  expect(result.authorMetadata.fresh).toMatchObject({
+    generationStatus: "generated",
+    contentOrigin: "generated",
+    approved: false,
+    generatedFreshness: "current",
+    appliedBaseline: { groundingContextId: "context-fresh" },
+  })
+  expect(result.topicContent.manual).toEqual(content.manual)
+  expect(result.topicContent["3"]).toEqual(content["3"])
+  for (const topicId of ["legacy", "approved", "mixed", "existing", "heading-only", "missing", "structural", "gap"]) {
+    expect(result.topicContent[topicId]).toBeUndefined()
+  }
+  expect(result.authorMetadata.approved).toEqual(metadata.approved)
+  expect(result.authorMetadata.mixed).toEqual(metadata.mixed)
+  expect(result.authorMetadata["heading-only"].groundingContext).toBeTruthy()
+  expect(result.authorMetadata.missing.generationStatus).toBe("not-generated")
+})
 
 async function createProject(page: Page, projectName: string) {
   await page.goto("/")

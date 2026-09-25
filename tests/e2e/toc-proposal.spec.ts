@@ -33,6 +33,19 @@ type StoredProject = {
   tocGeneratedFromEvidenceExtractionRevision: string
   tocGeneratedFromConceptBuiltAt: number
   tocGeneratedFromContentType: string
+  topicContent: Record<string, Array<{ id: string; type: string; content: string }>>
+  authorTopicMetadata: Record<string, {
+    generationStatus: string
+    generatedFreshness: string
+    contentOrigin: string
+    approved: boolean
+    draft?: { draftId: string; method: string; evidenceIdsUsed: string[] }
+    groundingContext?: { contextId: string }
+    appliedBaseline?: { draftId: string; blocks: Array<{ sourceBlockId: string; appliedBlockId: string }> }
+    provenance?: { tocRevision: number; groundingContextId: string }
+    blockStates?: Record<string, string>
+  }>
+  tocRevision: number
 }
 
 async function createGroundedProject(page: Page, projectName: string) {
@@ -248,6 +261,9 @@ test("requires confirmation and preserves committed topics when merging a later 
   await expect.poll(async () => (await readProject(page, projectName)).appToc.length).toBeGreaterThan(0)
   const before = await readProject(page, projectName)
   const beforeIds = before.appToc.map(item => `${item.id}:${item.topicId}:${item.title}`)
+  const beforeContent = structuredClone(before.topicContent)
+  const beforeDrafts = Object.fromEntries(Object.entries(before.authorTopicMetadata)
+    .map(([id, metadata]) => [id, metadata.draft?.draftId]))
 
   await page.getByTestId("generate-grounded-toc").click()
   await page.getByTestId("manual-topic-title").fill("Release validation")
@@ -263,6 +279,81 @@ test("requires confirmation and preserves committed topics when merging a later 
   expect(after.appToc.slice(0, beforeIds.length).map(item => `${item.id}:${item.topicId}:${item.title}`)).toEqual(beforeIds)
   expect(after.appToc.filter(item => item.title === "Understand Flight Operations")).toHaveLength(1)
   expect(after.appToc.some(item => item.title === "Release validation")).toBe(true)
+  expect(after.topicContent).toEqual(beforeContent)
+  for (const [id, draftId] of Object.entries(beforeDrafts)) {
+    expect(after.authorTopicMetadata[id]?.draft?.draftId).toBe(draftId)
+  }
+})
+
+test("committing evidence-backed topics opens editable initial drafts without filling unsupported topics", async ({ page }) => {
+  test.setTimeout(90_000)
+  const projectName = `Initial grounded drafts ${Date.now()}`
+  await createGroundedProject(page, projectName)
+  await page.getByTestId("generate-grounded-toc").click()
+  await page.getByTestId("manual-topic-title").fill("Operator checklist")
+  await page.getByTestId("add-manual-topic").click()
+  await page.getByTestId("commit-toc-proposal").click()
+  await expect.poll(async () => (await readProject(page, projectName)).appToc.length).toBeGreaterThan(0)
+  await expect.poll(async () => (await readProject(page, projectName)).tocProposal).toBeNull()
+
+  let stored = await readProject(page, projectName)
+  const supported = stored.appToc.find(topic =>
+    topic.topicId && stored.authorTopicMetadata[topic.topicId]?.generationStatus === "generated")
+  expect(supported, JSON.stringify(stored.appToc.map(topic => ({
+    title: topic.title,
+    id: topic.topicId,
+    kind: topic.proposalKind,
+    evidence: topic.supportingEvidenceIds,
+    metadata: topic.topicId ? stored.authorTopicMetadata[topic.topicId]?.generationStatus : null,
+  })))).toBeDefined()
+  const topicId = supported!.topicId!
+  const metadata = stored.authorTopicMetadata[topicId]
+  const blocks = stored.topicContent[topicId]
+  expect(blocks.some(block => block.type === "para"
+    && /Flight Operations|Access Control|Token Rotation/.test(block.content))).toBe(true)
+  expect(metadata).toMatchObject({
+    generationStatus: "generated",
+    generatedFreshness: "current",
+    contentOrigin: "generated",
+    approved: false,
+    draft: { method: "deterministic-evidence-draft-v1" },
+    provenance: { tocRevision: stored.tocRevision, groundingContextId: metadata.groundingContext!.contextId },
+    appliedBaseline: { draftId: metadata.draft!.draftId },
+  })
+  expect(metadata.draft!.evidenceIdsUsed.length).toBeGreaterThan(0)
+  expect(metadata.appliedBaseline!.blocks).toHaveLength(blocks.length)
+  expect(Object.values(metadata.blockStates!)).toEqual(blocks.map(() => "generated"))
+
+  const unsupported = stored.appToc.find(topic => topic.title === "Operator checklist")
+  expect(unsupported?.topicId).toBeTruthy()
+  expect(stored.topicContent[unsupported!.topicId!]).toBeUndefined()
+  expect(stored.authorTopicMetadata[unsupported!.topicId!]?.generationStatus).toBe("not-generated")
+
+  await page.getByRole("button", { name: /Author/ }).click()
+  await page.locator(`[title="${supported!.title} — double-click to open"]`).dispatchEvent("dblclick")
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Current")
+  await expect(page.getByText(blocks.find(block => block.type === "para")!.content, { exact: true }).first()).toBeVisible()
+  await page.locator(`[title="${unsupported!.title} — double-click to open"]`).dispatchEvent("dblclick")
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Needs Grounding")
+  await expect.poll(async () =>
+    (await readProject(page, projectName)).topicContent[unsupported!.topicId!]?.filter(block => block.type !== "h1").length ?? 0,
+  ).toBe(0)
+
+  await page.reload()
+  stored = await readProject(page, projectName)
+  expect(stored.topicContent[topicId]).toEqual(blocks)
+  expect(stored.authorTopicMetadata[topicId].draft?.draftId).toBe(metadata.draft?.draftId)
+  expect(stored.authorTopicMetadata[topicId].generatedFreshness).toBe("current")
+
+  await page.getByRole("button", { name: /Content Studio/ }).click()
+  await page.getByRole("button", { name: "Duplicate", exact: true }).click()
+  const duplicateName = `${projectName} Copy`
+  await expect.poll(async () => (await readProject(page, duplicateName))
+    .authorTopicMetadata[topicId]?.generatedFreshness).toBe("current")
+  const duplicate = await readProject(page, duplicateName)
+  expect(duplicate.topicContent[topicId]).toEqual(blocks)
+  expect(duplicate.authorTopicMetadata[topicId].draft?.method).toBe("deterministic-evidence-draft-v1")
+  expect(duplicate.authorTopicMetadata[topicId].draft?.evidenceIdsUsed).toEqual(metadata.draft?.evidenceIdsUsed)
 })
 
 test("marks an uncommitted proposal stale after source evidence changes", async ({ page }) => {
