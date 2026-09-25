@@ -19,3 +19,4 @@
 - [PDF font fidelity](pdf-font-fidelity.md) — map typography to bundled PDF fonts or a supported configured fallback; never imply unprovided fonts were embedded.
 - [Conditional export safety](preview-disclosure-boundary.md) — HTML fails closed without audience context; bind downloadable outputs to the selected audience and snapshot.
 - [Local-to-cloud persistence boundary](local-cloud-persistence-boundary.md) — preserve legacy missing-field defaults and single-flight hydration when introducing guarded repository writes.
+- [Local backup restore boundary](local-backup-restore-boundary.md) — checksummed archives need pre-write hydration checks and destination file-set guards, not only revision guards.

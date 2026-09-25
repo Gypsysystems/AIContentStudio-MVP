@@ -28,7 +28,9 @@ import {
   remapReviewModelForDuplicate,
   type ReviewModel,
 } from './reviewModel'
-import { CURRENT_PROJECT_SCHEMA_VERSION, migrateProjectRecord } from './projectMigrations'
+import {
+  CURRENT_PROJECT_SCHEMA_VERSION, migrateProjectRecord, validateRestorableProjectRecord,
+} from './projectMigrations'
 
 export const SCHEMA_VERSION = CURRENT_PROJECT_SCHEMA_VERSION
 export { migrateProjectRecord, UnsupportedProjectSchemaError } from './projectMigrations'
@@ -48,6 +50,15 @@ export type StoredFile = {
   uploadedAt: number
   blob: Blob
 }
+
+export type ProjectSnapshot = {
+  record: ProjectRecord
+  files: StoredFile[]
+}
+
+export type RestoreProjectSnapshotOptions =
+  | { mode: 'new' }
+  | { mode: 'replace'; expectedRevision: number; expectedFileIds: string[] }
 
 export type ProjectRecord = {
   projectId: string
@@ -159,10 +170,20 @@ function tx(
     const storeList = Array.isArray(stores) ? stores : [stores]
     const t = db.transaction(storeList, mode)
     const storeObjects = storeList.map(s => t.objectStore(s))
-    fn(storeObjects).catch(reject)
-    t.oncomplete = () => resolve()
-    t.onerror = () => reject(t.error)
-    t.onabort = () => reject(new Error('Transaction aborted'))
+    let operationError: unknown
+    void fn(storeObjects).catch(error => {
+      operationError = error
+      try {
+        t.abort()
+      } catch {
+        // The transaction may already have aborted because of a request error.
+      }
+    })
+    t.oncomplete = () => operationError ? reject(operationError) : resolve()
+    t.onerror = () => {
+      // Wait for abort so an operation error can be surfaced without masking it.
+    }
+    t.onabort = () => reject(operationError ?? t.error ?? new Error('Transaction aborted'))
   })
 }
 
@@ -316,6 +337,20 @@ export async function loadProject(projectId: string): Promise<ProjectRecord | nu
   return result ?? null
 }
 
+export async function loadProjectSnapshot(projectId: string): Promise<ProjectSnapshot | null> {
+  const db = await openDB()
+  let snapshot: ProjectSnapshot | null = null
+  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readonly', async ([ps, fs]) => {
+    const raw = await getByKey<ProjectRecord>(ps, projectId)
+    if (!raw) return
+    snapshot = {
+      record: migrateProjectRecord(raw).record,
+      files: await getAllByIndex<StoredFile>(fs, 'projectId', projectId),
+    }
+  })
+  return snapshot
+}
+
 export async function listProjects(): Promise<ProjectSummary[]> {
   const db = await openDB()
   let records: ProjectRecord[] = []
@@ -361,29 +396,19 @@ function remapExtractionFileReferences(
   return remapped
 }
 
-export async function duplicateProject(sourceId: string, newName: string): Promise<ProjectRecord | null> {
-  const db = await openDB()
-  const snapshot: { source: ProjectRecord | null; files: StoredFile[] } = { source: null, files: [] }
-  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readonly', async ([ps, fs]) => {
-    const raw = await getByKey<ProjectRecord>(ps, sourceId)
-    if (!raw) return
-    snapshot.source = migrateProjectRecord(raw).record
-    snapshot.files = await getAllByIndex<StoredFile>(fs, 'projectId', sourceId)
-  })
-  const source = snapshot.source
-  if (!source) return null
-  const now = Date.now()
-  const newId = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+function createProjectCopySnapshot(
+  snapshot: ProjectSnapshot,
+  newId: string,
+  newName: string,
+  now: number,
+  newFileIdMap: Record<string, string>,
+): ProjectSnapshot {
+  const source = snapshot.record
   const copy: ProjectRecord = { ...source, projectId: newId, projectName: newName,
     schemaVersion: SCHEMA_VERSION, recordRevision: 0, createdAt: now, modifiedAt: now }
-  // Deep-copy file blobs for new project
-  const sourceFiles = snapshot.files
-  const newFileIdMap: Record<string, string> = {}
-  const newFiles: StoredFile[] = sourceFiles.map(sf => {
-    const newFileId = `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    newFileIdMap[sf.fileId] = newFileId
-    return { ...sf, fileId: newFileId, projectId: newId }
-  })
+  const newFiles: StoredFile[] = snapshot.files.map(sf => ({
+    ...sf, fileId: newFileIdMap[sf.fileId], projectId: newId,
+  }))
   copy.sourceFileIds = source.sourceFileIds.flatMap(id => {
     const copiedFileId = newFileIdMap[id]
     return copiedFileId ? [copiedFileId] : []
@@ -480,6 +505,154 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     newId,
     newFileIdMap,
   )
+  return { record: copy, files: newFiles }
+}
+
+function validateProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
+  if (!snapshot || !snapshot.record || typeof snapshot.record !== 'object')
+    throw new Error('Project backup is missing its project record.')
+  const record = migrateProjectRecord(snapshot.record).record
+  validateRestorableProjectRecord(record)
+  if (!record.projectId || typeof record.projectName !== 'string')
+    throw new Error('Project backup is missing its project identity.')
+  if (!Array.isArray(snapshot.files))
+    throw new Error('Project backup is missing its file list.')
+
+  const fileIds = new Set<string>()
+  const files = snapshot.files.map(file => {
+    if (!file || typeof file.fileId !== 'string' || !file.fileId)
+      throw new Error('Project backup contains a file with an invalid ID.')
+    if (fileIds.has(file.fileId))
+      throw new Error(`Project backup contains duplicate file ID "${file.fileId}".`)
+    fileIds.add(file.fileId)
+    if (file.projectId !== record.projectId)
+      throw new Error(`File "${file.fileId}" belongs to a different project.`)
+    if (!file.blob || typeof file.blob.slice !== 'function'
+      || !Number.isSafeInteger(file.size) || file.size < 0 || file.blob.size !== file.size)
+      throw new Error(`File "${file.fileId}" has missing or inconsistent binary data.`)
+    return { ...file }
+  })
+
+  if (!Array.isArray(record.sourceFileIds))
+    throw new Error('Project record has an invalid source file list.')
+  const sourceFileIds = new Set<string>()
+  for (const fileId of record.sourceFileIds) {
+    if (typeof fileId !== 'string' || !fileId || sourceFileIds.has(fileId))
+      throw new Error('Project record contains an invalid or duplicate source file reference.')
+    sourceFileIds.add(fileId)
+    if (!fileIds.has(fileId))
+      throw new Error(`Required source file "${fileId}" is missing from the backup.`)
+  }
+  return { record, files }
+}
+
+function freshId(prefix: string): string {
+  const randomId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+  return `${prefix}-${randomId}`
+}
+
+export async function restoreProjectSnapshot(
+  input: ProjectSnapshot,
+  options: RestoreProjectSnapshotOptions,
+): Promise<ProjectRecord> {
+  const snapshot = validateProjectSnapshot(input)
+  const db = await openDB()
+
+  if (options.mode === 'new') {
+    const now = Date.now()
+    const newId = freshId('project')
+    const newFileIdMap: Record<string, string> = Object.create(null) as Record<string, string>
+    for (const file of snapshot.files) newFileIdMap[file.fileId] = freshId('file')
+    const restored = createProjectCopySnapshot(
+      snapshot,
+      newId,
+      `${snapshot.record.projectName} (Restored)`,
+      now,
+      newFileIdMap,
+    )
+    await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
+      if (await getByKey<ProjectRecord>(ps, restored.record.projectId))
+        throw new Error(`A project with generated ID "${restored.record.projectId}" already exists.`)
+      for (const file of restored.files) {
+        if (await getByKey<StoredFile>(fs, file.fileId))
+          throw new Error(`A file with generated ID "${file.fileId}" already exists.`)
+      }
+      await put(ps, restored.record)
+      for (const file of restored.files) await put(fs, file)
+    })
+    return restored.record
+  }
+
+  if (options.mode !== 'replace')
+    throw new Error('Unsupported project restore mode.')
+  if (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)
+    throw new Error('Expected project revision must be a nonnegative integer.')
+  if (!Array.isArray(options.expectedFileIds) ||
+    options.expectedFileIds.some(id => typeof id !== 'string' || !id) ||
+    new Set(options.expectedFileIds).size !== options.expectedFileIds.length)
+    throw new Error('Replacement requires a valid snapshot of the destination files.')
+
+  let restored: ProjectRecord | null = null
+  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
+    const previous = await getByKey<ProjectRecord>(ps, snapshot.record.projectId)
+    if (!previous)
+      throw new Error(`Project "${snapshot.record.projectId}" does not exist; replacement was not performed.`)
+    const current = migrateProjectRecord(previous).record
+    if (current.recordRevision !== options.expectedRevision)
+      throw new ProjectConflictError(snapshot.record.projectId, options.expectedRevision, current.recordRevision)
+
+    const existingFiles = await getAllByIndex<StoredFile>(fs, 'projectId', current.projectId)
+    const existingFileIds = new Set(existingFiles.map(file => file.fileId))
+    if (existingFiles.length !== options.expectedFileIds.length ||
+      options.expectedFileIds.some(fileId => !existingFileIds.has(fileId)))
+      throw new Error(`Project "${current.projectId}" files changed since restore confirmation; replacement was not performed.`)
+    for (const file of snapshot.files) {
+      const existing = await getByKey<StoredFile>(fs, file.fileId)
+      if (existing && existing.projectId !== current.projectId)
+        throw new Error(`File ID "${file.fileId}" is already owned by another project.`)
+    }
+
+    // Replacement keeps the destination's identity and original creation time;
+    // all restored content, source/file IDs, and provenance remain from backup.
+    restored = {
+      ...snapshot.record,
+      projectId: current.projectId,
+      createdAt: current.createdAt,
+      schemaVersion: SCHEMA_VERSION,
+      recordRevision: current.recordRevision + 1,
+      modifiedAt: Date.now(),
+    }
+    for (const fileId of existingFileIds) await deleteByKey(fs, fileId)
+    await put(ps, restored)
+    for (const file of snapshot.files) await put(fs, { ...file, projectId: current.projectId })
+  })
+  return restored!
+}
+
+export async function duplicateProject(sourceId: string, newName: string): Promise<ProjectRecord | null> {
+  const db = await openDB()
+  const snapshot: { record: ProjectRecord | null; files: StoredFile[] } = { record: null, files: [] }
+  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readonly', async ([ps, fs]) => {
+    const raw = await getByKey<ProjectRecord>(ps, sourceId)
+    if (!raw) return
+    snapshot.record = migrateProjectRecord(raw).record
+    snapshot.files = await getAllByIndex<StoredFile>(fs, 'projectId', sourceId)
+  })
+  const source = snapshot.record
+  if (!source) return null
+  const sourceSnapshot: ProjectSnapshot = { record: source, files: snapshot.files }
+  const now = Date.now()
+  const newId = `project-${now}-${Math.random().toString(36).slice(2, 8)}`
+  const newFileIdMap: Record<string, string> = Object.create(null) as Record<string, string>
+  for (const file of snapshot.files) {
+    newFileIdMap[file.fileId] = `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+  const copySnapshot = createProjectCopySnapshot(sourceSnapshot, newId, newName, now, newFileIdMap)
+  const copy = copySnapshot.record
+  const newFiles = copySnapshot.files
+  const sourceFiles = snapshot.files
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     const currentRaw = await getByKey<ProjectRecord>(ps, sourceId)
     if (!currentRaw) throw new Error(`Source project "${sourceId}" was deleted during duplication.`)

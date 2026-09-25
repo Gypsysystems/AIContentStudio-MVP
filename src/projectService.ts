@@ -6,6 +6,8 @@ export interface ProjectRepository {
   createProject: typeof indexedDb.createProject
   saveProject: typeof indexedDb.saveProject
   saveProjectIfCurrent: typeof indexedDb.saveProjectIfCurrent
+  loadProjectSnapshot: typeof indexedDb.loadProjectSnapshot
+  restoreProjectSnapshot: typeof indexedDb.restoreProjectSnapshot
   loadProject: typeof indexedDb.loadProject
   listProjects: typeof indexedDb.listProjects
   deleteProject: typeof indexedDb.deleteProject
@@ -22,6 +24,8 @@ export const indexedDbProjectRepository: ProjectRepository = {
   createProject: indexedDb.createProject,
   saveProject: indexedDb.saveProject,
   saveProjectIfCurrent: indexedDb.saveProjectIfCurrent,
+  loadProjectSnapshot: indexedDb.loadProjectSnapshot,
+  restoreProjectSnapshot: indexedDb.restoreProjectSnapshot,
   loadProject: indexedDb.loadProject,
   listProjects: indexedDb.listProjects,
   deleteProject: indexedDb.deleteProject,
@@ -36,4 +40,10 @@ export const indexedDbProjectRepository: ProjectRepository = {
 
 export const projectRepository: ProjectRepository = indexedDbProjectRepository
 export { SCHEMA_VERSION, ProjectConflictError } from './projectRepository'
-export type { ProjectRecord, ProjectSummary, StoredFile } from './projectRepository'
+export type {
+  ProjectRecord,
+  ProjectSnapshot,
+  ProjectSummary,
+  RestoreProjectSnapshotOptions,
+  StoredFile,
+} from './projectRepository'

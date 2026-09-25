@@ -5,6 +5,10 @@ import {
   projectRepository,
   type ProjectRecord, type ProjectSummary, type StoredFile,
 } from './projectService'
+import {
+  createProjectBackup, inspectProjectBackup, restoreProjectBackup,
+  type BackupSummary, type RestoreOptions,
+} from './projectBackup'
 const {
   createProject, loadProject, listProjects, deleteProject, duplicateProject,
   saveProjectIfCurrent, saveFile, loadProjectFiles, removeFile, getActiveProjectId, setActiveProjectId,
@@ -895,18 +899,29 @@ function TopBar({ screen, onNav, projectName, onDiagnostics, saveStatus, onRetry
 }
 
 // ── Screen: Dashboard ─────────────────────────────────────────────────────────
-function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProject, onDuplicateProject, onNewProject }: {
+function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProject, onDuplicateProject, onRestored, onNewProject }: {
   onNav: (s: Screen) => void
   activeProjectId?: string | null
   onOpenProject: (record: ProjectRecord) => void
   onDeleteProject: (projectId: string) => Promise<void>
   onDuplicateProject: (projectId: string) => Promise<void>
+  onRestored: (record: ProjectRecord, mode: RestoreOptions['mode']) => void
   onNewProject: () => void
 }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const restoreInputRef = useRef<HTMLInputElement>(null)
+  const [restoreCandidate, setRestoreCandidate] = useState<{
+    archive: File; summary: BackupSummary; existingRevision: number | null
+    existingName: string | null; existingFileIds: string[]
+  } | null>(null)
+  const [restoreBusy, setRestoreBusy] = useState(false)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null)
+  const [replaceRequested, setReplaceRequested] = useState(false)
+  const [replacePhrase, setReplacePhrase] = useState('')
 
   useEffect(() => {
     listProjects().then(p => { setProjects(p); setLoading(false) }).catch(() => setLoading(false))
@@ -937,6 +952,81 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
     } finally { setActionLoading(null) }
   }
 
+  const handleBackup = async (project: ProjectSummary) => {
+    setActionLoading(project.projectId)
+    setRestoreError(null)
+    try {
+      const archive = await createProjectBackup(project.projectId)
+      const url = URL.createObjectURL(archive)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${project.projectName.replace(/[^a-z0-9-]+/gi, '-').replace(/^-|-$/g, '') || 'project'}-backup.docflow.zip`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      setRestoreMessage(`Backup downloaded for ${project.projectName}.`)
+    } catch (error) {
+      setRestoreError(`Could not create backup: ${(error as Error).message}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleRestoreSelection = async (archive: File) => {
+    setRestoreError(null)
+    setRestoreMessage(null)
+    setRestoreCandidate(null)
+    setRestoreBusy(true)
+    try {
+      const summary = await inspectProjectBackup(archive)
+      const existing = await projectRepository.loadProjectSnapshot(summary.projectId)
+      setRestoreCandidate({
+        archive, summary, existingRevision: existing?.record.recordRevision ?? null,
+        existingName: existing?.record.projectName ?? null,
+        existingFileIds: existing?.files.map(file => file.fileId) ?? [],
+      })
+      setReplaceRequested(false)
+      setReplacePhrase('')
+    } catch (error) {
+      setRestoreError((error as Error).message)
+    } finally {
+      setRestoreBusy(false)
+    }
+  }
+
+  const handleRestore = async (mode: RestoreOptions['mode']) => {
+    if (!restoreCandidate || restoreBusy) return
+    const options: RestoreOptions = mode === 'new'
+      ? { mode: 'new' }
+      : { mode: 'replace', expectedRevision: restoreCandidate.existingRevision!,
+          expectedFileIds: restoreCandidate.existingFileIds }
+    setRestoreBusy(true)
+    setRestoreError(null)
+    try {
+      // Revalidate the archive immediately before the atomic repository write.
+      let restored: ProjectRecord
+      try {
+        restored = await restoreProjectBackup(restoreCandidate.archive, options)
+      } catch (error) {
+        setRestoreError(`Restore failed: ${(error as Error).message}`)
+        return
+      }
+      setRestoreCandidate(null)
+      onRestored(restored, mode)
+      setRestoreMessage(mode === 'new'
+        ? `Restored ${restored.projectName} as a new project.`
+        : `Replaced ${restored.projectName} from the verified backup.`)
+      try {
+        setProjects(await listProjects())
+      } catch {
+        setRestoreError('The restore completed, but the project list could not refresh. Reload to see the restored project.')
+      }
+    } finally {
+      setRestoreBusy(false)
+    }
+  }
+
   const fmt = (ts: number) => {
     const d = new Date(ts), now = new Date()
     const diff = (now.getTime() - d.getTime()) / 1000
@@ -954,16 +1044,31 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
           <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Workspace</p>
           <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Projects</h1>
         </div>
-        <button
-          onClick={onNewProject}
-          className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-            <path d="M6.5 1.5v10M1.5 6.5h10" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-          </svg>
-          New Project
-        </button>
+        <div className="flex items-center gap-2">
+          <input ref={restoreInputRef} type="file" accept=".zip,.docflow.zip,application/zip"
+            className="hidden" aria-label="Choose project backup"
+            onChange={event => {
+              const archive = event.target.files?.[0]
+              event.target.value = ''
+              if (archive) void handleRestoreSelection(archive)
+            }} />
+          <button onClick={() => restoreInputRef.current?.click()} disabled={restoreBusy}
+            className="text-[13px] font-medium px-4 py-2 rounded-lg border border-[#D8D4CE] bg-white hover:bg-[#F4F2EE] disabled:opacity-50">
+            {restoreBusy && !restoreCandidate ? 'Checking backup…' : 'Restore backup'}
+          </button>
+          <button
+            onClick={onNewProject}
+            className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <path d="M6.5 1.5v10M1.5 6.5h10" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+            New Project
+          </button>
+        </div>
       </div>
+      {restoreError && <div role="alert" className="mb-4 p-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] text-[12px] text-[#B91C1C]">{restoreError}</div>}
+      {restoreMessage && <div role="status" className="mb-4 p-3 rounded-lg border border-[#A7D9B1] bg-[#F0FDF4] text-[12px] text-[#166534]">{restoreMessage}</div>}
 
       {loading ? (
         <div className="flex items-center justify-center py-20 text-[13px] text-[#9898AB]">Loading projects…</div>
@@ -1003,6 +1108,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
                   {actionLoading === p.projectId ? '…' : 'Open'}
                 </button>
                 <button onClick={() => handleDuplicate(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Duplicate</button>
+                <button onClick={() => void handleBackup(p)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Backup</button>
                 <button onClick={() => setDeleteConfirm(p.projectId)} className="px-3 py-1.5 text-[11px] font-medium text-[#DC2626] bg-[#FEF2F2] hover:bg-[#FEE2E2] rounded-lg transition-colors">Delete</button>
               </div>
               <svg className="text-[#C8C6C0] group-hover:text-[#9898AB] transition-colors cursor-pointer flex-shrink-0" width="16" height="16" viewBox="0 0 16 16" fill="none" onClick={() => handleOpen(p.projectId)}>
@@ -1010,6 +1116,58 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
               </svg>
             </div>
           ))}
+        </div>
+      )}
+
+      {restoreCandidate && (
+        <div role="dialog" aria-modal="true" aria-label="Restore project backup"
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => { if (!restoreBusy) setRestoreCandidate(null) }}>
+          <div className="bg-white rounded-2xl border border-[#E2DED7] shadow-xl p-6 w-full max-w-[470px]"
+            onClick={event => event.stopPropagation()}>
+            <h2 className="text-[17px] font-semibold text-[#111218] mb-2">Restore project backup</h2>
+            <p className="text-[13px] text-[#4B4B5B]">
+              <strong>{restoreCandidate.summary.projectName}</strong> · {restoreCandidate.summary.fileCount} source file{restoreCandidate.summary.fileCount === 1 ? '' : 's'}
+            </p>
+            <p className="text-[12px] text-[#6B6B7E] mt-2">
+              Backup version {restoreCandidate.summary.backupVersion} · Project schema {restoreCandidate.summary.projectSchemaVersion} · Exported {new Date(restoreCandidate.summary.exportedAt).toLocaleString()}
+            </p>
+            <p className="text-[12px] text-[#166534] mt-3">The project record and every file passed integrity checks.</p>
+            {restoreCandidate.existingRevision !== null && (
+              <p className="text-[12px] text-[#92400E] bg-[#FFFBEB] border border-[#FDE68A] rounded-lg p-3 mt-4">
+                Existing project: <strong>{restoreCandidate.existingName}</strong>. Restoring as new leaves it unchanged; replacement requires explicit confirmation.
+              </p>
+            )}
+            {restoreError && <p role="alert" className="text-[12px] text-[#B91C1C] mt-3">{restoreError}</p>}
+            {replaceRequested && (
+              <div className="mt-4">
+                <p className="text-[12px] text-[#B91C1C] mb-2">Replacement permanently removes <strong>{restoreCandidate.existingName}</strong> and its files. Type the existing project’s name to confirm:</p>
+                <label className="text-[12px] text-[#4B4B5B]" htmlFor="backup-replace-name">Project name</label>
+                <input id="backup-replace-name" value={replacePhrase} onChange={event => setReplacePhrase(event.target.value)}
+                  placeholder={restoreCandidate.existingName || 'REPLACE'}
+                  className="mt-1 w-full px-3 py-2 text-[13px] border border-[#D8D4CE] rounded-lg" />
+              </div>
+            )}
+            <div className="flex justify-end gap-2 mt-6">
+              <button disabled={restoreBusy} onClick={() => setRestoreCandidate(null)}
+                className="px-3 py-2 text-[12px] border border-[#D8D4CE] rounded-lg disabled:opacity-50">Cancel</button>
+              {restoreCandidate.existingRevision !== null && !replaceRequested && (
+                <button disabled={restoreBusy} onClick={() => setReplaceRequested(true)}
+                  className="px-3 py-2 text-[12px] text-[#B91C1C] border border-[#FCA5A5] rounded-lg disabled:opacity-50">Replace existing…</button>
+              )}
+              {replaceRequested && (
+                <button disabled={restoreBusy || replacePhrase !== (restoreCandidate.existingName || 'REPLACE')}
+                  onClick={() => void handleRestore('replace')}
+                  className="px-3 py-2 text-[12px] text-white bg-[#B91C1C] rounded-lg disabled:opacity-50">
+                  {restoreBusy ? 'Replacing…' : 'Confirm replacement'}
+                </button>
+              )}
+              <button disabled={restoreBusy} onClick={() => void handleRestore('new')}
+                className="px-3 py-2 text-[12px] text-white bg-[#5B5BD6] rounded-lg disabled:opacity-50">
+                {restoreBusy ? 'Restoring…' : 'Restore as new'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -15587,6 +15745,10 @@ export default function App() {
     await duplicateProject(pid, `${source.projectName} Copy`)
   }
 
+  const handleRestoredProject = (record: ProjectRecord, mode: RestoreOptions['mode']) => {
+    if (mode === 'replace' && record.projectId === projectId) resetProjectState()
+  }
+
   // ── Project Diagnostics ────────────────────────────────────────────────────
   const [diagOpen, setDiagOpen] = useState(false)
 
@@ -15607,7 +15769,7 @@ export default function App() {
       })
     }
     switch (screen) {
-      case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
+      case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
@@ -15624,7 +15786,7 @@ export default function App() {
         const projection = publishProjection()
         return <PublishScreen onNav={navigate} projection={projection} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
       }
-      default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
+      default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
     }
   }
 
