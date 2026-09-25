@@ -90,6 +90,7 @@ import {
 import { buildPublishProjection, flattenPublishBlocks, type PublishProjection } from './publishProjection'
 import { generateHtmlPackage, getHtmlPublishDiagnostics } from './htmlPublisher'
 import { generateWordDocument } from './wordPublisher'
+import { generatePdfDocument } from './pdfPublisher'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -13618,203 +13619,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     await new Promise(r => setTimeout(r, ms))
   }
 
-  const generatePDF = async (blocks: DocBlock[]): Promise<Blob> => {
-    const { jsPDF } = await import('jspdf')
-    // Use cfg — same values as preview
-    const primary = cfg.primary
-    const bodyFont = 'helvetica'
-    const pageFormat = cfg.pageSize === 'Letter' ? 'letter' : 'a4'
-    const orientation = cfg.orientation === 'landscape' ? 'landscape' : 'portrait'
-
-    const doc = new jsPDF({ orientation, unit: 'mm', format: pageFormat })
-    const W = pageFormat === 'letter' ? 215.9 : 210
-    const H = pageFormat === 'letter' ? 279.4 : 297
-    const marginL = cfg.marginL, marginR = cfg.marginR, marginT = cfg.marginT, marginB = cfg.marginB
-    const contentW = W - marginL - marginR
-    let y = marginT
-
-    const hexToRgb = (hex: string) => {
-      const r = parseInt(hex.slice(1, 3), 16)
-      const g = parseInt(hex.slice(3, 5), 16)
-      const b = parseInt(hex.slice(5, 7), 16)
-      return { r, g, b }
-    }
-
-    const addPage = () => { doc.addPage(); y = marginT + 10 }
-
-    const checkY = (needed: number) => { if (y + needed > H - marginB) addPage() }
-
-    // Cover page
-    const pc = hexToRgb(primary)
-    doc.setFillColor(pc.r, pc.g, pc.b)
-    doc.rect(0, 0, 210, 297, 'F')
-    doc.setTextColor(255, 255, 255)
-    doc.setFont(bodyFont, 'bold')
-    doc.setFontSize(28)
-    doc.text(projectName, marginL, 80, { maxWidth: contentW })
-    doc.setFontSize(14)
-    doc.setFont(bodyFont, 'normal')
-    doc.text(activeTheme?.name ?? '', marginL, 100)
-    doc.setFontSize(11)
-    doc.text(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), marginL, 110)
-    addPage()
-
-    doc.setTextColor(30, 30, 50)
-
-    for (const block of blocks) {
-      const text = block.content ?? ''
-
-      if (block.type === 'h1') {
-        checkY(16)
-        const hc = hexToRgb(primary)
-        doc.setTextColor(hc.r, hc.g, hc.b)
-        doc.setFont(bodyFont, 'bold')
-        doc.setFontSize(20)
-        doc.text(resolveVars(text), marginL, y, { maxWidth: contentW })
-        y += 10
-        doc.setDrawColor(hc.r, hc.g, hc.b)
-        doc.setLineWidth(0.5)
-        doc.line(marginL, y, marginL + contentW, y)
-        y += 6
-        doc.setTextColor(30, 30, 50)
-      } else if (block.type === 'h2') {
-        checkY(12)
-        doc.setFont(bodyFont, 'bold')
-        doc.setFontSize(16)
-        doc.setTextColor(30, 30, 50)
-        doc.text(resolveVars(text), marginL, y, { maxWidth: contentW })
-        y += 9
-      } else if (block.type === 'h3') {
-        checkY(10)
-        doc.setFont(bodyFont, 'bold')
-        doc.setFontSize(13)
-        doc.text(resolveVars(text), marginL, y, { maxWidth: contentW })
-        y += 7
-      } else if (block.type === 'h4') {
-        checkY(8)
-        doc.setFont(bodyFont, 'bold')
-        doc.setFontSize(11)
-        doc.text(resolveVars(text).toUpperCase(), marginL, y, { maxWidth: contentW })
-        y += 6
-      } else if (block.type === 'para' || block.type === 'caption' || block.type === 'quote') {
-        if (!text.trim()) { y += 4; continue }
-        doc.setFont(bodyFont, block.type === 'quote' ? 'italic' : 'normal')
-        doc.setFontSize(11)
-        const lines = doc.splitTextToSize(resolveVars(text), contentW - (block.type === 'quote' ? 8 : 0))
-        checkY(lines.length * 5 + 4)
-        if (block.type === 'quote') {
-          doc.setDrawColor(pc.r, pc.g, pc.b)
-          doc.setLineWidth(1)
-          doc.line(marginL, y - 2, marginL, y + lines.length * 5)
-          doc.text(lines, marginL + 6, y, { maxWidth: contentW - 8 })
-        } else {
-          doc.text(lines, marginL, y, { maxWidth: contentW })
-        }
-        y += lines.length * 5 + 4
-        doc.setFont(bodyFont, 'normal')
-      } else if (block.type === 'list') {
-        const items = block.listItems ?? []
-        for (const item of items) {
-          const indent = (item.level - 1) * 6
-          const label = item.type === 'bullet' ? '•' : '1.'
-          const lines = doc.splitTextToSize(resolveVars(item.text), contentW - indent - 8)
-          checkY(lines.length * 5 + 2)
-          doc.setFont(bodyFont, 'normal')
-          doc.setFontSize(11)
-          doc.text(label, marginL + indent, y)
-          doc.text(lines, marginL + indent + 6, y)
-          y += lines.length * 5 + 2
-        }
-        y += 2
-      } else if (block.type === 'procedure') {
-        const steps = block.procedureSteps ?? []
-        checkY(8)
-        doc.setFont(bodyFont, 'bold')
-        doc.setFontSize(11)
-        doc.text(resolveVars(text), marginL, y)
-        y += 6
-        for (let i = 0; i < steps.length; i++) {
-          const lines = doc.splitTextToSize(`${i + 1}. ${resolveVars(steps[i])}`, contentW - 6)
-          checkY(lines.length * 5 + 2)
-          doc.setFont(bodyFont, 'normal')
-          doc.text(lines, marginL + 4, y)
-          y += lines.length * 5 + 2
-        }
-        y += 2
-      } else if (block.type === 'callout') {
-        const variant = block.calloutVariant ?? 'note'
-        const bgMap: Record<string, { r: number; g: number; b: number }> = {
-          note: { r: 224, g: 242, b: 254 }, tip: { r: 220, g: 252, b: 231 },
-          warning: { r: 254, g: 243, b: 199 }, important: { r: 243, g: 240, b: 255 }, example: { r: 244, g: 242, b: 238 }
-        }
-        const bg = bgMap[variant] ?? bgMap.note
-        const callLines = doc.splitTextToSize(`[${variant.toUpperCase()}] ${resolveVars(text)}`, contentW - 8)
-        checkY(callLines.length * 5 + 8)
-        doc.setFillColor(bg.r, bg.g, bg.b)
-        doc.roundedRect(marginL, y - 4, contentW, callLines.length * 5 + 8, 2, 2, 'F')
-        doc.setFont(bodyFont, 'normal')
-        doc.setFontSize(10)
-        doc.text(callLines, marginL + 4, y, { maxWidth: contentW - 8 })
-        y += callLines.length * 5 + 10
-      } else if (block.type === 'table' && block.tableData) {
-        const rows = block.tableData.rows
-        if (rows.length === 0) continue
-        const cols = rows[0].length
-        const colW = contentW / cols
-        const rowH = 8
-        for (let ri = 0; ri < rows.length; ri++) {
-          checkY(rowH + 2)
-          if (ri === 0 && block.tableData.hasHeader) {
-            doc.setFillColor(pc.r, pc.g, pc.b)
-            doc.rect(marginL, y - 5, contentW, rowH, 'F')
-            doc.setTextColor(255, 255, 255)
-            doc.setFont(bodyFont, 'bold')
-          } else {
-            doc.setFillColor(ri % 2 === 0 ? 249 : 255, 248, 246)
-            doc.rect(marginL, y - 5, contentW, rowH, 'F')
-            doc.setTextColor(30, 30, 50)
-            doc.setFont(bodyFont, 'normal')
-          }
-          doc.setFontSize(9)
-          for (let ci = 0; ci < cols; ci++) {
-            doc.text(String(rows[ri][ci] ?? ''), marginL + ci * colW + 2, y, { maxWidth: colW - 4 })
-          }
-          y += rowH
-        }
-        doc.setTextColor(30, 30, 50)
-        y += 4
-      } else if (block.type === 'divider') {
-        checkY(6)
-        doc.setDrawColor(200, 198, 192)
-        doc.setLineWidth(0.3)
-        doc.line(marginL, y, marginL + contentW, y)
-        y += 6
-      } else if (block.type === 'code') {
-        const codeLines = doc.splitTextToSize(resolveVars(text), contentW - 8)
-        checkY(codeLines.length * 5 + 8)
-        doc.setFillColor(244, 242, 238)
-        doc.roundedRect(marginL, y - 4, contentW, codeLines.length * 5 + 8, 2, 2, 'F')
-        doc.setFont('courier', 'normal')
-        doc.setFontSize(9)
-        doc.text(codeLines, marginL + 4, y)
-        doc.setFont(bodyFont, 'normal')
-        y += codeLines.length * 5 + 10
-      }
-    }
-
-    // Page numbers
-    const total = (doc as any).internal.getNumberOfPages()
-    for (let i = 2; i <= total; i++) {
-      doc.setPage(i)
-      doc.setFont(bodyFont, 'normal')
-      doc.setFontSize(9)
-      doc.setTextColor(150, 150, 160)
-      doc.text(`${i - 1} / ${total - 1}`, W / 2, 297 - 8, { align: 'center' })
-    }
-
-    return doc.output('blob')
-  }
-
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -13839,7 +13643,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     if (selectedFormats.includes('pdf')) {
       try {
         await step('Generating PDF…', 200)
-        const blob = await generatePDF(blocks)
+        const blob = await generatePdfDocument(projection)
         newBlobs.pdf = blob
       } catch (e) {
         newErrors.pdf = `PDF generation failed: ${(e as Error).message}`

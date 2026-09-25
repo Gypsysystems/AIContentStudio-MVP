@@ -15,4 +15,5 @@
 - [Review suggestion boundary](review-suggestion-boundary.md) — only exact deterministic spelling diffs can edit Author text; decisions and history remain separate from content.
 - [Brand guideline font evidence](brand-guideline-font-evidence.md) — map font families to typography roles only from explicit document evidence; metadata cannot fill unresolved roles.
 - [Publish snapshot boundary](publish-snapshot-boundary.md) — export uses a read-only committed-TOC projection; never infer project content from the active Author document.
-- [Word condition safety](word-condition-safety.md) — reject conditional blocks when the unchanged publish projection cannot select an audience safely.
+- [Publish condition safety](word-condition-safety.md) — Word and PDF reject conditional blocks when the unchanged projection cannot select an audience safely.
+- [PDF font fidelity](pdf-font-fidelity.md) — map typography to bundled PDF fonts or a supported configured fallback; never imply unprovided fonts were embedded.
