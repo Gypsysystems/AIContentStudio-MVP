@@ -1638,7 +1638,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
 
   const fmtBytes = (b: number) => b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / (1024 * 1024)).toFixed(1)} MB`
 
-  const COLOR_ROLES = ['Primary', 'Secondary', 'Accent', 'Background', 'Surface', 'Heading', 'Body Text', 'Border', 'Table Header', 'Note', 'Tip', 'Warning', 'Important', 'Example', 'Custom']
+  const COLOR_ROLES = ['Needs Review', 'Primary', 'Secondary', 'Accent', 'Background', 'Surface', 'Heading', 'Body Text', 'Border', 'Table Header', 'Success', 'Warning', 'Critical', 'Info', 'Note', 'Tip', 'Important', 'Example', 'Custom']
   const FONT_ROLES = ['Primary Font', 'Heading Font', 'Body Font', 'Fallback Font', 'Code Font', 'Caption Font', 'Custom']
 
   const runImportAnalysis = async () => {
@@ -1746,6 +1746,14 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
     const bgCol    = getCol('Background')
     const surfCol  = getCol('Surface')
     const bodyTextCol = getCol('Body Text')
+    const headingCol = getCol('Heading')
+    const borderCol = getCol('Border')
+    const tableHeaderCol = getCol('Table Header')
+    const successCol = getCol('Success')
+    const warningCol = getCol('Warning')
+    const criticalCol = getCol('Critical')
+    const infoCol = getCol('Info')
+    const importantCol = criticalCol ?? accentCol
 
     // Accepted fonts — prefer explicitly role-labeled suggestions, then typography style extraction
     const typoStyles = importExtractionResult?.typographyStyles ?? []
@@ -1794,6 +1802,14 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
       // Brand color tokens
       primaryColor: primCol, secondaryColor: secCol, accentColor: accentCol,
       bgColor: bgCol, surfaceColor: surfCol,
+      headingTextColor: headingCol ?? from.headingTextColor,
+      bodyTextColor: bodyTextCol ?? from.bodyTextColor,
+      borderColorToken: borderCol ?? from.borderColorToken,
+      tableHeaderBgToken: tableHeaderCol ?? from.tableHeaderBgToken,
+      successColor: successCol ?? from.successColor,
+      warningColor: warningCol ?? from.warningColor,
+      criticalColor: criticalCol ?? from.criticalColor,
+      infoColor: infoCol ?? from.infoColor,
       // Font role tokens — primaryFont is single source of truth
       primaryFont, headingFont: headFont, bodyFont: bodyFont_, fallbackFont: fallFont, codeFont: codeFont_,
       // All heading/body styles start as inherited (unless brand provides different families)
@@ -1804,22 +1820,22 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
         fontFamily: headFont,
         fontSize: getTsSize(/document\s*title/i) ?? getTsSize(/heading\s*1|h1/i) ?? from.h1?.fontSize ?? 22,
         fontWeight: getTsWeight(/heading\s*1|h1/i) ?? from.h1?.fontWeight ?? '700',
-        color: getTsColor(/heading\s*1|h1/i) ?? primCol ?? from.h1?.color ?? '#111827' },
+        color: getTsColor(/heading\s*1|h1/i) ?? headingCol ?? primCol ?? from.h1?.color ?? '#111827' },
       h2: { ...(from.h2),
         fontFamily: headFont,
         fontSize: getTsSize(/heading\s*2|h2/i) ?? from.h2?.fontSize ?? 16,
         fontWeight: getTsWeight(/heading\s*2|h2/i) ?? from.h2?.fontWeight ?? '700',
-        color: getTsColor(/heading\s*2|h2/i) ?? secCol ?? primCol ?? from.h2?.color ?? '#374151' },
+        color: getTsColor(/heading\s*2|h2/i) ?? headingCol ?? secCol ?? primCol ?? from.h2?.color ?? '#374151' },
       h3: { ...(from.h3),
         fontFamily: headFont,
         fontSize: getTsSize(/heading\s*3|h3/i) ?? from.h3?.fontSize ?? 13,
         fontWeight: getTsWeight(/heading\s*3|h3/i) ?? from.h3?.fontWeight ?? '600',
-        color: getTsColor(/heading\s*3|h3/i) ?? secCol ?? primCol ?? from.h3?.color ?? '#374151' },
+        color: getTsColor(/heading\s*3|h3/i) ?? headingCol ?? secCol ?? primCol ?? from.h3?.color ?? '#374151' },
       h4: { ...(from.h4),
         fontFamily: headFont,
         fontSize: getTsSize(/heading\s*4|h4/i) ?? from.h4?.fontSize ?? 12,
         fontWeight: getTsWeight(/heading\s*4|h4/i) ?? from.h4?.fontWeight ?? '600',
-        color: getTsColor(/heading\s*4|h4/i) ?? secCol ?? primCol ?? from.h4?.color ?? '#374151' },
+        color: getTsColor(/heading\s*4|h4/i) ?? headingCol ?? secCol ?? primCol ?? from.h4?.color ?? '#374151' },
       body: { ...(from.body),
         fontFamily: bodyFont_,
         fontSize: getTsSize(/^body$/i) ?? from.body?.fontSize ?? 11,
@@ -1835,16 +1851,25 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
       // Tables
       tables: {
         ...(from.tables),
-        headerBgColor: primCol ?? from.tables?.headerBgColor ?? '#374151',
+        headerBgColor: tableHeaderCol ?? primCol ?? from.tables?.headerBgColor ?? '#374151',
         headerTextColor: '#FFFFFF',
-        borderColor: secCol ?? from.tables?.borderColor ?? '#D1D5DB',
+        borderColor: borderCol ?? secCol ?? from.tables?.borderColor ?? '#D1D5DB',
         bodyTextColor: bodyTextCol ?? from.tables?.bodyTextColor ?? '#1F2937',
       },
       // Callouts
       callouts: {
         ...existingCallouts,
-        important: accentCol
-          ? { ...existingCallouts.important, accentColor: accentCol, bgColor: accentCol + '18' }
+        note: infoCol
+          ? { ...existingCallouts.note, accentColor: infoCol, bgColor: infoCol + '18' }
+          : existingCallouts.note,
+        tip: successCol
+          ? { ...existingCallouts.tip, accentColor: successCol, bgColor: successCol + '18' }
+          : existingCallouts.tip,
+        warning: warningCol
+          ? { ...existingCallouts.warning, accentColor: warningCol, bgColor: warningCol + '18' }
+          : existingCallouts.warning,
+        important: importantCol
+          ? { ...existingCallouts.important, accentColor: importantCol, bgColor: importantCol + '18' }
           : existingCallouts.important,
       },
     }
@@ -2025,7 +2050,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   <div>
                     <div className="flex items-center justify-between mb-3">
                       <p className="text-[12px] font-semibold text-[#111218]">Detected Colors</p>
-                      <button onClick={() => setImportSuggestions(prev => prev.map(s => s.category === 'color' && s.status === 'pending' ? { ...s, status: 'accepted' } : s))}
+                      <button onClick={() => setImportSuggestions(prev => prev.map(s => s.category === 'color' && s.status === 'pending' && s.role !== 'Needs Review' ? { ...s, status: 'accepted' } : s))}
                         className="text-[10px] font-semibold text-[#5B5BD6] border border-[#5B5BD6] px-2.5 py-1 rounded-lg hover:bg-[#EEEEFF]">Accept All Detected Colors</button>
                     </div>
                     <div className="space-y-2">
@@ -2047,8 +2072,9 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                               )}
                               {s.status === 'pending' && (
                                 <>
-                                  <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'accepted' } : x))}
-                                    className="text-[10px] font-semibold bg-[#5B5BD6] text-white px-2.5 py-1 rounded-lg hover:bg-[#4A4AC4]">Accept</button>
+                                   <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'accepted' } : x))}
+                                     disabled={s.role === 'Needs Review'}
+                                     className="text-[10px] font-semibold bg-[#5B5BD6] text-white px-2.5 py-1 rounded-lg hover:bg-[#4A4AC4] disabled:opacity-40">Accept</button>
                                   <button onClick={() => setImportSuggestions(prev => prev.map(x => x.id === s.id ? { ...x, status: 'ignored' } : x))}
                                     className="text-[10px] text-[#9898AB] border border-[#E2DED7] px-2.5 py-1 rounded-lg hover:bg-[#F4F2EE]">Ignore</button>
                                 </>
@@ -2256,7 +2282,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
 
                   <div className="flex gap-3 pt-2 border-t border-[#F4F2EE]">
                     <button onClick={() => {
-                      setImportSuggestions(prev => prev.map(s => s.status === 'pending' ? { ...s, status: 'accepted' } : s))
+                      setImportSuggestions(prev => prev.map(s => s.status === 'pending' && !(s.category === 'color' && s.role === 'Needs Review') ? { ...s, status: 'accepted' } : s))
                       setImportStage('review')
                     }} className="flex-1 py-2.5 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium rounded-xl transition-colors">Accept All Reviewed</button>
                     <button onClick={() => setImportStage('review')}
@@ -2268,6 +2294,11 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
               {/* Stage 4: Review & Save */}
               {importStage === 'review' && (
                 <div className="space-y-5">
+                  {importSuggestions.some(s => s.category === 'color' && s.status === 'pending' && s.role === 'Needs Review') && (
+                    <div className="rounded-xl border border-[#FCD34D] bg-[#FEF3C7] p-3 text-[12px] text-[#92400E]">
+                      Some colors have missing or conflicting role labels. Go back to Map Brand and assign a role or ignore each one before saving.
+                    </div>
+                  )}
                   <div>
                     <p className="text-[12px] font-semibold text-[#111218] uppercase tracking-wide mb-3">Review Brand & Style Profile</p>
 
@@ -2320,7 +2351,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
                   </div>
 
                   <div className="flex gap-3">
-                    <button onClick={saveImportedProfile} disabled={!importProfileName.trim()}
+                    <button onClick={saveImportedProfile} disabled={!importProfileName.trim() || importSuggestions.some(s => s.category === 'color' && s.status === 'pending' && s.role === 'Needs Review')}
                       className="flex-1 py-2.5 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-40 text-white text-[13px] font-medium rounded-xl transition-colors">
                       Save as New Brand & Style Profile
                     </button>

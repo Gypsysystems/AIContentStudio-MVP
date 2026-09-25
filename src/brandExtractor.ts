@@ -112,34 +112,28 @@ function normalizeFamily(family: string): string {
 
 // ── Semantic role detection ────────────────────────────────────────────────
 
-const ROLE_KEYWORDS: [RegExp, string][] = [
-  [/\bprimary\b/i,        'Primary'],
-  [/\bsecondary\b/i,      'Secondary'],
-  [/\baccent\b/i,         'Accent'],
-  [/\bbackground\b/i,     'Background'],
-  [/\bsurface\b/i,        'Surface'],
-  [/\bbody[\s-]*text\b/i, 'Body Text'],
-  [/\bborder\b/i,         'Border'],
-  [/\bsuccess\b/i,        'Success'],
-  [/\bwarning\b/i,        'Warning'],
-  [/\bcritical\b/i,       'Critical'],
-  [/\berror\b/i,          'Critical'],
-  [/\binfo(?:rmation)?\b/i, 'Info'],
+const COLOR_ROLE_LABELS: [RegExp, string][] = [
+  [/\bprimary\b/i, 'Primary'],
+  [/\bsecondary\b/i, 'Secondary'],
+  [/\baccent\b/i, 'Accent'],
+  [/\bbackground\b/i, 'Background'],
+  [/\bsurface\b/i, 'Surface'],
+  [/\b(?:body[\s-]*text|text[\s/]+body|text|foreground)\b/i, 'Body Text'],
   [/\btable[\s-]*header\b/i, 'Table Header'],
-  [/\bheading\b/i,        'Heading'],
-  [/\blink\b/i,           'Link'],
-  [/\bforeground\b/i,     'Foreground'],
-  [/\bmuted\b/i,          'Muted'],
-  [/\bdisabled\b/i,       'Disabled'],
-  [/\bfocus\b/i,          'Focus'],
-  [/\bselection\b/i,      'Selection'],
+  [/\b(?:heading|headline)\b/i, 'Heading'],
+  [/\bborder\b/i, 'Border'],
+  [/\bsuccess\b/i, 'Success'],
+  [/\b(?:warning|caution)\b/i, 'Warning'],
+  [/\b(?:critical|error|danger)\b/i, 'Critical'],
+  [/\b(?:info|information)\b/i, 'Info'],
+  [/\blink\b/i, 'Link'],
 ]
 
-function detectRole(text: string): string {
-  for (const [re, role] of ROLE_KEYWORDS) {
-    if (re.test(text)) return role
-  }
-  return 'Unknown'
+function explicitColorRole(label: string): string {
+  // One color with two distinct labels needs a human decision, not precedence
+  // based on keyword order. Aliases of the same role are not conflicts.
+  const roles = new Set(COLOR_ROLE_LABELS.filter(([pattern]) => pattern.test(label)).map(([, role]) => role))
+  return roles.size === 1 ? [...roles][0] : 'Needs Review'
 }
 
 // ── Font role detection ─────────────────────────────────────────────────────
@@ -491,7 +485,7 @@ async function extractDocxFontNames(arrayBuffer: ArrayBuffer): Promise<string[]>
   }
 }
 
-// ── Color Extraction (unchanged) ───────────────────────────────────────────
+// ── Color Extraction ───────────────────────────────────────────────────────
 
 const ROLE_WORDS = new Set(['Primary', 'Secondary', 'Accent', 'Background', 'Surface',
   'Body', 'Border', 'Heading', 'Success', 'Warning', 'Critical', 'Error', 'Info',
@@ -511,62 +505,62 @@ function findColorName(snippet: string, hexValue: string): string {
 
 export function extractColors(text: string, tableRows: string[] = []): ExtractedColor[] {
   const results: ExtractedColor[] = []
-  const seenHex = new Set<string>()
-  const lines = text.split('\n')
+  const byValue = new Map<string, ExtractedColor>()
+  const rolesByValue = new Map<string, Set<string>>()
+  const ambiguousValues = new Set<string>()
+  const candidatePattern = /#[0-9a-f]{6}\b|#[0-9a-f]{3}\b|rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)/gi
 
-  // Strategy 1: Multi-line block detection
-  for (let li = 0; li < lines.length; li++) {
-    const line = lines[li]
-    const hexRe = /#([0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{3})?)\b/g
-    let hm: RegExpExecArray | null
-    while ((hm = hexRe.exec(line)) !== null) {
-      const hex = normalizeHex(hm[0])
-      if (seenHex.has(hex)) continue
-      const contextStart = Math.max(0, li - 4)
-      const contextEnd = Math.min(lines.length - 1, li + 4)
-      const context = lines.slice(contextStart, contextEnd + 1).join('\n')
-      const role = detectRole(context)
-      seenHex.add(hex)
-      results.push({
-        id: `col-${results.length}`, name: findColorName(context, hex), value: hex,
-        suggestedRole: role, sourceSnippet: context.replace(/\s+/g, ' ').trim(),
-        detectionMethod: 'multi-line-block', confidence: role !== 'Unknown' ? 'high' : 'low',
-      })
+  const scan = (line: string, table: boolean) => {
+    const matches = [...line.matchAll(candidatePattern)]
+    for (let index = 0; index < matches.length; index++) {
+      const match = matches[index]
+      const raw = match[0]
+      const rgb = /^rgb\(/i.test(raw) ? raw.match(/\d+/g)?.map(Number) : undefined
+      if (rgb && rgb.some(component => component > 255)) continue
+      const value = rgb ? rgbToHex(rgb[0], rgb[1], rgb[2]) : normalizeHex(raw)
+      const start = match.index
+      // A neighboring color's label is never evidence for this color.
+      const before = line.slice(index ? matches[index - 1].index + matches[index - 1][0].length : 0, start)
+      const after = line.slice(start + raw.length, matches[index + 1]?.index ?? line.length)
+      const beforeRole = explicitColorRole(before)
+      const afterRole = explicitColorRole(after)
+      // A trailing label only applies when there was no preceding label and
+      // there is no next value (otherwise it labels that next value).
+      const role = beforeRole !== 'Needs Review' ? beforeRole
+        : index === matches.length - 1 ? afterRole : 'Needs Review'
+      const previous = byValue.get(value)
+      const roleSet = rolesByValue.get(value) ?? new Set<string>()
+      if (role !== 'Needs Review') roleSet.add(role)
+      if (role === 'Needs Review' && (
+        COLOR_ROLE_LABELS.filter(([pattern]) => pattern.test(before)).length > 1
+        || (index === matches.length - 1 && COLOR_ROLE_LABELS.filter(([pattern]) => pattern.test(after)).length > 1)
+      )) ambiguousValues.add(value)
+      rolesByValue.set(value, roleSet)
+      if (previous) {
+        if (roleSet.size > 1 || ambiguousValues.has(value)) {
+          previous.suggestedRole = 'Needs Review'
+          previous.confidence = 'low'
+          if (!previous.sourceSnippet.includes(line)) previous.sourceSnippet += `\n${line}`
+        } else if (roleSet.size === 1 && previous.suggestedRole === 'Needs Review') {
+          previous.suggestedRole = role
+          previous.confidence = 'high'
+          previous.sourceSnippet = line
+          previous.detectionMethod = table ? 'table-value' : rgb ? 'rgb-converted' : 'explicit-text'
+        }
+        continue
+      }
+      const result: ExtractedColor = {
+        id: `col-${results.length}`, name: findColorName(line, value), value,
+        suggestedRole: role, sourceSnippet: line,
+        detectionMethod: table ? 'table-value' : rgb ? 'rgb-converted' : 'explicit-text',
+        confidence: role === 'Needs Review' ? 'low' : 'high',
+      }
+      byValue.set(value, result)
+      results.push(result)
     }
   }
-
-  // Strategy 2: RGB values
-  const rgbRe = /rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)/gi
-  let rm: RegExpExecArray | null
-  while ((rm = rgbRe.exec(text)) !== null) {
-    const r = parseInt(rm[1]), g = parseInt(rm[2]), b = parseInt(rm[3])
-    if (r > 255 || g > 255 || b > 255) continue
-    const hex = rgbToHex(r, g, b)
-    if (seenHex.has(hex)) continue
-    const snippet = windowAround(text, rm.index, 300)
-    const role = detectRole(snippet)
-    seenHex.add(hex)
-    results.push({
-      id: `col-${results.length}`, name: findColorName(snippet, hex), value: hex,
-      suggestedRole: role, sourceSnippet: snippet,
-      detectionMethod: 'rgb-converted', confidence: role !== 'Unknown' ? 'high' : 'medium',
-    })
-  }
-
-  // Strategy 3: DOCX table rows (already flattened)
-  for (const row of tableRows) {
-    const hexInRow = row.match(/#([0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{3})?)\b/i)
-    if (!hexInRow) continue
-    const hex = normalizeHex(hexInRow[0])
-    if (seenHex.has(hex)) continue
-    const role = detectRole(row)
-    seenHex.add(hex)
-    results.push({
-      id: `col-${results.length}`, name: findColorName(row, hex), value: hex,
-      suggestedRole: role, sourceSnippet: row,
-      detectionMethod: 'table-value', confidence: role !== 'Unknown' ? 'high' : 'medium',
-    })
-  }
+  text.split('\n').filter(Boolean).forEach(line => scan(line, false))
+  tableRows.filter(Boolean).forEach(row => scan(row, true))
 
   return results
 }
