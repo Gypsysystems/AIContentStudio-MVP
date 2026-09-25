@@ -88,6 +88,7 @@ import {
   markReviewHistoryFreshness,
 } from './reviewFindings'
 import { buildPublishProjection, flattenPublishBlocks, type PublishProjection } from './publishProjection'
+import { generateHtmlPackage, getHtmlPublishDiagnostics } from './htmlPublisher'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -13582,6 +13583,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
   const activeBrand = projection.legacyBrandProfile
   const activePack = projection.templatePack
   const blocks = flattenPublishBlocks(projection)
+  const htmlDiagnostics = useMemo(() => getHtmlPublishDiagnostics(projection), [projection])
 
   const selectedFormats = (publishConfig?.selectedFormats ?? ['pdf', 'word', 'html']) as ('pdf' | 'word' | 'html')[]
   const setSelectedFormats = (updater: ('pdf'|'word'|'html')[] | ((prev: ('pdf'|'word'|'html')[]) => ('pdf'|'word'|'html')[])) => {
@@ -13912,154 +13914,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     return await Packer.toBlob(docxDoc)
   }
 
-  const generateHTML = async (blocks: DocBlock[]): Promise<Blob> => {
-    const JSZip = (await import('jszip')).default
-    const zip = new JSZip()
-    // Use cfg — same source as preview
-    const primary = cfg.primary
-    const bodyFont = cfg.bodyFont
-    const headingFont = cfg.headingFont
-    const navWidth = cfg.navWidth
-
-    // CSS derived from cfg — identical model to preview
-    const css = `
-@import url('https://fonts.googleapis.com/css2?family=${bodyFont.replace(/ /g,'+')}:wght@400;500;600;700&display=swap');
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'${bodyFont}',sans-serif;font-size:16px;color:#111218;background:#F4F2EE;line-height:1.6}
-.site-header{background:${primary};color:#fff;padding:16px 32px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100}
-.site-header .logo{font-weight:700;font-size:18px}
-.layout{display:flex;max-width:${cfg.contentWidth}px;margin:0 auto;padding:32px 24px;gap:32px}
-.sidebar{width:${navWidth}px;flex-shrink:0;${cfg.showLeftNav ? '' : 'display:none'}
-.sidebar nav a{display:block;padding:6px 12px;border-radius:6px;text-decoration:none;color:#3D3D4E;font-size:14px;margin-bottom:2px}
-.sidebar nav a:hover,.sidebar nav a.active{background:${primary}20;color:${primary}}
-.content{flex:1;min-width:0}
-.content h1{font-size:28px;font-weight:700;color:#111218;border-bottom:2px solid ${primary};padding-bottom:12px;margin-bottom:24px}
-.content h2{font-size:22px;font-weight:600;color:#111218;margin:32px 0 12px}
-.content h3{font-size:18px;font-weight:600;color:#3D3D4E;margin:24px 0 8px}
-.content h4{font-size:14px;font-weight:700;color:#3D3D4E;text-transform:uppercase;letter-spacing:.05em;margin:20px 0 6px}
-.content p{margin-bottom:16px;color:#2A2A3A}
-.content ul,.content ol{padding-left:24px;margin-bottom:16px}
-.content li{margin-bottom:6px}
-.content blockquote{border-left:4px solid ${primary};padding:8px 16px;background:${primary}10;margin:16px 0;font-style:italic}
-.content pre{background:#F4F2EE;border:1px solid #E2DED7;border-radius:8px;padding:16px;font-family:monospace;font-size:14px;overflow-x:auto;margin-bottom:16px}
-.content table{width:100%;border-collapse:collapse;margin-bottom:16px;border-radius:8px;overflow:hidden}
-.content table th{background:${primary};color:#fff;padding:10px 14px;text-align:left;font-size:13px}
-.content table td{padding:9px 14px;border-bottom:1px solid #F4F2EE;font-size:13px}
-.content table tr:nth-child(even) td{background:#FAFAF9}
-.callout{border-radius:10px;padding:14px 18px;margin-bottom:16px}
-.callout.note{background:#E0F2FE;border-left:4px solid #0EA5E9}.callout.tip{background:#DCFCE7;border-left:4px solid #16A34A}
-.callout.warning{background:#FEF3C7;border-left:4px solid #D97706}.callout.important{background:#F3F0FF;border-left:4px solid #7C3AED}
-.callout .label{font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
-.procedure{counter-reset:step;margin-bottom:16px}
-.procedure-step{display:flex;gap:14px;margin-bottom:10px;align-items:flex-start}
-.procedure-step::before{counter-increment:step;content:counter(step);background:${primary};color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;margin-top:2px}
-hr{border:none;border-top:1px solid #E2DED7;margin:24px 0}
-.site-footer{background:#111218;color:#9898AB;text-align:center;padding:20px;font-size:13px;margin-top:48px}
-.breadcrumb{padding:8px 24px;background:#F9F8F6;font-size:13px;color:#9898AB;border-bottom:1px solid #F4F2EE}
-.breadcrumb a{color:${primary};text-decoration:none}
-.on-this-page{width:200px;flex-shrink:0;padding:24px 0}.on-this-page .otp-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9898AB;margin-bottom:8px}
-.on-this-page a{display:block;font-size:13px;color:#6B6B7E;text-decoration:none;padding:3px 0 3px 8px;border-left:2px solid #E2DED7;margin-bottom:4px}
-.search-box{margin-left:auto;background:rgba(255,255,255,0.15);border-radius:6px;padding:6px 12px;font-size:13px;color:rgba(255,255,255,0.7)}
-`
-
-    // Build topic page HTML
-    const blockToHtml = (block: DocBlock): string => {
-      const t = resolveVars(block.content ?? '').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      if (block.type === 'h1') return `<h1>${t}</h1>`
-      if (block.type === 'h2') return `<h2>${t}</h2>`
-      if (block.type === 'h3') return `<h3>${t}</h3>`
-      if (block.type === 'h4') return `<h4>${t}</h4>`
-      if (block.type === 'para') return t ? `<p>${t}</p>` : ''
-      if (block.type === 'quote') return `<blockquote>${t}</blockquote>`
-      if (block.type === 'code') return `<pre>${t}</pre>`
-      if (block.type === 'divider') return `<hr>`
-      if (block.type === 'callout') return `<div class="callout ${block.calloutVariant ?? 'note'}"><div class="label">${block.calloutVariant ?? 'Note'}</div>${t}</div>`
-      if (block.type === 'list' && block.listItems) {
-        const tag = block.listItems[0]?.type === 'ordered' ? 'ol' : 'ul'
-        const items = block.listItems.map(i => `<li>${resolveVars(i.text).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</li>`).join('')
-        return `<${tag}>${items}</${tag}>`
-      }
-      if (block.type === 'procedure' && block.procedureSteps) {
-        const steps = block.procedureSteps.map(s => `<div class="procedure-step">${resolveVars(s).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`).join('')
-        return `<div><strong>${t}</strong></div><div class="procedure">${steps}</div>`
-      }
-      if (block.type === 'table' && block.tableData) {
-        const rows = block.tableData.rows
-        const header = rows[0] && block.tableData.hasHeader
-          ? `<tr>${rows[0].map(c => `<th>${String(c).replace(/</g,'&lt;')}</th>`).join('')}</tr>`
-          : ''
-        const body = (block.tableData.hasHeader ? rows.slice(1) : rows)
-          .map(r => `<tr>${r.map(c => `<td>${String(c).replace(/</g,'&lt;')}</td>`).join('')}</tr>`).join('')
-        return `<table>${header ? `<thead>${header}</thead>` : ''}<tbody>${body}</tbody></table>`
-      }
-      return ''
-    }
-
-    // wrapPage consumes cfg — same model as preview
-    const topicNav = blocks.filter(b => b.type === 'h1').map((b, i) => `<a href="topic-${i + 1}.html">${resolveVars(b.content ?? '')}</a>`).join('')
-    const breadcrumb = cfg.showBreadcrumb ? `<div class="breadcrumb"><a href="../index.html">Home</a> › <span>{TITLE}</span></div>` : ''
-    const footer = cfg.showFooter ? `<footer class="site-footer">${projectName} · ${cfg.themeName} · Generated ${new Date().toLocaleDateString('en-US')}</footer>` : ''
-    const sidebar = cfg.showLeftNav ? `<aside class="sidebar"><nav><a href="../index.html">Home</a>${topicNav}</nav></aside>` : ''
-
-    const wrapPage = (title: string, bodyContent: string, h2s: string[] = []) => {
-      const onThisPage = cfg.showOnThisPage && h2s.length > 0
-        ? `<div class="on-this-page"><p class="otp-label">On this page</p>${h2s.map(h => `<a href="#">${h}</a>`).join('')}</div>`
-        : ''
-      return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} — ${projectName}</title><link rel="stylesheet" href="../css/theme.css"></head>
-<body>
-${cfg.showHeader ? `<header class="site-header">${cfg.showLogo ? `<span class="logo">${cfg.logoLabel}</span>` : ''}<span>${projectName}</span>${cfg.showSearch ? '<div class="search-box">Search…</div>' : ''}</header>` : ''}
-${breadcrumb.replace('{TITLE}', title)}
-<div class="layout">
-${sidebar}
-<main class="content">${bodyContent}</main>
-${onThisPage}
-</div>
-${footer}
-</body></html>`
-    }
-
-    // index.html — uses Home Page Master config from cfg
-    const homeNav = blocks.filter(b => b.type === 'h1').map((b, i) => `<a href="topics/topic-${i + 1}.html">${resolveVars(b.content ?? '')}</a>`).join('')
-    const indexHtml = `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${projectName}</title><link rel="stylesheet" href="css/theme.css"></head>
-<body>
-${cfg.showHeader ? `<header class="site-header">${cfg.showLogo ? `<span class="logo">${cfg.logoLabel}</span>` : ''}<span>${projectName}</span>${cfg.showSearch ? '<div class="search-box">Search…</div>' : ''}</header>` : ''}
-<div class="layout">
-<aside class="sidebar"><nav>${homeNav}</nav></aside>
-<main class="content">
-<h1>${projectName}</h1>
-<p>${cfg.themeName} — Generated ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}</p>
-<ul>${blocks.filter(b => b.type === 'h1').map((b, i) => `<li><a href="topics/topic-${i + 1}.html">${resolveVars(b.content ?? '')}</a></li>`).join('')}</ul>
-</main>
-</div>
-${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${new Date().toLocaleDateString('en-US')}</footer>` : ''}
-</body></html>`
-
-    // Split blocks into sections at each h1
-    const sections: DocBlock[][] = []
-    let current: DocBlock[] = []
-    for (const b of blocks) {
-      if (b.type === 'h1' && current.length > 0) { sections.push(current); current = [] }
-      current.push(b)
-    }
-    if (current.length > 0) sections.push(current)
-
-    zip.file('index.html', indexHtml)
-    zip.file('css/theme.css', css)
-
-    sections.forEach((section, i) => {
-      const title = resolveVars(section[0]?.content ?? `Topic ${i + 1}`)
-      const sectionH2s = section.filter(b => b.type === 'h2').map(b => resolveVars(b.content ?? ''))
-      const html = section.map(blockToHtml).filter(Boolean).join('\n')
-      zip.file(`topics/topic-${i + 1}.html`, wrapPage(title, html, sectionH2s))
-    })
-
-    return await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' })
-  }
-
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -14102,7 +13956,7 @@ ${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${ne
     if (selectedFormats.includes('html')) {
       try {
         await step('Generating HTML package…', 200)
-        const blob = await generateHTML(blocks)
+        const blob = await generateHtmlPackage(projection)
         newBlobs.html = blob
       } catch (e) {
         newErrors.html = `HTML generation failed: ${(e as Error).message}`
@@ -14188,7 +14042,7 @@ ${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${ne
       { label: 'Style Profile', value: cfg.profileName || '—' },
       { label: 'Home Page Master', value: homeMaster?.name ?? '—' },
       { label: 'Default Topic Master', value: topicMaster?.name ?? '—' },
-      { label: 'Custom Master Assignments', value: '2 topics' },
+      { label: 'Custom Master Assignments', value: `${projection.topics.filter(topic => !!topic.assignedMasterId).length} topics` },
       { label: 'Output Variant', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
     ],
   }
@@ -14203,7 +14057,8 @@ ${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${ne
 
     if (fmt === 'html') {
       // Renders using cfg.navWidth, cfg.showOnThisPage, cfg.showBreadcrumb, cfg.showFooter, etc.
-      // Exactly what generateHTML will use for layout/CSS
+      // This small format preview is illustrative; the downloadable HTML uses
+      // the complete projection and each topic's assigned master.
       const navTopics = h1s.length > 0 ? h1s : ['Introduction', 'Getting Started', 'Overview']
       return (
         <div className="bg-white rounded-xl border border-[#E2DED7] overflow-hidden shadow-sm text-[11px]">
@@ -14495,11 +14350,18 @@ ${cfg.showFooter ? `<footer class="site-footer">${projectName} · Generated ${ne
                 <div className="border-t border-[#F4F2EE] px-4 py-3 space-y-2">
                   {[
                     { label: 'Variables', value: hasUnresolvedVars ? `${unresolvedVars.size} unresolved` : 'All resolved', ok: !hasUnresolvedVars },
-                    { label: 'Internal Links', value: '18 valid', ok: true },
-                    { label: 'Master Pages', value: htmlMasterPages.length > 0 ? 'All assigned' : 'Not configured', ok: htmlMasterPages.length > 0 },
+                    { label: 'HTML Topic Pages', value: `${htmlDiagnostics.topicPages} from committed TOC`, ok: htmlDiagnostics.topicPages > 0 },
+                    { label: 'HTML Navigation Cards', value: `${htmlDiagnostics.validCards} linked · ${htmlDiagnostics.unavailableCards} unavailable`, ok: htmlDiagnostics.unavailableCards === 0 },
+                    { label: 'HTML Master Pages', value: htmlDiagnostics.hiddenTopicBodies
+                      ? `${htmlDiagnostics.hiddenTopicBodies} topic ${htmlDiagnostics.hiddenTopicBodies === 1 ? 'body' : 'bodies'} hidden`
+                      : htmlDiagnostics.missingAssignedMasters
+                        ? `${htmlDiagnostics.missingAssignedMasters} missing assignment${htmlDiagnostics.missingAssignedMasters === 1 ? '' : 's'}`
+                        : `${htmlMasterPages.length} configured`,
+                      ok: htmlMasterPages.length > 0 && htmlDiagnostics.hiddenTopicBodies === 0 && htmlDiagnostics.missingAssignedMasters === 0 },
+                    { label: 'HTML Media', value: htmlDiagnostics.assetError ?? 'No unsupported data URLs detected', ok: !htmlDiagnostics.assetError },
                     { label: 'Page Layouts', value: pageLayouts.length > 0 ? `${pageLayouts.length} configured` : 'Missing', ok: pageLayouts.length > 0 },
                     { label: 'Theme', value: activeTheme ? activeTheme.name : 'Not selected', ok: !!activeTheme },
-                    { label: 'Review', value: 'Complete', ok: true },
+                    { label: 'Review', value: reviewStaleContent ? 'Out of date' : 'Not checked by Publish', ok: false },
                   ].map(row => (
                     <div key={row.label} className="flex items-center justify-between">
                       <span className="text-[11px] text-[#6B6B7E]">{row.label}</span>
