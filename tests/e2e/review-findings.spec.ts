@@ -1,11 +1,13 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { ConceptAnalysis } from '../../src/conceptAnalysis'
-import type { EvidenceIndex } from '../../src/evidenceIndex'
+import { buildEvidenceIndex, type EvidenceIndex } from '../../src/evidenceIndex'
+import type { SourceExtraction } from '../../src/sourceExtractor'
 import {
   buildGroundedReviewRun,
   markReviewHistoryFreshness,
 } from '../../src/reviewFindings'
 import type { ReviewInputSnapshot } from '../../src/reviewInput'
+import { resolveReviewAuthorTarget } from '../../src/reviewNavigation'
 import {
   createEmptyReviewModel,
   remapReviewModelForDuplicate,
@@ -446,6 +448,45 @@ test('does not infer language or writing and formatting rules absent from the sn
   expect(otherLanguage.findings.map(finding => finding.category)).toEqual(absent.findings.map(finding => finding.category))
 })
 
+test('resolves exact real Author IDs across topic rename, reorder, and persisted reload; rejects missing and stale targets', () => {
+  const data = fixtures()
+  const generated = buildGroundedReviewRun(
+    createEmptyReviewModel(data.projectId), data.snapshot,
+    data.evidenceIndex, data.conceptAnalysis, data.unsupportedAnalysis,
+  )
+  expect(generated.ok).toBe(true)
+  if (!generated.ok) return
+  const persisted = structuredClone(generated.model)
+  const finding = persisted.findings.find(item => item.category === 'Unsupported Claim')!
+  const topics = [
+    { id: 42, topicId: 'other-topic', title: 'First now' },
+    { id: 7, topicId: 'topic-recovery', title: 'Renamed after reordering' },
+  ]
+  const blocks = {
+    'topic-recovery': [
+      { id: 'another-block' },
+      { id: 'block-recovery' },
+    ],
+  }
+  expect(resolveReviewAuthorTarget(finding, data.snapshot, topics, blocks)).toEqual({
+    status: 'ready',
+    target: {
+      findingId: finding.findingId,
+      topicId: 'topic-recovery',
+      blockId: 'block-recovery',
+      category: 'Unsupported Claim',
+    },
+  })
+  expect(resolveReviewAuthorTarget(finding, data.snapshot, topics, { 'topic-recovery': [{ id: 'another-block' }] }))
+    .toMatchObject({ status: 'missing-block', message: expect.stringContaining('Rerun Review') })
+  expect(resolveReviewAuthorTarget(finding, data.snapshot, topics.slice(0, 1), blocks))
+    .toMatchObject({ status: 'missing-topic' })
+  expect(resolveReviewAuthorTarget({ ...finding, freshness: { ...finding.freshness, status: 'stale' } }, data.snapshot, topics, blocks))
+    .toMatchObject({ status: 'stale' })
+  expect(resolveReviewAuthorTarget(finding, { ...data.snapshot, snapshotId: 'new-snapshot' }, topics, blocks))
+    .toMatchObject({ status: 'stale' })
+})
+
 test('generates each grounded category with stable locations, provenance, and exact evidence references', () => {
   const data = fixtures()
   const result = buildGroundedReviewRun(
@@ -653,12 +694,16 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     },
   ])
   await expect.poll(async () => (await readProject(page, projectName)).sourceFileIds.length).toBe(2)
-  await page.getByRole('button', { name: 'Analyze Sources' }).click()
-  await expect.poll(async () => (await readProject(page, projectName)).evidenceIndex?.items.length ?? 0)
-    .toBeGreaterThanOrEqual(4)
-
+  await expect.poll(async () => {
+    const project = await readProject(page, projectName)
+    return Object.values((project.sourceExtractions ?? {}) as Record<string, { status: string }>)
+      .filter(extraction => extraction.status === 'extracted').length
+  }).toBe(2)
   const stored = await readProject(page, projectName)
-  const evidenceIndex = stored.evidenceIndex!
+  const evidenceIndex = buildEvidenceIndex(
+    stored.sourceExtractions as Record<string, SourceExtraction>, stored.sourcesRevision,
+  )
+  expect(new Set(evidenceIndex.items.map(item => item.fileId)).size).toBe(2)
   const item = (text: string) => {
     const found = evidenceIndex.items.find(candidate => candidate.text.includes(text))
     if (!found) throw new Error(`Evidence not found: ${text}`)
@@ -745,6 +790,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     },
     contentRevision: 1,
     analysisRevision: evidenceIndex.sourcesRevision,
+    evidenceIndex,
     conceptAnalysis,
     unsupportedAnalysis: null,
     reviewModel: createEmptyReviewModel(stored.projectId),
@@ -769,6 +815,17 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await expect(page.getByTestId('grounded-review-finding').filter({ hasText: 'Conflict' })).toBeVisible()
   await expect(page.getByTestId('grounded-review-finding').filter({ hasText: 'Terminology' })).toBeVisible()
 
+  await page.getByTestId('grounded-review-finding').filter({ hasText: 'Unsupported Claim' })
+    .getByTestId('review-open-in-author').click()
+  await expect(page.getByTestId('real-review-author-context')).toHaveAttribute('data-focus-status', 'focused')
+  await expect(page.locator('[data-author-block-id="block-recovery-ui"]')).toContainText('five minutes')
+  expect(await page.evaluate(() => document.activeElement?.closest('[data-author-block-id]')?.getAttribute('data-author-block-id')))
+    .toBe('block-recovery-ui')
+  await page.getByTestId('real-review-author-context').getByRole('button', { name: /Back to Review/ }).click()
+  await expect(page.getByTestId('real-review-findings')).toBeVisible()
+  expect((await readProject(page, projectName)).contentRevision).toBe(1)
+  await expect(page.getByTestId('run-grounded-review')).toBeEnabled({ timeout: 10_000 })
+
   await page.getByTestId('review-category-filter').selectOption('Conflict')
   await expect(page.getByTestId('grounded-review-finding')).toHaveCount(1)
   await page.getByRole('button', { name: 'Inspect' }).click()
@@ -776,6 +833,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await expect(page.getByTestId('review-finding-inspector')).toContainText('Retention period is 30 days.')
 
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(1)
+  await expect(page.getByTestId('run-grounded-review')).toBeEnabled({ timeout: 10_000 })
   await page.getByTestId('run-grounded-review').click()
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(2)
   const rerun = (await readProject(page, projectName)).reviewModel
@@ -784,6 +842,15 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await page.reload()
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(2)
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.findings.length).toBe(8)
+  await page.getByRole('button', { name: /Review/ }).click()
+  // Rehydrated grounding metadata may make an older run stale; rerun from the current ready snapshot.
+  await expect(page.getByTestId('run-grounded-review')).toBeEnabled({ timeout: 10_000 })
+  await page.getByTestId('run-grounded-review').click()
+  await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(3)
+  await page.getByTestId('review-category-filter').selectOption('Unsupported Claim')
+  await page.getByTestId('review-open-in-author').click()
+  await expect(page.getByTestId('real-review-author-context')).toHaveAttribute('data-focus-status', 'focused')
+  await page.getByTestId('real-review-author-context').getByRole('button', { name: /Back to Review/ }).click()
 
   // A later authored-block edit produces new real language findings without altering old runs.
   const previous = await readProject(page, projectName)
@@ -805,7 +872,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     .toBe('ready')
   await page.getByRole('button', { name: /Review/ }).click()
   await page.getByTestId('run-grounded-review').click()
-  await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(3)
+  await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(4)
   const updated = (await readProject(page, projectName)).reviewModel
   const activeRun = updated.runs.find(run => run.reviewRunId === updated.activeReviewRunId)!
   const current = updated.findings.filter(finding => activeRun.findingIds.includes(finding.findingId))
@@ -822,10 +889,28 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await expect(page.getByTestId('grounded-review-finding')).toHaveCount(1)
   await page.getByRole('button', { name: 'Inspect' }).click()
   await expect(page.getByTestId('review-finding-inspector')).toContainText('Language')
+  await page.getByTestId('review-run-filter').selectOption(updated.runs[0].reviewRunId)
+  await page.getByTestId('review-category-filter').selectOption('Unsupported Claim')
+  await expect(page.getByTestId('review-navigation-unavailable').first()).toHaveAttribute('data-reason', 'stale')
+  await expect(page.getByTestId('review-open-in-author').first()).toBeDisabled()
   await page.reload()
   const persisted = (await readProject(page, projectName)).reviewModel
   expect(persisted.findings.find(finding => finding.findingId === current.find(finding => finding.category === 'Spelling')!.findingId))
     .toMatchObject({ topicId: 'topic-recovery-ui', blockId: 'block-recovery-ui', originalText: 'recieve' })
+  await page.getByRole('button', { name: /Review/ }).click()
+  await expect(page.getByTestId('review-open-in-author').first()).toBeEnabled()
+  const beforeDeletion = await readProject(page, projectName)
+  await patchProject(page, projectName, {
+    topicContent: { 'topic-recovery-ui': [{ id: 'replacement-block', type: 'para', content: 'Another paragraph.' }] },
+    contentRevision: 3,
+    reviewModel: beforeDeletion.reviewModel,
+  })
+  await page.reload()
+  await page.getByRole('button', { name: /Review/ }).click()
+  await expect(page.getByTestId('review-navigation-unavailable').first()).toHaveAttribute('data-reason', 'missing-block')
+  await expect(page.getByTestId('review-open-in-author').first()).toBeDisabled()
+  await expect(page.getByTestId('review-navigation-unavailable').first()).toContainText('Rerun Review')
+  await expect(page.getByTestId('real-review-author-context')).toHaveCount(0)
 })
 
 test('never exposes or persists grounded real-project findings from explicit demo Review data', async ({ page }) => {
@@ -834,6 +919,7 @@ test('never exposes or persists grounded real-project findings from explicit dem
   await page.getByRole('button', { name: 'Use demo project', exact: true }).click()
   await page.getByText('Review', { exact: true }).last().click()
   await expect(page.getByTestId('real-review-findings')).toHaveCount(0)
+  await expect(page.getByTestId('review-open-in-author')).toHaveCount(0)
   await page.getByRole('button', { name: 'Run AI Review' }).click()
   await expect(page.getByText('6 findings')).toBeVisible({ timeout: 5_000 })
   const project = await readProject(page, projectName)

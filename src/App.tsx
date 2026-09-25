@@ -71,9 +71,11 @@ import {
   createEmptyReviewModel,
   hydrateReviewModel,
   reconcileReviewModelTopics,
+  type ReviewFinding,
   type ReviewFindingStatus,
   type ReviewModel,
 } from './reviewModel'
+import { resolveReviewAuthorTarget, type ReviewAuthorTarget } from './reviewNavigation'
 import {
   buildReviewInputSnapshot,
   type ReviewInputSnapshot,
@@ -8601,12 +8603,13 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [outlineOpen, setOutlineOpen] = useState(true)
   const [tocWidth, setTocWidth] = useState(260)
   const [activeSection, setActiveSection] = useState(1)
   const [activeTopicId, setActiveTopicId] = useState<number | null>(null)
+  const [realReviewFocus, setRealReviewFocus] = useState<'pending' | 'focused' | 'unavailable' | 'missing' | null>(null)
 
   // Open a topic in the canvas (on double-click)
   const openTopic = (topicId: number, topicTitle: string) => {
@@ -8933,6 +8936,8 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
     if (activeTopicId === null || isHydratingTopicRef.current) return
     const topic = (toc ?? []).find(candidate => candidate.id === activeTopicId)
     const topicKey = topic ? stableAuthorTopicId(topic) : String(activeTopicId)
+    // Opening an already-persisted topic for inspection must not count as a content edit.
+    if (((topicContent ?? {})[topicKey] ?? (topicContent ?? {})[String(activeTopicId)]) === docBlocks) return
     onTopicContentChange?.({ ...(topicContent ?? {}), [topicKey]: docBlocks })
   }, [docBlocks, activeTopicId])
 
@@ -8970,6 +8975,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
   }
 
   const updateBlock = (id: string, patch: Partial<DocBlock>) => {
+    const current = docBlocksRef.current.find(block => block.id === id)
+    if (current && Object.entries(patch).every(([key, value]) =>
+      current[key as keyof DocBlock] === value)) return
     setDocBlocks(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b))
     triggerSave()
   }
@@ -9150,6 +9158,47 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
     ? null
     : studioToc.find(topic => topic.id === activeTopicId) ?? null
   const activeStableTopicId = activeTopic ? stableAuthorTopicId(activeTopic) : null
+  useEffect(() => {
+    if (!realReviewTarget || isDemoMode) return
+    const topic = (toc ?? []).find(candidate => stableAuthorTopicId(candidate) === realReviewTarget.topicId)
+    const blocks = topic && ((topicContent ?? {})[realReviewTarget.topicId] ?? (topicContent ?? {})[String(topic.id)])
+    if (!topic || !blocks?.some(block => block.id === realReviewTarget.blockId)) {
+      setRealReviewFocus('missing')
+      return
+    }
+    setRealReviewFocus('pending')
+    openTopic(topic.id, topic.title)
+  }, [realReviewTarget])
+
+  useEffect(() => {
+    if (!realReviewTarget || realReviewFocus !== 'pending' || activeStableTopicId !== realReviewTarget.topicId) return
+    if (!docBlocks.some(block => block.id === realReviewTarget.blockId)) {
+      setRealReviewFocus('missing')
+      return
+    }
+    const frame = requestAnimationFrame(() => {
+      const block = Array.from(canvasRef.current?.querySelectorAll<HTMLElement>('[data-author-block-id]') ?? [])
+        .find(element => element.dataset.authorBlockId === realReviewTarget.blockId)
+      if (!block) {
+        setRealReviewFocus('unavailable')
+        return
+      }
+      block.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setFocusedBlockId(realReviewTarget.blockId)
+      const blockType = docBlocks.find(item => item.id === realReviewTarget.blockId)?.type
+      const editable = ['h1', 'h2', 'h3', 'h4', 'para', 'caption', 'quote', 'code', 'callout', 'list', 'procedure'].includes(blockType ?? '')
+        ? block.querySelector<HTMLElement>('[contenteditable]')
+        : null
+      if (editable) {
+        editable.focus({ preventScroll: true })
+        setRealReviewFocus('focused')
+      } else {
+        block.focus({ preventScroll: true })
+        setRealReviewFocus('unavailable')
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [activeStableTopicId, docBlocks, realReviewFocus, realReviewTarget])
   const activeAuthorMetadata = activeStableTopicId
     ? authorTopicMetadata?.[activeStableTopicId]
     : undefined
@@ -9594,6 +9643,18 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             </button>
+          </div>
+        )}
+        {realReviewTarget && (
+          <div data-testid="real-review-author-context" data-focus-status={realReviewFocus ?? 'pending'} className="bg-[#EEEEFF] border-b border-[#C7C5F4] flex items-center gap-3 px-4 py-2 flex-shrink-0">
+            <div className="flex-1 min-w-0 text-[12px] text-[#3D3D4E]">
+              <span className="font-semibold">Review: {realReviewTarget.category}</span>
+              <span className="ml-2 font-mono text-[10px]">{realReviewTarget.topicId} / {realReviewTarget.blockId}</span>
+              {realReviewFocus === 'unavailable' && <span className="block text-[#92400E]">Correct topic opened; exact block or editor-field focus is unavailable for this block type.</span>}
+              {realReviewFocus === 'missing' && <span className="block text-[#92400E]">The exact authored target is missing. Return to Review and rerun it; no other block was selected.</span>}
+            </div>
+            <button type="button" onClick={() => onNav('quality')} className="bg-[#5B5BD6] text-white text-[12px] font-semibold px-3 py-1.5 rounded-lg">← Back to Review</button>
+            <button type="button" onClick={onClearRealReviewTarget} className="text-[#6B6B7E] text-[11px]" aria-label="Dismiss Review target">Dismiss</button>
           </div>
         )}
         {/* Studio toolbar — two rows */}
@@ -10596,6 +10657,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, variables, o
                   <div
                     key={block.id}
                     id={block.id}
+                    data-testid="author-block"
+                    data-author-block-id={block.id}
+                    tabIndex={-1}
                     className={`relative group mb-4 rounded-lg transition-all ${
                       isBlockSelected
                         ? 'ring-2 ring-[#5B5BD6] ring-offset-1 bg-[#EEEEFF]/30'
@@ -12270,13 +12334,19 @@ const DISMISS_REASONS = ['Intentional', 'Not applicable', 'False positive', 'App
 function RealReviewFindingsPanel({
   reviewModel,
   snapshot,
+  topics,
+  topicContent,
   onRun,
   onSetStatus,
+  onOpenFinding,
 }: {
   reviewModel: ReviewModel
   snapshot: ReviewInputSnapshot | null
+  topics: TocItem[]
+  topicContent: Record<string, DocBlock[]>
   onRun: () => string | null
   onSetStatus: (findingId: string, status: ReviewFindingStatus) => void
+  onOpenFinding: (finding: ReviewFinding) => void
 }) {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [statusFilter, setStatusFilter] = useState('active')
@@ -12326,7 +12396,7 @@ function RealReviewFindingsPanel({
         <div>
           <h2 className="text-xl font-semibold text-[#111218]">Grounded Review</h2>
           <p className="mt-1 text-[13px] text-[#6B6B7E]">
-            Unsupported claims, source-backed gaps, evidence-backed conflicts, and grounded terminology only.
+            Grounded evidence, terminology, language, writing, and explicit formatting checks for this project.
           </p>
         </div>
         <button
@@ -12418,7 +12488,9 @@ function RealReviewFindingsPanel({
                 No findings match these filters.
               </div>
             )}
-            {visibleFindings.map(finding => (
+            {visibleFindings.map(finding => {
+              const navigation = resolveReviewAuthorTarget(finding, snapshot, topics, topicContent)
+              return (
               <article data-testid="grounded-review-finding" key={finding.findingId} className="rounded-xl border border-[#E2DED7] bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -12436,14 +12508,32 @@ function RealReviewFindingsPanel({
                       {finding.topicId ?? 'project'}{finding.blockId ? ` / ${finding.blockId}` : ''} · {finding.findingId}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedFindingId(selectedFindingId === finding.findingId ? null : finding.findingId)}
-                    className="shrink-0 rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] hover:bg-[#EEEEFF]"
-                  >
-                    {selectedFindingId === finding.findingId ? 'Close' : 'Inspect'}
-                  </button>
+                  <div className="shrink-0 flex flex-wrap gap-2 justify-end">
+                    {finding.topicId && finding.blockId && (
+                      <button
+                        type="button"
+                        data-testid="review-open-in-author"
+                        disabled={navigation.status !== 'ready'}
+                        onClick={() => onOpenFinding(finding)}
+                        className="rounded-lg bg-[#5B5BD6] px-3 py-1.5 text-[11px] font-medium text-white hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Open in Author
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFindingId(selectedFindingId === finding.findingId ? null : finding.findingId)}
+                      className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] hover:bg-[#EEEEFF]"
+                    >
+                      {selectedFindingId === finding.findingId ? 'Close' : 'Inspect'}
+                    </button>
+                  </div>
                 </div>
+                {navigation.status !== 'ready' && navigation.status !== 'unavailable' && finding.topicId && finding.blockId && (
+                  <p data-testid="review-navigation-unavailable" data-reason={navigation.status} className="mt-2 text-[11px] text-[#92400E]">
+                    {navigation.message}
+                  </p>
+                )}
 
                 {selectedFindingId === finding.findingId && selectedFinding && (
                   <div data-testid="review-finding-inspector" className="mt-4 border-t border-[#F4F2EE] pt-4">
@@ -12503,7 +12593,8 @@ function RealReviewFindingsPanel({
                   </div>
                 )}
               </article>
-            ))}
+              )
+            })}
           </div>
         </>
       )}
@@ -12524,8 +12615,11 @@ function QualityScreen({
   isDemoMode,
   reviewInputSnapshot,
   reviewModel,
+  topics,
+  topicContent,
   onRunGroundedReview,
   onSetGroundedFindingStatus,
+  onOpenGroundedFinding,
 }: {
   onNav: (s: Screen) => void
   findingStatuses: Record<number, FindingStatus>
@@ -12539,8 +12633,11 @@ function QualityScreen({
   isDemoMode?: boolean
   reviewInputSnapshot?: ReviewInputSnapshot | null
   reviewModel: ReviewModel
+  topics: TocItem[]
+  topicContent: Record<string, DocBlock[]>
   onRunGroundedReview: () => string | null
   onSetGroundedFindingStatus: (findingId: string, status: ReviewFindingStatus) => void
+  onOpenGroundedFinding: (finding: ReviewFinding) => void
 }) {
   const stage = reviewStage
   const setStage = onSetReviewStage
@@ -13017,8 +13114,11 @@ function QualityScreen({
     <RealReviewFindingsPanel
       reviewModel={reviewModel}
       snapshot={reviewInputSnapshot ?? null}
+      topics={topics}
+      topicContent={topicContent}
       onRun={onRunGroundedReview}
       onSetStatus={onSetGroundedFindingStatus}
+      onOpenFinding={onOpenGroundedFinding}
     />
   ) : (
     <div>
@@ -14520,6 +14620,7 @@ export default function App() {
   const [evidenceIndex, setEvidenceIndex] = useState<EvidenceIndex | null>(null)
   const [isDemoMode, setIsDemoMode] = useState(false)
   const [reviewContext, setReviewContext] = useState<ReviewContext>(null)
+  const [realReviewTarget, setRealReviewTarget] = useState<ReviewAuthorTarget | null>(null)
   const [findingStatuses, setFindingStatuses] = useState<Record<number, FindingStatus>>({})
   const [aiReviewDone, setAiReviewDone] = useState(false)
   const [reviewStage, setReviewStage] = useState<1 | 2>(1)
@@ -14563,13 +14664,15 @@ export default function App() {
       const ok = await persistCurrentProject()
       if (!ok) {
         setNavError('Your latest changes could not be saved.')
-        return
+        return false
       }
     }
     setNavError(null)
     setPrevScreen(screen)
+    if (s !== 'studio') setRealReviewTarget(null)
     setScreen(s)
     window.scrollTo(0, 0)
+    return true
   }
 
   const jumpToSection = (ctx: ReviewContext) => {
@@ -15047,6 +15150,16 @@ export default function App() {
     groundingStyleProfile,
     authorTopicMetadata,
   ])
+  const handleOpenGroundedFinding = async (finding: ReviewFinding) => {
+    const navigation = resolveReviewAuthorTarget(
+      finding, currentReviewInputSnapshot, appToc, topicContentRef.current,
+    )
+    if (navigation.status !== 'ready') return
+    if (await navigate('studio')) {
+      setReviewContext(null)
+      setRealReviewTarget(navigation.target)
+    }
+  }
   useEffect(() => {
     if (appLoading || isDemoMode || !currentReviewInputSnapshot) return
     const alreadyCurrent = reviewModel.inputSnapshot?.snapshotId === currentReviewInputSnapshot.snapshotId
@@ -15958,8 +16071,8 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
-      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} />
+      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
+      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onOpenGroundedFinding={handleOpenGroundedFinding} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
       case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
       default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />

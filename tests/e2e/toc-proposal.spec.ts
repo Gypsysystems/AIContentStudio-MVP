@@ -348,8 +348,14 @@ test("committing evidence-backed topics opens editable initial drafts without fi
   await page.getByRole("button", { name: /Content Studio/ }).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
   const duplicateName = `${projectName} Copy`
-  await expect.poll(async () => (await readProject(page, duplicateName))
-    .authorTopicMetadata[topicId]?.generatedFreshness).toBe("current")
+  await expect.poll(async () => {
+    try {
+      return (await readProject(page, duplicateName)).authorTopicMetadata[topicId]?.generatedFreshness
+    } catch (error) {
+      if (String(error).includes("Project not found:")) return null
+      throw error
+    }
+  }, { timeout: 10_000 }).toBe("current")
   const duplicate = await readProject(page, duplicateName)
   expect(duplicate.topicContent[topicId]).toEqual(blocks)
   expect(duplicate.authorTopicMetadata[topicId].draft?.method).toBe("deterministic-evidence-draft-v1")

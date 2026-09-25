@@ -11,4 +11,5 @@
 - [Author project search](author-project-search.md) — index persisted topic content by stable TOC ID; real projects never use demo search fallback.
 - [Review data boundary](review-data-boundary.md) — persisted real Review history is project-scoped; demo findings never hydrate into it.
 - [Review rule evidence](review-rule-evidence.md) — language checks are conservative; writing and formatting findings require explicit enforceable snapshot rules.
+- [Review-to-Author navigation](review-author-navigation.md) — treat locating and focusing an authored block as a read-only operation; guard stale IDs first.
 - [Brand guideline font evidence](brand-guideline-font-evidence.md) — map font families to typography roles only from explicit document evidence; metadata cannot fill unresolved roles.
