@@ -1,4 +1,5 @@
 import type { PublishBlock, PublishProjection } from './publishProjection'
+import { htmlConditionError, matchesCondition } from './publishConditions'
 import { htmlPublisherStyles, type HtmlPalette } from './htmlPublisherStyles'
 
 type Profile = {
@@ -27,6 +28,19 @@ type HtmlProjection = PublishProjection<
   { id: string; name: string; layoutType: string }, Master, { id: string; name: string }
 >
 type Topic = HtmlProjection['topics'][number]
+type HtmlConditionOptions = { selectedCondition?: string }
+
+function selectHtmlContent(projection: HtmlProjection, options?: HtmlConditionOptions): HtmlProjection {
+  const error = htmlConditionError(projection.topics, options?.selectedCondition)
+  if (error) throw new Error(error)
+  return {
+    ...projection,
+    topics: projection.topics.map(topic => ({
+      ...topic,
+      blocks: topic.blocks.filter(block => matchesCondition(block, options?.selectedCondition)),
+    })),
+  }
+}
 type Card = {
   id?: string; title?: string; desc?: string; icon?: string
   destinationType?: string; topicId?: number; url?: string; fileName?: string
@@ -192,7 +206,9 @@ function cardDestination(card: Card, topics: Topic[], assets: string[], prefix: 
   return { href: null, label: 'No destination selected', external: false }
 }
 
-export function getHtmlPublishDiagnostics(projection: HtmlProjection): HtmlPublishDiagnostics {
+export function getHtmlPublishDiagnostics(source: HtmlProjection, options?: HtmlConditionOptions): HtmlPublishDiagnostics {
+  const projection = htmlConditionError(source.topics, options?.selectedCondition)
+    ? source : selectHtmlContent(source, options)
   let assets: string[] = []
   let assetError: string | null = null
   try { assets = assetPaths(projection) } catch (error) { assetError = (error as Error).message }
@@ -275,7 +291,9 @@ const link=document.createElement('a');link.href=(location.pathname.includes('/t
 link.textContent=entry.title;output.append(link)}})})})();`
 }
 
-export async function generateHtmlPackage(projection: HtmlProjection): Promise<Blob> {
+export async function generateHtmlPackage(source: HtmlProjection, options?: HtmlConditionOptions): Promise<Blob> {
+  // Validate before adding content, search entries, or assets to the package.
+  const projection = selectHtmlContent(source, options)
   const JSZip = (await import('jszip')).default
   const zip = new JSZip()
   const colors = palette(projection.styleProfile)

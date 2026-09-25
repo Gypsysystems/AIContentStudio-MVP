@@ -4,6 +4,7 @@ export type PublishBlock = {
   id: string
   type: string
   content: string
+  conditions?: string[]
   caption?: string
   mediaType?: string
   listItems?: Array<{ text: string }>

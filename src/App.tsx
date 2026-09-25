@@ -92,6 +92,7 @@ import { generateHtmlPackage, getHtmlPublishDiagnostics } from './htmlPublisher'
 import { generateWordDocument } from './wordPublisher'
 import { generatePdfDocument } from './pdfPublisher'
 import { ProjectPreview } from './projectPreview'
+import { availableConditions, htmlConditionError } from './publishConditions'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -194,7 +195,7 @@ type HtmlMasterPage = {
 type Snippet = { id: string; name: string; content: string }
 type ConditionGroup = { id: string; group: string; tags: string[] }
 type DocComment = { id: string; blockId: string; anchor: string; text: string; resolved: boolean }
-type PublishConfig = { selectedFormats: string[]; activeVariant: string }
+type PublishConfig = { selectedFormats: string[]; activeVariant: string; selectedCondition?: string }
 type ProjectPublishProjection = PublishProjection<DocBlock, StyleProfile, BrandProfile, PageLayout, HtmlMasterPage, OutputTemplatePack>
 type ProjectSource = { fileId: string; file: File }
 type AuthorProjectSource = { fileId: string; name: string }
@@ -13432,19 +13433,20 @@ function QualityScreen({
 }
 
 // ── Screen: Preview ───────────────────────────────────────────────────────────
-function PreviewScreen({ onNav, isDemoMode, projectName, toc, topicContent, projection }: {
+function PreviewScreen({ onNav, isDemoMode, projectName, toc, topicContent, projection, selectedCondition }: {
   onNav: (s: Screen) => void
   isDemoMode?: boolean
   projectName?: string
   toc?: TocItem[]
   topicContent?: Record<string, DocBlock[]>
   projection?: ProjectPublishProjection
+  selectedCondition?: string
 }) {
   const [template, setTemplate] = useState('default')
   const templates = ['Default', 'Enterprise', 'Minimal', 'Technical']
 
   if (!isDemoMode && projection) return <div className="flex-1 min-h-0 flex flex-col">
-    <ProjectPreview projection={projection} />
+    <ProjectPreview projection={projection} selectedCondition={selectedCondition} />
     <div className="bg-white border-t border-[#E2DED7] px-5 py-3 flex justify-between">
       <button onClick={() => onNav('quality')} className="text-sm text-[#6B6B7E]">← Back to Review</button>
       <button onClick={() => onNav('publish')} className="text-sm font-medium text-[#5B5BD6]">Go to Publish →</button>
@@ -13594,18 +13596,37 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
   const activeProfile = projection.styleProfile
   const activeBrand = projection.legacyBrandProfile
   const activePack = projection.templatePack
-  const htmlDiagnostics = useMemo(() => getHtmlPublishDiagnostics(projection), [projection])
+  const selectedCondition = publishConfig?.selectedCondition
+  const conditionOptions = availableConditions(projection.topics)
+  const conditionError = htmlConditionError(projection.topics, selectedCondition)
+  const htmlDiagnostics = useMemo(() =>
+    getHtmlPublishDiagnostics(projection, { selectedCondition }), [projection, selectedCondition])
 
   const selectedFormats = (publishConfig?.selectedFormats ?? ['pdf', 'word', 'html']) as ('pdf' | 'word' | 'html')[]
   const setSelectedFormats = (updater: ('pdf'|'word'|'html')[] | ((prev: ('pdf'|'word'|'html')[]) => ('pdf'|'word'|'html')[])) => {
     const next = typeof updater === 'function' ? updater(selectedFormats) : updater
-    onPublishConfigChange?.({ selectedFormats: next, activeVariant })
+    onPublishConfigChange?.({ selectedFormats: next, activeVariant, selectedCondition })
   }
   const activeVariant = publishConfig?.activeVariant || 'presight-external'
-  const setActiveVariant = (v: string) => onPublishConfigChange?.({ selectedFormats, activeVariant: v })
+  const setActiveVariant = (v: string) => onPublishConfigChange?.({ selectedFormats, activeVariant: v, selectedCondition })
+  const setSelectedCondition = (value: string) => {
+    generationId.current++
+    setBlobs({})
+    setErrors({})
+    setGeneratedFor(null)
+    setGenStep(null)
+    onPublishConfigChange?.({ selectedFormats, activeVariant, selectedCondition: value || undefined })
+  }
   const [genStep, setGenStep] = useState<string | null>(null)
   const [blobs, setBlobs] = useState<Partial<Record<'pdf' | 'word' | 'html', Blob>>>({})
   const [errors, setErrors] = useState<Partial<Record<'pdf' | 'word' | 'html', string>>>({})
+  const generationId = useRef(0)
+  const [generatedFor, setGeneratedFor] = useState<{ snapshot: string; condition?: string; id: number } | null>(null)
+  const outputsCurrent = generatedFor?.id === generationId.current
+    && generatedFor.condition === selectedCondition
+    && generatedFor.snapshot === JSON.stringify(projection)
+  const visibleBlobs = outputsCurrent ? blobs : {}
+  const visibleErrors = outputsCurrent ? errors : {}
   const [activePreviewFormat, setActivePreviewFormat] = useState<'pdf' | 'word' | 'html'>('pdf')
 
   const [showVariantMenu, setShowVariantMenu] = useState(false)
@@ -13636,6 +13657,8 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
   }
 
   const handleGenerate = async () => {
+    const id = ++generationId.current
+    const snapshot = JSON.stringify(projection)
     const newBlobs: Partial<Record<'pdf' | 'word' | 'html', Blob>> = {}
     const newErrors: Partial<Record<'pdf' | 'word' | 'html', string>> = {}
     setBlobs({})
@@ -13666,7 +13689,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     if (selectedFormats.includes('html')) {
       try {
         await step('Generating HTML package…', 200)
-        const blob = await generateHtmlPackage(projection)
+        const blob = await generateHtmlPackage(projection, { selectedCondition })
         newBlobs.html = blob
       } catch (e) {
         newErrors.html = `HTML generation failed: ${(e as Error).message}`
@@ -13674,8 +13697,10 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     }
 
     await step('Finalizing…', 300)
+    if (id !== generationId.current) return
     setBlobs(newBlobs)
     setErrors(newErrors)
+    setGeneratedFor({ snapshot, condition: selectedCondition, id })
     setGenStep(null)
   }
 
@@ -13760,7 +13785,11 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
         <dt className="text-[#6B6B7E]">Unresolved variables</dt><dd>{projection.unresolvedVariables.length}</dd>
       </dl>
       <p className="text-xs text-[#6B6B7E] mt-4">{details}</p>
-      <p className="text-xs text-amber-800 mt-2">This snapshot has no audience selection. HTML includes conditional blocks unfiltered; Word and PDF reject them during generation.</p>
+      {conditionalTopicTitles.length > 0 && <p className="text-xs text-amber-800 mt-2">
+        {fmt === 'html'
+          ? conditionError ?? `HTML will include only blocks matching "${selectedCondition}" plus unconditional content.`
+          : 'Word and PDF reject conditional blocks because their export projection has no audience filter.'}
+      </p>}
     </div>
   }
 
@@ -13799,10 +13828,11 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
         )}
         {conditionalTopicTitles.length > 0 && (
           <div role="alert" data-testid="publish-conditional-warning"
-            className="bg-red-50 border border-red-300 text-red-950 rounded-xl p-4 mb-4 text-sm">
-            <strong>Conditional content requires review before publishing.</strong>
-            <p className="mt-1">HTML outputs include conditional blocks unfiltered; Word and PDF reject them.
-              No audience is selected in this snapshot. Affected topics: {conditionalTopicTitles.join(', ')}.</p>
+            className={`rounded-xl border p-4 mb-4 text-sm ${conditionError
+              ? 'bg-red-50 border-red-300 text-red-950' : 'bg-blue-50 border-blue-300 text-blue-950'}`}>
+            <strong>{conditionError ? 'HTML needs an audience condition before publishing.' : `HTML audience condition: ${selectedCondition}`}</strong>
+            <p className="mt-1">{conditionError ?? 'HTML includes only matching conditional blocks and unconditional content.'}
+              {' '}Word and PDF still reject conditional blocks. Affected topics: {conditionalTopicTitles.join(', ')}.</p>
           </div>
         )}
 
@@ -13840,6 +13870,19 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
               </div>
             </div>
 
+            {conditionalTopicTitles.length > 0 && <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
+              <label htmlFor="html-audience-condition" className="block text-[13px] font-semibold text-[#111218] mb-2">
+                HTML audience condition
+              </label>
+              <select id="html-audience-condition" value={selectedCondition ?? ''}
+                onChange={event => setSelectedCondition(event.target.value)}
+                className="w-full border border-[#E2DED7] rounded-lg px-3 py-2 text-[12px] bg-white">
+                <option value="">Select a condition before generating HTML</option>
+                {conditionOptions.map(condition => <option key={condition} value={condition}>{condition}</option>)}
+              </select>
+              <p className="text-xs text-[#6B6B7E] mt-2">This selection filters HTML only. The output variant above does not select an audience; Word and PDF still reject conditional blocks.</p>
+            </div>}
+
             {/* Format-specific Output Configuration */}
             <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
               <div className="flex items-center justify-between mb-3">
@@ -13875,6 +13918,8 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
                 <div className="border-t border-[#F4F2EE] px-4 py-3 space-y-2">
                   {[
                     { label: 'Variables', value: hasUnresolvedVars ? `${unresolvedVars.size} unresolved` : 'All resolved', ok: !hasUnresolvedVars },
+                    { label: 'HTML Conditions', value: conditionError ?? (conditionalTopicTitles.length
+                      ? `Selected: ${selectedCondition} — matching blocks only` : 'No conditional blocks'), ok: !conditionError },
                     { label: 'HTML Topic Pages', value: `${htmlDiagnostics.topicPages} from committed TOC`, ok: htmlDiagnostics.topicPages > 0 },
                     { label: 'HTML Navigation Cards', value: `${htmlDiagnostics.validCards} linked · ${htmlDiagnostics.unavailableCards} unavailable`, ok: htmlDiagnostics.unavailableCards === 0 },
                     { label: 'HTML Master Pages', value: htmlDiagnostics.hiddenTopicBodies
@@ -13938,11 +13983,11 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
             </button>
 
             {/* Per-format download cards */}
-            {(Object.keys(blobs).length > 0 || Object.keys(errors).length > 0) && (
+            {(Object.keys(visibleBlobs).length > 0 || Object.keys(visibleErrors).length > 0) && (
               <div className="space-y-2">
                 {(['pdf', 'word', 'html'] as const).filter(f => selectedFormats.includes(f)).map(f => {
-                  const blob = blobs[f]
-                  const err = errors[f]
+                  const blob = visibleBlobs[f]
+                  const err = visibleErrors[f]
                   const exts: Record<string, string> = { pdf: `${safeFilename}.pdf`, word: `${safeFilename}.docx`, html: `${safeFilename}-html.zip` }
                   if (err) return (
                     <div key={f} className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-xl p-3 flex items-center justify-between">
@@ -13960,7 +14005,11 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
                         <p className="text-[12px] font-semibold text-[#15803D]">{FORMAT_META[f].label} Ready</p>
                         <p className="text-[10px] text-[#16A34A]">{(blob.size / 1024).toFixed(1)} KB · {exts[f]}</p>
                       </div>
-                      <button onClick={() => downloadBlob(blob, exts[f])} className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[#BBF7D0] rounded-lg text-[12px] text-[#15803D] font-medium hover:bg-[#F0FDF4] transition-colors flex-shrink-0">
+                      <button onClick={() => {
+                        if (generatedFor?.id === generationId.current
+                          && generatedFor.condition === selectedCondition
+                          && generatedFor.snapshot === JSON.stringify(projection)) downloadBlob(blob, exts[f])
+                      }} className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[#BBF7D0] rounded-lg text-[12px] text-[#15803D] font-medium hover:bg-[#F0FDF4] transition-colors flex-shrink-0">
                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v8M3 6.5L6 9.5 9 6.5M1.5 10.5h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
                         Download
                       </button>
@@ -15515,7 +15564,7 @@ export default function App() {
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} />
-      case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} />
+      case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {
         const projection = publishProjection()
         return <PublishScreen onNav={navigate} projection={projection} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />

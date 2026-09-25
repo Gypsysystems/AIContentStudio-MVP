@@ -1,6 +1,7 @@
 import { Fragment, type CSSProperties, type ReactNode } from 'react'
 import type { StyleProfile } from './App'
 import type { PublishBlock, PublishProjection } from './publishProjection'
+import { htmlConditionError, matchesCondition } from './publishConditions'
 
 type Block = Omit<PublishBlock, 'listItems' | 'tableData'> & {
   conditions?: string[]
@@ -61,16 +62,19 @@ function linkedText(text: string, topics: Topic[], linkColor: string): ReactNode
   return parts
 }
 
-function PreviewBlock({ block, profile, topics }: { block: Block; profile: StyleProfile; topics: Topic[] }) {
+function PreviewBlock({ block, profile, topics, selectedCondition }: {
+  block: Block; profile: StyleProfile; topics: Topic[]; selectedCondition?: string
+}) {
   const text = block.content ?? ''
   const body = (extra?: CSSProperties): CSSProperties => ({
     ...roleStyle(profile.body, family(profile, profile.body, 'body'), profile.bodyTextColor ?? profile.body.color),
     ...extra,
   })
   const linked = (value: string) => linkedText(value, topics, profile.linkColor ?? profile.links.color)
-  if (block.conditions?.length) return <p className="text-amber-800 text-sm" data-testid="preview-condition-warning">
-    Conditional block not shown: the full-project snapshot has no selected audience.
+  if (block.conditions?.length && !selectedCondition) return <p className="text-amber-800 text-sm" data-testid="preview-condition-warning">
+    Conditional block not shown: select an HTML audience condition in Publish.
   </p>
+  if (!matchesCondition(block, selectedCondition)) return null
   if (['h1', 'h2', 'h3', 'h4'].includes(block.type)) {
     const key = block.type as 'h1' | 'h2' | 'h3' | 'h4'
     const role = profile[key]
@@ -136,8 +140,10 @@ function PreviewBlock({ block, profile, topics }: { block: Block; profile: Style
   return text ? <p style={body()}>{linked(text)}</p> : null
 }
 
-export function ProjectPreview({ projection }: { projection: Projection }) {
+export function ProjectPreview({ projection, selectedCondition }: { projection: Projection; selectedCondition?: string }) {
   const { styleProfile: profile, topics } = projection
+  const conditionError = htmlConditionError(topics, selectedCondition)
+  const validSelection = conditionError ? undefined : selectedCondition
   const layout = projection.contentLayout
   const cover = projection.coverLayout?.layoutType === 'cover' ? projection.coverLayout : null
   const primary = profile.primaryColor ?? '#5B5BD6'
@@ -169,10 +175,13 @@ export function ProjectPreview({ projection }: { projection: Projection }) {
           {layout && ` · ${layout.pageSize ?? 'A4'} ${layout.orientation ?? 'portrait'} · ${layout.marginLeft ?? 20}/${layout.marginRight ?? 20}mm side margins`}</p>
       </div>
       {conditionalTopics.length > 0 && <div role="alert" data-testid="preview-conditional-export-warning"
-        className="bg-red-50 border border-red-300 text-red-950 rounded-xl p-4 text-sm">
-        <strong>Conditional content is not audience-filtered for publishing.</strong>
-        <p className="mt-1">The preview masks these blocks because no audience is selected. HTML export would include them unfiltered;
-          Word and PDF reject conditional blocks. Review the listed topics before publishing—this preview does not make the HTML output safe.</p>
+        className={`border rounded-xl p-4 text-sm ${conditionError
+          ? 'bg-red-50 border-red-300 text-red-950' : 'bg-blue-50 border-blue-300 text-blue-950'}`}>
+        <strong>{conditionError ? 'HTML publishing requires an audience condition.' : `HTML audience condition: ${validSelection}`}</strong>
+        <p className="mt-1">{conditionError
+          ? 'Conditional blocks are masked here and HTML export refuses to publish until a valid condition is selected in Publish.'
+          : 'This view shows matching conditional blocks and unconditional content; non-matching blocks are excluded from HTML.'}
+          {' '}Word and PDF still reject conditional blocks.</p>
         <ul className="list-disc pl-5 mt-2">{conditionalTopics.map(({ topic, count }) =>
           <li key={topic.topicId}>{topic.title} ({count} conditional {count === 1 ? 'block' : 'blocks'})</li>)}</ul>
       </div>}
@@ -212,7 +221,7 @@ export function ProjectPreview({ projection }: { projection: Projection }) {
             const bodyMissing = !bodyBlock
             const role = profile[`h${Math.min(4, Math.max(1, Math.round(topic.level)))}` as 'h1' | 'h2' | 'h3' | 'h4']
             const blocks = topic.blocks[0]?.type === 'h1' ? topic.blocks.slice(1) : topic.blocks
-            const headings = blocks.filter(block => /^h[1-4]$/.test(block.type) && !block.conditions?.length)
+            const headings = blocks.filter(block => /^h[1-4]$/.test(block.type) && matchesCondition(block, validSelection))
             const next = topics[index + 1]
             const prev = topics[index - 1]
             const bodyContent = <div className="flex gap-4">
@@ -225,7 +234,7 @@ export function ProjectPreview({ projection }: { projection: Projection }) {
                 <h2 style={roleStyle(role, family(profile, role, `h${Math.min(4, Math.max(1, Math.round(topic.level)))}`),
                   profile.headingTextColor ?? role.color)}>{topic.title}</h2>
                 {blocks.length ? blocks.map(block => <div key={block.id} id={`preview-block-${topic.topicId}-${block.id}`}>
-                  <PreviewBlock block={block} profile={profile} topics={topics} />
+                  <PreviewBlock block={block} profile={profile} topics={topics} selectedCondition={validSelection} />
                 </div>)
                   : <p className="text-sm italic text-[#6B6B7E]">Needs Grounding — no content authored for this topic.</p>}
               </div>
