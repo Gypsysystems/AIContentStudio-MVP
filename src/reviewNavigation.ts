@@ -1,9 +1,9 @@
-import { stableAuthorTopicId } from './authorMetadata'
-import type { ReviewFinding } from './reviewModel'
+import { checkReviewActionEligibility } from './reviewActionEligibility'
+import type { ReviewFinding, ReviewModel } from './reviewModel'
+import type { ReviewInputDocBlock } from './reviewInput'
 import type { ReviewInputSnapshot } from './reviewInput'
 
 type AuthorTopic = { id: number; topicId?: string }
-type AuthorBlock = { id: string }
 
 export type ReviewAuthorTarget = {
   findingId: string
@@ -14,43 +14,39 @@ export type ReviewAuthorTarget = {
 
 export type ReviewNavigationState =
   | { status: 'ready'; target: ReviewAuthorTarget }
-  | { status: 'unavailable' | 'stale' | 'missing-topic' | 'missing-block'; message: string }
+  | { status: 'unavailable' | 'stale' | 'missing-topic' | 'missing-block' | 'changed-block'; message: string }
 
 export function resolveReviewAuthorTarget(
   finding: ReviewFinding,
+  model: ReviewModel,
   snapshot: ReviewInputSnapshot | null,
   topics: AuthorTopic[],
-  topicContent: Record<string, AuthorBlock[]>,
+  topicContent: Record<string, ReviewInputDocBlock[]>,
 ): ReviewNavigationState {
   if (!finding.topicId || !finding.blockId) {
     return { status: 'unavailable', message: 'This finding has no exact authored block to open.' }
   }
-  if (!snapshot || finding.projectId !== snapshot.projectId) {
-    return { status: 'stale', message: 'This finding is stale. Rerun Review with current inputs before opening it in Author.' }
-  }
-  const topic = topics.find(item => stableAuthorTopicId(item) === finding.topicId)
-  if (!topic) {
-    return { status: 'missing-topic', message: 'The authored topic no longer exists. Rerun Review to update this finding.' }
-  }
-  const blocks = topicContent[finding.topicId] ?? topicContent[String(topic.id)]
-  if (!blocks?.some(block => block.id === finding.blockId)) {
-    return { status: 'missing-block', message: 'The exact authored block no longer exists. Rerun Review to update this finding.' }
-  }
-  if (
-    snapshot.readiness !== 'ready'
-    || finding.inputSnapshotId !== snapshot.snapshotId
-    || finding.freshness.status !== 'current'
-    || finding.status === 'retired'
-  ) {
-    return { status: 'stale', message: 'This finding is stale. Rerun Review with current inputs before opening it in Author.' }
-  }
+  const eligibility = checkReviewActionEligibility(model, finding.findingId, snapshot, topics, topicContent, 'exact')
+  if (!eligibility.ok) return { status: eligibility.code, message: eligibility.reason }
+  const currentFinding = model.findings.find(item => item.findingId === finding.findingId)!
   return {
     status: 'ready',
     target: {
-      findingId: finding.findingId,
-      topicId: finding.topicId,
-      blockId: finding.blockId,
-      category: finding.category,
+      findingId: currentFinding.findingId,
+      topicId: currentFinding.topicId!,
+      blockId: currentFinding.blockId!,
+      category: currentFinding.category,
     },
   }
+}
+
+// The save may wait on IndexedDB while Review inputs or the selected run change.
+export async function validateReviewNavigationAfterSave(
+  save: () => Promise<boolean>,
+  validate: () => ReviewNavigationState,
+): Promise<ReviewNavigationState | null> {
+  const before = validate()
+  if (before.status !== 'ready') return before
+  if (!await save()) return null
+  return validate()
 }

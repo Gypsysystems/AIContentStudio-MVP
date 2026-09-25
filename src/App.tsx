@@ -76,7 +76,8 @@ import {
   type ReviewFindingStatus,
   type ReviewModel,
 } from './reviewModel'
-import { resolveReviewAuthorTarget, type ReviewAuthorTarget } from './reviewNavigation'
+import { resolveReviewAuthorTarget, validateReviewNavigationAfterSave, type ReviewAuthorTarget } from './reviewNavigation'
+import { checkReviewActionEligibility } from './reviewActionEligibility'
 import { prepareSpellingApply, recordReviewFindingStatus } from './reviewSuggestions'
 import {
   buildReviewInputSnapshot,
@@ -12348,9 +12349,9 @@ function RealReviewFindingsPanel({
   topics: TocItem[]
   topicContent: Record<string, DocBlock[]>
   onRun: () => string | null
-  onSetStatus: (findingId: string, status: ReviewFindingStatus) => void
+  onSetStatus: (findingId: string, status: ReviewFindingStatus) => string | null
   onApplyFinding: (findingId: string) => string | null
-  onOpenFinding: (finding: ReviewFinding) => void
+  onOpenFinding: (finding: ReviewFinding) => Promise<string | null>
 }) {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [statusFilter, setStatusFilter] = useState('active')
@@ -12498,7 +12499,9 @@ function RealReviewFindingsPanel({
               </div>
             )}
             {visibleFindings.map(finding => {
-              const navigation = resolveReviewAuthorTarget(finding, snapshot, topics, topicContent)
+              const eligibility = checkReviewActionEligibility(reviewModel, finding.findingId, snapshot, topics, topicContent)
+              const navigation = resolveReviewAuthorTarget(finding, reviewModel, snapshot, topics, topicContent)
+              const actionDisabled = !eligibility.ok
               return (
               <article data-testid="grounded-review-finding" key={finding.findingId} className="rounded-xl border border-[#E2DED7] bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
@@ -12511,6 +12514,7 @@ function RealReviewFindingsPanel({
                       <span className="text-[10px] text-[#9898AB]">{finding.required ? 'Required' : 'Optional'}</span>
                       <span className="text-[10px] text-[#9898AB]">{finding.status}</span>
                       {finding.freshness.status === 'stale' && <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-semibold text-[#92400E]">Stale history</span>}
+                      {finding.reviewRunId !== reviewModel.activeReviewRunId && <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-semibold text-[#92400E]">Earlier run · read-only</span>}
                     </div>
                     <p className="text-[13px] font-medium text-[#111218]">{finding.originalText ?? finding.rationale}</p>
                     <p className="mt-1 font-mono text-[10px] text-[#9898AB]">
@@ -12523,7 +12527,7 @@ function RealReviewFindingsPanel({
                         type="button"
                         data-testid="review-open-in-author"
                         disabled={navigation.status !== 'ready'}
-                        onClick={() => onOpenFinding(finding)}
+                        onClick={() => { void onOpenFinding(finding).then(setActionError) }}
                         className="rounded-lg bg-[#5B5BD6] px-3 py-1.5 text-[11px] font-medium text-white hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Open in Author
@@ -12543,6 +12547,7 @@ function RealReviewFindingsPanel({
                     {navigation.message}
                   </p>
                 )}
+                {!eligibility.ok && <p data-testid="review-action-unavailable" className="mt-2 text-[11px] text-[#92400E]">{eligibility.reason}</p>}
 
                 {selectedFindingId === finding.findingId && selectedFinding && (
                   <div data-testid="review-finding-inspector" className="mt-4 border-t border-[#F4F2EE] pt-4">
@@ -12599,15 +12604,15 @@ function RealReviewFindingsPanel({
                             <button
                               type="button"
                               data-testid="review-apply-spelling"
-                              disabled={navigation.status !== 'ready' || selectedFinding.reviewRunId !== reviewModel.activeReviewRunId}
+                              disabled={navigation.status !== 'ready' || actionDisabled}
                               onClick={() => setActionError(onApplyFinding(selectedFinding.findingId))}
                               className="rounded-lg bg-[#5B5BD6] px-3 py-1.5 font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
                             >Apply correction</button>
                             <button
                               type="button"
                               data-testid="review-reject-spelling"
-                              disabled={navigation.status !== 'ready' || selectedFinding.reviewRunId !== reviewModel.activeReviewRunId}
-                              onClick={() => { onSetStatus(selectedFinding.findingId, 'rejected'); setActionError(null) }}
+                              disabled={navigation.status !== 'ready' || actionDisabled}
+                              onClick={() => setActionError(onSetStatus(selectedFinding.findingId, 'rejected'))}
                               className="rounded-lg border border-[#E2DED7] px-3 py-1.5 font-medium text-[#6B6B7E] disabled:opacity-40"
                             >Reject suggestion</button>
                           </div>
@@ -12625,13 +12630,13 @@ function RealReviewFindingsPanel({
                     {selectedFinding.status !== 'retired' && (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {selectedFinding.status !== 'resolved' && selectedFinding.category !== 'Spelling' && (
-                          <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'resolved')} className="rounded-lg border border-[#86EFAC] bg-[#F0FDF4] px-3 py-1.5 text-[11px] font-medium text-[#15803D]">Mark resolved</button>
+                          <button type="button" disabled={actionDisabled} onClick={() => setActionError(onSetStatus(selectedFinding.findingId, 'resolved'))} className="rounded-lg border border-[#86EFAC] bg-[#F0FDF4] px-3 py-1.5 text-[11px] font-medium text-[#15803D] disabled:cursor-not-allowed disabled:opacity-40">Mark resolved</button>
                         )}
                         {selectedFinding.status !== 'dismissed' && (
-                          <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'dismissed')} className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E]">Dismiss</button>
+                          <button type="button" disabled={actionDisabled} onClick={() => setActionError(onSetStatus(selectedFinding.findingId, 'dismissed'))} className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] disabled:cursor-not-allowed disabled:opacity-40">Dismiss</button>
                         )}
                         {(['resolved', 'dismissed', 'rejected'] as ReviewFindingStatus[]).includes(selectedFinding.status) && (
-                          <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'open')} className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6]">Reopen</button>
+                          <button type="button" disabled={actionDisabled} onClick={() => setActionError(onSetStatus(selectedFinding.findingId, 'open'))} className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] disabled:cursor-not-allowed disabled:opacity-40">Reopen</button>
                         )}
                       </div>
                     )}
@@ -12682,9 +12687,9 @@ function QualityScreen({
   topics: TocItem[]
   topicContent: Record<string, DocBlock[]>
   onRunGroundedReview: () => string | null
-  onSetGroundedFindingStatus: (findingId: string, status: ReviewFindingStatus) => void
+  onSetGroundedFindingStatus: (findingId: string, status: ReviewFindingStatus) => string | null
   onApplyGroundedFinding: (findingId: string) => string | null
-  onOpenGroundedFinding: (finding: ReviewFinding) => void
+  onOpenGroundedFinding: (finding: ReviewFinding) => Promise<string | null>
 }) {
   const stage = reviewStage
   const setStage = onSetReviewStage
@@ -14707,6 +14712,13 @@ export default function App() {
     }
   }
 
+  const completeNavigation = (s: Screen) => {
+    setNavError(null)
+    setPrevScreen(screen)
+    if (s !== 'studio') setRealReviewTarget(null)
+    setScreen(s)
+    window.scrollTo(0, 0)
+  }
   const navigate = async (s: Screen) => {
     if (projectId) {
       const ok = await persistCurrentProject()
@@ -14715,11 +14727,7 @@ export default function App() {
         return false
       }
     }
-    setNavError(null)
-    setPrevScreen(screen)
-    if (s !== 'studio') setRealReviewTarget(null)
-    setScreen(s)
-    window.scrollTo(0, 0)
+    completeNavigation(s)
     return true
   }
 
@@ -15198,15 +15206,25 @@ export default function App() {
     groundingStyleProfile,
     authorTopicMetadata,
   ])
-  const handleOpenGroundedFinding = async (finding: ReviewFinding) => {
-    const navigation = resolveReviewAuthorTarget(
-      finding, currentReviewInputSnapshot, appToc, topicContentRef.current,
-    )
-    if (navigation.status !== 'ready') return
-    if (await navigate('studio')) {
-      setReviewContext(null)
-      setRealReviewTarget(navigation.target)
+  const reviewActionContextRef = useRef({ model: reviewModel, snapshot: currentReviewInputSnapshot, topics: appToc })
+  reviewActionContextRef.current = { model: reviewModel, snapshot: currentReviewInputSnapshot, topics: appToc }
+  const currentFindingEligibility = (findingId: string, target: 'exists' | 'exact' = 'exists') => {
+    const { model, snapshot, topics } = reviewActionContextRef.current
+    return checkReviewActionEligibility(model, findingId, snapshot, topics, topicContentRef.current, target)
+  }
+  const handleOpenGroundedFinding = async (finding: ReviewFinding): Promise<string | null> => {
+    if (isDemoMode) return 'Real Review navigation is unavailable in demo mode.'
+    const check = () => {
+      const { model, snapshot, topics } = reviewActionContextRef.current
+      return resolveReviewAuthorTarget(finding, model, snapshot, topics, topicContentRef.current)
     }
+    const navigation = await validateReviewNavigationAfterSave(persistCurrentProject, check)
+    if (!navigation) return 'Your latest changes could not be saved.'
+    if (navigation.status !== 'ready') return navigation.message
+    completeNavigation('studio')
+    setReviewContext(null)
+    setRealReviewTarget(navigation.target)
+    return null
   }
   useEffect(() => {
     if (appLoading || isDemoMode || !currentReviewInputSnapshot) return
@@ -15239,6 +15257,7 @@ export default function App() {
       unsupportedAnalysis,
     )
     if (!result.ok) return result.reason
+    reviewActionContextRef.current.model = result.model
     setReviewModel(result.model)
     setAiReviewDone(true)
     setReviewRevision(contentRevision)
@@ -15257,20 +15276,23 @@ export default function App() {
   const handleSetGroundedFindingStatus = useCallback((
     findingId: string,
     status: ReviewFindingStatus,
-  ) => {
-    if (isDemoMode) return
-    if (status === 'rejected') {
-      const finding = reviewModel.findings.find(item => item.findingId === findingId)
-      if (!finding || finding.reviewRunId !== reviewModel.activeReviewRunId
-        || resolveReviewAuthorTarget(finding, currentReviewInputSnapshot, appToc, topicContentRef.current).status !== 'ready') return
-    }
-    setReviewModel(current => recordReviewFindingStatus(current, findingId, status))
+  ): string | null => {
+    if (isDemoMode) return 'Real Review actions are unavailable in demo mode.'
+    const eligibility = currentFindingEligibility(findingId, status === 'rejected' ? 'exact' : 'exists')
+    if (!eligibility.ok) return eligibility.reason
+    const updated = recordReviewFindingStatus(reviewActionContextRef.current.model, findingId, status)
+    reviewActionContextRef.current.model = updated
+    setReviewModel(updated)
     triggerAutosave()
-  }, [appToc, currentReviewInputSnapshot, isDemoMode, reviewModel, triggerAutosave])
+    return null
+  }, [isDemoMode, triggerAutosave])
   const handleApplyGroundedFinding = (findingId: string): string | null => {
     if (isDemoMode) return 'Real Review corrections are unavailable in demo mode.'
+    const eligibility = currentFindingEligibility(findingId, 'exact')
+    if (!eligibility.ok) return eligibility.reason
+    const { model, snapshot, topics } = reviewActionContextRef.current
     const result = prepareSpellingApply(
-      reviewModel, findingId, currentReviewInputSnapshot, appToc, topicContentRef.current,
+      model, findingId, snapshot, topics, topicContentRef.current,
     )
     if (!result.ok) return result.reason
     // Use Author's normal content-update path to retain manual/approved/mixed block provenance.
@@ -15278,6 +15300,7 @@ export default function App() {
     flushSync(() => {
       handleTopicContentChange(result.topicContent)
       setContentRevision(revision => revision + 1)
+      reviewActionContextRef.current.model = result.model
       setReviewModel(result.model)
     })
     triggerAutosave(true)

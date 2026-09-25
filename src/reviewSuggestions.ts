@@ -1,6 +1,7 @@
 import { stableAuthorTopicId } from './authorMetadata'
 import { reviewBlockFingerprint, type ReviewInputDocBlock, type ReviewInputSnapshot } from './reviewInput'
 import { deterministicSpellingCorrection } from './reviewLanguageChecks'
+import { checkReviewActionEligibility } from './reviewActionEligibility'
 import type { ReviewFindingStatus, ReviewModel } from './reviewModel'
 
 type Topic = { id: number; topicId?: string }
@@ -30,16 +31,9 @@ export function prepareSpellingApply<T extends Block>(
     return { ok: false, reason: 'Only verified deterministic spelling corrections can be applied.' }
   }
   const run = model.runs.find(item => item.reviewRunId === finding.reviewRunId)
-  if (!snapshot || snapshot.readiness !== 'ready' || model.projectId !== snapshot.projectId
-    || model.inputSnapshot?.snapshotId !== snapshot.snapshotId
-    || model.activeReviewRunId !== finding.reviewRunId || !run
-    || run.status !== 'complete' || !run.findingIds.includes(findingId)
-    || run.inputSnapshotId !== snapshot.snapshotId
-    || finding.projectId !== snapshot.projectId || finding.inputSnapshotId !== snapshot.snapshotId
-    || finding.freshness.status !== 'current'
-    || !['open', 'in-review'].includes(finding.status)) {
-    return { ok: false, reason: RERUN }
-  }
+  const eligibility = checkReviewActionEligibility(model, findingId, snapshot, topics, topicContent, 'exact')
+  if (!eligibility.ok) return { ok: false, reason: eligibility.reason }
+  if (!snapshot || !run || !['open', 'in-review'].includes(finding.status)) return { ok: false, reason: RERUN }
   const topic = topics.find(item => stableAuthorTopicId(item) === finding.topicId)
   if (!topic || !finding.topicId || !finding.blockId || suggestion.blockId !== finding.blockId) {
     return { ok: false, reason: `The exact authored target is missing. ${RERUN}` }

@@ -7,7 +7,8 @@ import {
   markReviewHistoryFreshness,
 } from '../../src/reviewFindings'
 import { reviewBlockFingerprint, type ReviewInputSnapshot } from '../../src/reviewInput'
-import { resolveReviewAuthorTarget } from '../../src/reviewNavigation'
+import { resolveReviewAuthorTarget, validateReviewNavigationAfterSave } from '../../src/reviewNavigation'
+import { checkReviewActionEligibility } from '../../src/reviewActionEligibility'
 import { prepareSpellingApply, recordReviewFindingStatus } from '../../src/reviewSuggestions'
 import {
   createEmptyReviewModel,
@@ -534,13 +535,25 @@ test('resolves exact real Author IDs across topic rename, reorder, and persisted
     { id: 42, topicId: 'other-topic', title: 'First now' },
     { id: 7, topicId: 'topic-recovery', title: 'Renamed after reordering' },
   ]
+  const authoredBlock = {
+    id: 'block-recovery', type: 'para',
+    content: data.snapshot.topics[0].blocks[0].content,
+  }
+  const snapshot = {
+    ...data.snapshot,
+    topics: data.snapshot.topics.map(topic => ({
+      ...topic,
+      blocks: topic.blocks.map(block => block.blockId === authoredBlock.id
+        ? { ...block, fingerprint: reviewBlockFingerprint(authoredBlock) } : block),
+    })),
+  }
   const blocks = {
     'topic-recovery': [
-      { id: 'another-block' },
-      { id: 'block-recovery' },
+      { id: 'another-block', type: 'para', content: 'Other text' },
+      authoredBlock,
     ],
   }
-  expect(resolveReviewAuthorTarget(finding, data.snapshot, topics, blocks)).toEqual({
+  expect(resolveReviewAuthorTarget(finding, persisted, snapshot, topics, blocks)).toEqual({
     status: 'ready',
     target: {
       findingId: finding.findingId,
@@ -549,14 +562,25 @@ test('resolves exact real Author IDs across topic rename, reorder, and persisted
       category: 'Unsupported Claim',
     },
   })
-  expect(resolveReviewAuthorTarget(finding, data.snapshot, topics, { 'topic-recovery': [{ id: 'another-block' }] }))
+  expect(resolveReviewAuthorTarget(finding, persisted, snapshot, topics, { 'topic-recovery': [blocks['topic-recovery'][0]] }))
     .toMatchObject({ status: 'missing-block', message: expect.stringContaining('Rerun Review') })
-  expect(resolveReviewAuthorTarget(finding, data.snapshot, topics.slice(0, 1), blocks))
+  expect(resolveReviewAuthorTarget(finding, persisted, snapshot, topics.slice(0, 1), blocks))
     .toMatchObject({ status: 'missing-topic' })
-  expect(resolveReviewAuthorTarget({ ...finding, freshness: { ...finding.freshness, status: 'stale' } }, data.snapshot, topics, blocks))
+  const staleModel = {
+    ...persisted,
+    findings: persisted.findings.map(item => item.findingId === finding.findingId
+      ? { ...item, freshness: { ...item.freshness, status: 'stale' as const } } : item),
+  }
+  expect(resolveReviewAuthorTarget(finding, staleModel, snapshot, topics, blocks))
     .toMatchObject({ status: 'stale' })
-  expect(resolveReviewAuthorTarget(finding, { ...data.snapshot, snapshotId: 'new-snapshot' }, topics, blocks))
+  expect(resolveReviewAuthorTarget(finding, persisted, { ...snapshot, snapshotId: 'new-snapshot' }, topics, blocks))
     .toMatchObject({ status: 'stale' })
+  expect(resolveReviewAuthorTarget(finding, persisted, snapshot, topics, {
+    'topic-recovery': [{ ...authoredBlock, content: 'Changed after Review.' }],
+  })).toMatchObject({ status: 'changed-block' })
+  expect(resolveReviewAuthorTarget(finding, persisted, snapshot, topics, {
+    'topic-recovery': [{ ...authoredBlock, caption: 'Changed metadata' }],
+  })).toMatchObject({ status: 'changed-block' })
 })
 
 test('generates each grounded category with stable locations, provenance, and exact evidence references', () => {
@@ -704,6 +728,92 @@ test('marks prior grounded history stale when the Review snapshot changes', () =
   expect(refreshed.findings.every(finding =>
     finding.freshness.status === 'stale'
     && finding.freshness.reasons.includes('review-input-snapshot-changed'))).toBe(true)
+})
+
+test('shared Review eligibility locks stale and superseded history but permits active findings', () => {
+  const data = fixtures()
+  const first = buildGroundedReviewRun(
+    createEmptyReviewModel(data.projectId), data.snapshot,
+    data.evidenceIndex, data.conceptAnalysis, data.unsupportedAnalysis,
+  )
+  expect(first.ok).toBe(true)
+  if (!first.ok) return
+  const finding = first.findings.find(item => item.category === 'Unsupported Claim')!
+  const topics = [{ id: 1, topicId: 'topic-recovery' }]
+  const block = {
+    id: 'block-recovery', type: 'para',
+    content: data.snapshot.topics[0].blocks[0].content,
+  }
+  const content = { 'topic-recovery': [block] }
+  const check = (model: typeof first.model, snapshot: ReviewInputSnapshot, target: 'exists' | 'exact' = 'exists') =>
+    checkReviewActionEligibility(model, finding.findingId, snapshot, topics, content, target)
+  expect(check(first.model, data.snapshot)).toEqual({ ok: true })
+  for (const status of ['open', 'dismissed', 'resolved', 'rejected'] as const) {
+    const model = {
+      ...first.model,
+      findings: first.model.findings.map(item => item.findingId === finding.findingId ? { ...item, status } : item),
+    }
+    const stale = markReviewHistoryFreshness(model, { ...data.snapshot, snapshotId: 'changed-input' })
+    expect(check(stale, { ...data.snapshot, snapshotId: 'changed-input' })).toMatchObject({
+      ok: false, code: 'stale', reason: expect.stringContaining('Rerun Review'),
+    })
+  }
+  const second = buildGroundedReviewRun(
+    first.model, data.snapshot, data.evidenceIndex, data.conceptAnalysis, data.unsupportedAnalysis,
+  )
+  expect(second.ok).toBe(true)
+  if (!second.ok) return
+  expect(second.model.findings.find(item => item.findingId === finding.findingId)?.status).toBe('open')
+  expect(check(second.model, data.snapshot)).toMatchObject({ ok: false, code: 'stale' })
+  expect(resolveReviewAuthorTarget(finding, second.model, data.snapshot, topics, content))
+    .toMatchObject({ status: 'stale', message: expect.stringContaining('Rerun Review') })
+  const active = second.findings.find(item => item.category === 'Unsupported Claim')!
+  expect(checkReviewActionEligibility(second.model, active.findingId, data.snapshot, topics, content))
+    .toEqual({ ok: true })
+  expect(checkReviewActionEligibility(second.model, active.findingId, data.snapshot, topics,
+    { 'topic-recovery': [] })).toMatchObject({ ok: false, code: 'missing-block' })
+  expect(checkReviewActionEligibility(second.model, active.findingId, data.snapshot, [], content))
+    .toMatchObject({ ok: false, code: 'missing-topic' })
+})
+
+test('navigation checks its exact target again after an awaited save', async () => {
+  const data = fixtures()
+  const first = buildGroundedReviewRun(
+    createEmptyReviewModel(data.projectId), data.snapshot,
+    data.evidenceIndex, data.conceptAnalysis, data.unsupportedAnalysis,
+  )
+  expect(first.ok).toBe(true)
+  if (!first.ok) return
+  const finding = first.findings.find(item => item.category === 'Unsupported Claim')!
+  const block = { id: 'block-recovery', type: 'para', content: data.snapshot.topics[0].blocks[0].content }
+  const snapshot = {
+    ...data.snapshot,
+    topics: data.snapshot.topics.map(topic => ({
+      ...topic, blocks: topic.blocks.map(item => ({ ...item, fingerprint: reviewBlockFingerprint(block) })),
+    })),
+  }
+  let content = { 'topic-recovery': [block] }
+  let model = first.model
+  const check = () => resolveReviewAuthorTarget(finding, model, snapshot, [{ id: 1, topicId: 'topic-recovery' }], content)
+  let release!: (saved: boolean) => void
+  const save = () => new Promise<boolean>(resolve => { release = resolve })
+  const pending = validateReviewNavigationAfterSave(save, check)
+  content = { 'topic-recovery': [{ ...block, content: 'Changed during save.' }] }
+  release(true)
+  await expect(pending).resolves.toMatchObject({ status: 'changed-block' })
+  content = { 'topic-recovery': [block] }
+  const pendingRerun = validateReviewNavigationAfterSave(save, check)
+  const second = buildGroundedReviewRun(
+    model, data.snapshot, data.evidenceIndex, data.conceptAnalysis, data.unsupportedAnalysis,
+  )
+  expect(second.ok).toBe(true)
+  if (!second.ok) return
+  model = second.model
+  release(true)
+  await expect(pendingRerun).resolves.toMatchObject({ status: 'stale' })
+  await expect(validateReviewNavigationAfterSave(async () => true, () =>
+    resolveReviewAuthorTarget(second.findings.find(item => item.category === 'Unsupported Claim')!,
+      model, snapshot, [{ id: 1, topicId: 'topic-recovery' }], content))).resolves.toMatchObject({ status: 'ready' })
 })
 
 test('duplicates grounded Review history while remapping project and source traceability', () => {
@@ -903,6 +1013,8 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await page.getByRole('button', { name: 'Inspect' }).click()
   await expect(page.getByTestId('review-finding-inspector')).toContainText('operations-a.md')
   await expect(page.getByTestId('review-finding-inspector')).toContainText('Retention period is 30 days.')
+  await page.getByRole('button', { name: 'Mark resolved' }).click()
+  await page.getByTestId('review-status-filter').selectOption('active')
 
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(1)
   await expect(page.getByTestId('run-grounded-review')).toBeEnabled({ timeout: 10_000 })
@@ -911,6 +1023,19 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   const rerun = (await readProject(page, projectName)).reviewModel
   expect(rerun.findings).toHaveLength(8)
   expect(new Set(rerun.runs.map(run => run.reviewRunId)).size).toBe(2)
+  await page.getByTestId('review-run-filter').selectOption(rerun.runs[0].reviewRunId)
+  await page.getByTestId('review-status-filter').selectOption('resolved')
+  await page.getByTestId('grounded-review-finding').getByRole('button', { name: 'Inspect' }).click()
+  await expect(page.getByRole('button', { name: 'Reopen' })).toBeDisabled()
+  await expect(page.getByTestId('review-action-unavailable')).toContainText('Rerun Review')
+  await page.getByTestId('review-category-filter').selectOption('Unsupported Claim')
+  await page.getByTestId('review-status-filter').selectOption('active')
+  await page.getByTestId('grounded-review-finding').getByRole('button', { name: 'Inspect' }).click()
+  await expect(page.getByRole('button', { name: 'Dismiss', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Mark resolved' })).toBeDisabled()
+  await expect(page.getByTestId('review-open-in-author')).toBeDisabled()
+  await page.getByTestId('review-run-filter').selectOption(rerun.activeReviewRunId!)
+  await expect(page.getByTestId('review-open-in-author')).toBeEnabled()
   await page.reload()
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(2)
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.findings.length).toBe(8)
@@ -965,6 +1090,9 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await page.getByTestId('review-category-filter').selectOption('Unsupported Claim')
   await expect(page.getByTestId('review-navigation-unavailable').first()).toHaveAttribute('data-reason', 'stale')
   await expect(page.getByTestId('review-open-in-author').first()).toBeDisabled()
+  await page.getByTestId('grounded-review-finding').first().getByRole('button', { name: 'Inspect' }).click()
+  await expect(page.getByRole('button', { name: 'Dismiss', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Mark resolved' })).toBeDisabled()
   await page.reload()
   const persisted = (await readProject(page, projectName)).reviewModel
   expect(persisted.findings.find(finding => finding.findingId === current.find(finding => finding.category === 'Spelling')!.findingId))
@@ -979,7 +1107,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   })
   await page.reload()
   await page.getByRole('button', { name: /Review/ }).click()
-  await expect(page.getByTestId('review-navigation-unavailable').first()).toHaveAttribute('data-reason', 'missing-block')
+  await expect(page.getByTestId('review-navigation-unavailable').first()).toHaveAttribute('data-reason', 'stale')
   await expect(page.getByTestId('review-open-in-author').first()).toBeDisabled()
   await expect(page.getByTestId('review-navigation-unavailable').first()).toContainText('Rerun Review')
   await expect(page.getByTestId('real-review-author-context')).toHaveCount(0)
