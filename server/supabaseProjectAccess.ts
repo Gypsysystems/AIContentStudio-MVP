@@ -37,6 +37,11 @@ interface WorkspaceMembership {
   role: MembershipRole
 }
 
+interface WorkspaceIdentity {
+  organizationName: string
+  workspaceName: string
+}
+
 interface SupabaseTokenResponse {
   access_token: string
   refresh_token: string
@@ -307,6 +312,37 @@ class SupabaseHttpClient {
     return result
   }
 
+  async workspaceIdentity(accessToken: string, workspaceId: string): Promise<WorkspaceIdentity> {
+    const query = new URLSearchParams({
+      select: 'id,name,orgs(name)',
+      id: `eq.${workspaceId}`,
+      limit: '1',
+    })
+    let response: Response
+    try {
+      response = await this.call(`/rest/v1/workspaces?${query}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+    } catch {
+      throw new Error('SUPABASE_UNAVAILABLE')
+    }
+    if (!response.ok) throw new Error('SUPABASE_UNAVAILABLE')
+    const body = await parseResponse(response)
+    if (!Array.isArray(body) || body.length !== 1) throw new Error('SUPABASE_UNAVAILABLE')
+    const workspace = body[0]
+    if (!isRecord(workspace)
+      || workspace.id !== workspaceId
+      || typeof workspace.name !== 'string'
+      || !workspace.name.trim()
+      || !isRecord(workspace.orgs)
+      || typeof workspace.orgs.name !== 'string'
+      || !workspace.orgs.name.trim()) throw new Error('SUPABASE_UNAVAILABLE')
+    return {
+      organizationName: workspace.orgs.name,
+      workspaceName: workspace.name,
+    }
+  }
+
   async tokenGrant(grant: 'password' | 'refresh_token', body: Record<string, unknown>): Promise<SupabaseTokenResponse | null> {
     let response: Response
     try {
@@ -524,12 +560,16 @@ async function handleSupabaseRoute(
       })
       return
     }
+    const activeWorkspace = memberships[0]
+    const identity = await client.workspaceIdentity(accessToken, activeWorkspace.workspace_id)
     sendJson(response, 200, {
       authenticated: true,
       mode: 'supabase',
       userId: user.id,
       workspaceIds: memberships.map(({ workspace_id }) => workspace_id),
-      activeWorkspaceId: memberships[0]?.workspace_id ?? null,
+      activeWorkspaceId: activeWorkspace.workspace_id,
+      activeOrganizationName: identity.organizationName,
+      activeWorkspaceName: identity.workspaceName,
     })
     return
   }
@@ -562,13 +602,17 @@ async function handleSupabaseRoute(
     })
     return
   }
+  const activeWorkspace = memberships[0]
+  const identity = await client.workspaceIdentity(tokens.access_token, activeWorkspace.workspace_id)
   setSessionCookies(request, response, tokens)
   sendJson(response, 200, {
     authenticated: true,
     mode: 'supabase',
     userId: user.id,
     workspaceIds: memberships.map(({ workspace_id }) => workspace_id),
-    activeWorkspaceId: memberships[0]?.workspace_id ?? null,
+    activeWorkspaceId: activeWorkspace.workspace_id,
+    activeOrganizationName: identity.organizationName,
+    activeWorkspaceName: identity.workspaceName,
   })
 }
 

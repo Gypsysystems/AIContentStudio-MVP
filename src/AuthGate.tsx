@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 
 type AuthState =
   | { kind: 'loading' }
-  | { kind: 'signed-in'; mode: 'local-dev' | 'supabase' }
+  | { kind: 'signed-in'; mode: 'local-dev' }
+  | { kind: 'signed-in'; mode: 'supabase'; organizationName: string; workspaceName: string }
   | { kind: 'signed-out'; message?: string }
   | { kind: 'unavailable'; message: string }
 
@@ -26,8 +27,19 @@ function sessionState(status: number, body: Record<string, unknown>): AuthState 
   if (body.code === 'LOCAL_DEV_PRIVATE_ONLY')
     return { kind: 'unavailable', message: 'Local development access is limited to loopback. Configure Supabase sign-in for a hosted preview.' }
   if (status === 403) return { kind: 'signed-out', message: 'Your workspace membership is inactive. Contact a workspace administrator.' }
-  if (status === 200 && body.authenticated === true)
-    return { kind: 'signed-in', mode: body.mode === 'local-dev' ? 'local-dev' : 'supabase' }
+  if (status === 200 && body.authenticated === true) {
+    if (body.mode === 'local-dev') return { kind: 'signed-in', mode: 'local-dev' }
+    if (body.mode === 'supabase'
+      && typeof body.activeOrganizationName === 'string' && body.activeOrganizationName.trim()
+      && typeof body.activeWorkspaceName === 'string' && body.activeWorkspaceName.trim())
+      return {
+        kind: 'signed-in',
+        mode: 'supabase',
+        organizationName: body.activeOrganizationName,
+        workspaceName: body.activeWorkspaceName,
+      }
+    return { kind: 'unavailable', message: 'The authentication server did not return a valid workspace.' }
+  }
   return { kind: 'signed-out', message: status === 401 ? 'Sign in to continue.' : undefined }
 }
 
@@ -95,7 +107,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     if (state.mode === 'local-dev') return <>{children}</>
     return <main className="min-h-screen bg-[#F8F7F5] flex items-center justify-center p-5">
       <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
-        <h1 className="text-xl font-semibold text-gray-900">Signed in to Content Studio</h1>
+        <h1 className="text-xl font-semibold text-gray-900">{state.organizationName} / {state.workspaceName}</h1>
+        <p className="mt-2 text-sm text-gray-600">Signed in to Content Studio</p>
         <p className="mt-3 text-sm text-gray-600">
           Cloud project access is not enabled yet. Existing projects and files remain in this browser;
           they have not been moved to a shared workspace.

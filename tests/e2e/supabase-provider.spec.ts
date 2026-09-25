@@ -123,6 +123,16 @@ test.describe('Supabase project-access provider integration', () => {
         expect(new Headers(init.headers).get('authorization')).toBe('Bearer request-access-token')
         return new Response(JSON.stringify([{ workspace_id: WORKSPACE_ID, role: 'owner' }]), { status: 200 })
       }
+      if (url.pathname === '/rest/v1/workspaces') {
+        expect(url.searchParams.get('id')).toBe(`eq.${WORKSPACE_ID}`)
+        expect(url.searchParams.get('select')).toBe('id,name,orgs(name)')
+        expect(new Headers(init.headers).get('authorization')).toBe('Bearer request-access-token')
+        return new Response(JSON.stringify([{
+          id: WORKSPACE_ID,
+          name: 'AI Content Studio',
+          orgs: { name: 'GypsySystems' },
+        }]), { status: 200 })
+      }
       throw new Error(`Unexpected Supabase endpoint ${url.pathname}`)
     })
     try {
@@ -131,7 +141,13 @@ test.describe('Supabase project-access provider integration', () => {
         body: { email: 'member@example.test', password: 'not-a-real-secret' },
       }))
       expect(login.status).toBe(200)
-      expect(login.body).toMatchObject({ authenticated: true, userId: USER_ID, activeWorkspaceId: WORKSPACE_ID })
+      expect(login.body).toMatchObject({
+        authenticated: true,
+        userId: USER_ID,
+        activeWorkspaceId: WORKSPACE_ID,
+        activeOrganizationName: 'GypsySystems',
+        activeWorkspaceName: 'AI Content Studio',
+      })
       expect(JSON.stringify(login.body)).not.toContain('request-access-token')
       const setCookie = login.headers.get('set-cookie')
       expect(setCookie).toEqual(expect.arrayContaining([
@@ -151,6 +167,7 @@ test.describe('Supabase project-access provider integration', () => {
         '/auth/v1/token',
         '/auth/v1/user',
         '/rest/v1/workspace_memberships',
+        '/rest/v1/workspaces',
         '/auth/v1/user',
         '/rest/v1/workspace_memberships',
         '/rest/v1/workspace_memberships',
@@ -166,6 +183,35 @@ test.describe('Supabase project-access provider integration', () => {
         { action: 'list', userId: USER_ID, role: 'owner' },
         { headers: { cookie: 'sb_access_token=request-access-token' } } as IncomingMessage,
       )).rejects.toMatchObject({ code: 'UNEXPECTED_FIELD' })
+    } finally {
+      restoreFetch()
+      restoreEnv()
+    }
+  })
+
+  test('workspace identity must be visible through the member token before cookies are issued', async () => {
+    const restoreEnv = withSupabaseConfig()
+    const restoreFetch = setFetch(async (input) => {
+      const pathname = new URL(String(input)).pathname
+      if (pathname === '/auth/v1/token') return new Response(JSON.stringify({
+        access_token: 'member-token',
+        refresh_token: 'refresh-token',
+        expires_in: 3600,
+      }), { status: 200 })
+      if (pathname === '/auth/v1/user') return new Response(JSON.stringify({ id: USER_ID }), { status: 200 })
+      if (pathname === '/rest/v1/workspace_memberships')
+        return new Response(JSON.stringify([{ workspace_id: WORKSPACE_ID, role: 'owner' }]), { status: 200 })
+      if (pathname === '/rest/v1/workspaces') return new Response('[]', { status: 200 })
+      throw new Error(`Unexpected Supabase endpoint ${pathname}`)
+    })
+    try {
+      const login = await callAuth(httpRequest({
+        url: '/api/auth/login',
+        body: { email: 'member@example.test', password: 'not-a-real-secret' },
+      }))
+      expect(login.status).toBe(503)
+      expect(login.body).toMatchObject({ code: 'SUPABASE_UNAVAILABLE' })
+      expect(login.headers.has('set-cookie')).toBe(false)
     } finally {
       restoreFetch()
       restoreEnv()

@@ -90,6 +90,13 @@ test('rejected access token preserves refresh cookie for successful refresh', as
     if (url.includes('/rest/v1/workspace_memberships?')) {
       return new Response(JSON.stringify([{ workspace_id: 'workspace-123', role: 'owner' }]), { status: 200 })
     }
+    if (url.includes('/rest/v1/workspaces?')) {
+      return new Response(JSON.stringify([{
+        id: 'workspace-123',
+        name: 'AI Content Studio',
+        orgs: { name: 'GypsySystems' },
+      }]), { status: 200 })
+    }
     throw new Error(`Unexpected Supabase request: ${url}`)
   }
 
@@ -113,6 +120,8 @@ test('rejected access token preserves refresh cookie for successful refresh', as
       mode: 'supabase',
       userId: 'user-123',
       activeWorkspaceId: 'workspace-123',
+      activeOrganizationName: 'GypsySystems',
+      activeWorkspaceName: 'AI Content Studio',
     })
     expect(refreshRequests).toEqual([{
       url: 'https://supabase.example/auth/v1/token?grant_type=refresh_token',
