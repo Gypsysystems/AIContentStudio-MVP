@@ -7,6 +7,7 @@ async function createProject(page: Page) {
   await page.getByRole('button', { name: /New Project/ }).first().click()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill('Preview fidelity')
   await page.getByRole('button', { name: 'Continue — Theme & Styles' }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('docflow-active-project'))).not.toBeNull()
 }
 async function openPreview(page: Page) {
   await page.getByRole('button', { name: 'Publish', exact: true }).click()

@@ -164,6 +164,7 @@ test('Publish downloads every persisted topic, not the stale active Author block
   await page.getByRole('button', { name: /New Project/ }).first().click()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill('Publish projection test')
   await page.getByRole('button', { name: 'Continue — Theme & Styles' }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('docflow-active-project'))).not.toBeNull()
 
   await page.evaluate(async () => {
     const { getActiveProjectId, loadProject, saveProject } = await import('/src/projectRepository.ts' as string)

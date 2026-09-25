@@ -2,13 +2,17 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { flushSync } from 'react-dom'
 import {
   SCHEMA_VERSION,
-  projectRepository,
   type ProjectRecord, type ProjectSummary, type StoredFile,
 } from './projectService'
 import {
-  createProjectBackup, inspectProjectBackup, restoreProjectBackup,
+  inspectProjectBackup,
   type BackupSummary, type RestoreOptions,
 } from './projectBackup'
+import {
+  authorizedProjectRepository as projectRepository,
+  createAuthorizedProjectBackup as createProjectBackup,
+  restoreAuthorizedProjectBackup as restoreProjectBackup,
+} from './authorizedProjectService'
 import { getAccessContext } from './authSession'
 import type { ProjectOwnership } from './ownership'
 const {
@@ -1201,9 +1205,11 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, themes, project
   projectMeta: ProjectMeta
   onProjectMetaChange: (m: Partial<ProjectMeta>) => void
   onAddTheme: (t: Theme) => void
-  onContinue?: () => void
+  onContinue: () => Promise<void>
 }) {
   const [selected, setSelected] = useState(projectMeta?.contentType || 'user-guide')
+  const [continuing, setContinuing] = useState(false)
+  const [continueError, setContinueError] = useState<string | null>(null)
 
   return (
     <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
@@ -1246,9 +1252,22 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, themes, project
           className="w-full h-9 px-3 text-[13px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
       </div>
 
+      {continueError && <p role="alert" className="mb-3 text-sm text-red-700">{continueError}</p>}
       <div className="flex justify-end">
-        <button onClick={() => { onContinue?.(); onNav('branding') }} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
-          Continue — Theme & Styles
+        <button disabled={continuing} onClick={async () => {
+          if (continuing) return
+          setContinuing(true)
+          setContinueError(null)
+          try {
+            await onContinue()
+            onNav('branding')
+          } catch (error) {
+            setContinueError(`Could not create project: ${(error as Error).message}`)
+          } finally {
+            setContinuing(false)
+          }
+        }} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-60 text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
+          {continuing ? 'Creating project…' : 'Continue — Theme & Styles'}
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
       </div>
@@ -14389,12 +14408,6 @@ export default function App() {
   const handleCreateProjectPersist = useCallback(async () => {
     const newId = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const emptyReviewModel = createEmptyReviewModel(newId)
-    setProjectId(newId)
-    projectRevisionRef.current = 0
-    projectCreatedAtRef.current = 0
-    saveEpochRef.current++
-    setReviewModel(emptyReviewModel)
-    setActiveProjectId(newId)
     try {
       const created = await createProject({
         projectId: newId, projectName: projectName || 'Untitled Project',
@@ -14404,14 +14417,22 @@ export default function App() {
         pageLayouts: pageLayouts as unknown[], htmlMasterPages: htmlMasterPages as unknown[],
         isDemoMode, reviewModel: emptyReviewModel,
       })
+      setProjectId(created.projectId)
+      projectRevisionRef.current = created.recordRevision
       projectCreatedAtRef.current = created.createdAt
+      saveEpochRef.current++
+      setReviewModel(emptyReviewModel)
+      setActiveProjectId(created.projectId)
       projectOwnershipRef.current = {
         ownerUserId: created.ownerUserId,
         workspaceId: created.workspaceId,
       }
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2000)
-    } catch { setSaveStatus('error') }
+    } catch (error) {
+      setSaveStatus('error')
+      throw error
+    }
   }, [projectId, projectName, projectMeta, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, isDemoMode])
 
   const handleSourceAdd = async (file: File): Promise<string> => {

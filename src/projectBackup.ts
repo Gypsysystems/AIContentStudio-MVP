@@ -244,6 +244,11 @@ async function decodeBackup(archive: Blob): Promise<{ manifest: BackupManifest; 
   return { manifest, snapshot: { record, files } }
 }
 
+/** Validates every archive entry without touching persistence; used by both adapters. */
+export async function readProjectBackupSnapshot(archive: Blob): Promise<ProjectSnapshot> {
+  return (await decodeBackup(archive)).snapshot
+}
+
 /** Fully validates the archive (including every blob) without modifying local data. */
 export async function inspectProjectBackup(archive: Blob): Promise<BackupSummary> {
   const { manifest } = await decodeBackup(archive)

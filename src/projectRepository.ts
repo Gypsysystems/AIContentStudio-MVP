@@ -62,7 +62,7 @@ export type ProjectSnapshot = {
 }
 
 export type RestoreProjectSnapshotOptions =
-  | { mode: 'new' }
+  | { mode: 'new'; newProjectId?: string }
   | { mode: 'replace'; expectedRevision: number; expectedFileIds: string[] }
 
 export type ProjectRecord = ProjectOwnership & {
@@ -630,7 +630,7 @@ export async function restoreProjectSnapshot(
 
   if (options.mode === 'new') {
     const now = Date.now()
-    const newId = freshId('project')
+    const newId = options.newProjectId ?? freshId('project')
     const newFileIdMap: Record<string, string> = Object.create(null) as Record<string, string>
     for (const file of snapshot.files) newFileIdMap[file.fileId] = freshId('file')
     const restored = createProjectCopySnapshot(
@@ -708,6 +708,7 @@ export async function restoreProjectSnapshot(
 export async function duplicateProject(
   sourceId: string, newName: string,
   context: ProjectAccessContext = getAccessContext(),
+  newProjectId?: string,
 ): Promise<ProjectRecord | null> {
   authorizeWorkspace(context, 'duplicate')
   const db = await openDB()
@@ -724,7 +725,7 @@ export async function duplicateProject(
   if (!source) return null
   const sourceSnapshot: ProjectSnapshot = { record: source, files: snapshot.files }
   const now = Date.now()
-  const newId = `project-${now}-${Math.random().toString(36).slice(2, 8)}`
+  const newId = newProjectId ?? `project-${now}-${Math.random().toString(36).slice(2, 8)}`
   const newFileIdMap: Record<string, string> = Object.create(null) as Record<string, string>
   for (const file of snapshot.files) {
     newFileIdMap[file.fileId] = `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`

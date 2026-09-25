@@ -286,6 +286,7 @@ test("duplicates persisted evidence onto copied file IDs without changing the or
   expect(originalAfter.evidenceIndex).toEqual(originalBefore.evidenceIndex)
 
   await page.getByText(duplicateName, { exact: true }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('docflow-active-project'))).toBe(duplicate.projectId)
   await page.reload()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
   await page.getByTestId("evidence-search-input").fill("silver-comet")
