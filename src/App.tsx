@@ -12,7 +12,11 @@ import {
   authorizedProjectRepository as projectRepository,
   createAuthorizedProjectBackup as createProjectBackup,
   restoreAuthorizedProjectBackup as restoreProjectBackup,
+  isCloudProjectMode,
 } from './authorizedProjectService'
+import { indexedDbProjectRepository } from './projectService'
+import { importLocalProjectToCloud } from './cloudProjectRepository'
+import { LOCAL_ACCESS_CONTEXT } from './ownership'
 import { getAccessContext } from './authSession'
 import type { ProjectOwnership } from './ownership'
 const {
@@ -928,6 +932,12 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null)
   const [replaceRequested, setReplaceRequested] = useState(false)
   const [replacePhrase, setReplacePhrase] = useState('')
+  const [localImportOpen, setLocalImportOpen] = useState(false)
+  const [localProjects, setLocalProjects] = useState<ProjectSummary[]>([])
+  const [localImportBusy, setLocalImportBusy] = useState<string | null>(null)
+  const [localImportMessage, setLocalImportMessage] = useState<string | null>(null)
+  const [localImportError, setLocalImportError] = useState<string | null>(null)
+  const readOnlyViewer = isCloudProjectMode() && getAccessContext().membership.role === 'viewer'
 
   useEffect(() => {
     listProjects().then(p => { setProjects(p); setLoading(false) }).catch(() => setLoading(false))
@@ -976,6 +986,37 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
       setRestoreError(`Could not create backup: ${(error as Error).message}`)
     } finally {
       setActionLoading(null)
+    }
+  }
+
+  const showLocalProjectsForImport = async () => {
+    if (localImportOpen) {
+      setLocalImportOpen(false)
+      return
+    }
+    setLocalImportOpen(true)
+    setLocalImportError(null)
+    try {
+      setLocalProjects(await indexedDbProjectRepository.listProjects(LOCAL_ACCESS_CONTEXT))
+    } catch (error) {
+      setLocalImportError(`Could not read local projects: ${(error as Error).message}`)
+    }
+  }
+
+  const handleLocalProjectImport = async (project: ProjectSummary) => {
+    setLocalImportBusy(project.projectId)
+    setLocalImportError(null)
+    setLocalImportMessage(null)
+    try {
+      const imported = await importLocalProjectToCloud(project.projectId)
+      setLocalImportMessage(`Imported “${imported.projectName}” to this workspace. The original local project and files were kept.`)
+      try { setProjects(await listProjects()) } catch (error) {
+        setLocalImportError(`Import was verified, but the cloud project list could not refresh: ${(error as Error).message}`)
+      }
+    } catch (error) {
+      setLocalImportError(`Import was not confirmed: ${(error as Error).message}`)
+    } finally {
+      setLocalImportBusy(null)
     }
   }
 
@@ -1051,18 +1092,20 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
           <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Projects</h1>
         </div>
         <div className="flex items-center gap-2">
-          <input ref={restoreInputRef} type="file" accept=".zip,.docflow.zip,application/zip"
-            className="hidden" aria-label="Choose project backup"
-            onChange={event => {
-              const archive = event.target.files?.[0]
-              event.target.value = ''
-              if (archive) void handleRestoreSelection(archive)
-            }} />
-          <button onClick={() => restoreInputRef.current?.click()} disabled={restoreBusy}
-            className="text-[13px] font-medium px-4 py-2 rounded-lg border border-[#D8D4CE] bg-white hover:bg-[#F4F2EE] disabled:opacity-50">
-            {restoreBusy && !restoreCandidate ? 'Checking backup…' : 'Restore backup'}
-          </button>
-          <button
+          {!readOnlyViewer && <>
+            <input ref={restoreInputRef} type="file" accept=".zip,.docflow.zip,application/zip"
+              className="hidden" aria-label="Choose project backup"
+              onChange={event => {
+                const archive = event.target.files?.[0]
+                event.target.value = ''
+                if (archive) void handleRestoreSelection(archive)
+              }} />
+            <button onClick={() => restoreInputRef.current?.click()} disabled={restoreBusy}
+              className="text-[13px] font-medium px-4 py-2 rounded-lg border border-[#D8D4CE] bg-white hover:bg-[#F4F2EE] disabled:opacity-50">
+              {restoreBusy && !restoreCandidate ? 'Checking backup…' : 'Restore backup'}
+            </button>
+          </>}
+          {!readOnlyViewer && <button
             onClick={onNewProject}
             className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-4 py-2 rounded-lg transition-colors"
           >
@@ -1070,9 +1113,34 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
               <path d="M6.5 1.5v10M1.5 6.5h10" stroke="white" strokeWidth="2" strokeLinecap="round"/>
             </svg>
             New Project
-          </button>
+          </button>}
         </div>
       </div>
+      {isCloudProjectMode() && !readOnlyViewer && <div className="mb-4 rounded-xl border border-[#D8D4CE] bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[13px] font-semibold text-[#111218]">Local browser projects</p>
+            <p className="mt-1 text-[12px] text-[#6B6B7E]">Import is opt-in. Originals are never deleted or moved automatically.</p>
+          </div>
+          <button type="button" onClick={() => void showLocalProjectsForImport()}
+            className="rounded-lg border border-[#C8C6C0] px-3 py-2 text-[12px] font-medium text-[#5B5BD6]">
+            {localImportOpen ? 'Hide local projects' : 'Review local projects to import'}
+          </button>
+        </div>
+        {localImportMessage && <p role="status" className="mt-3 text-[12px] text-green-700">{localImportMessage}</p>}
+        {localImportError && <p role="alert" className="mt-3 text-[12px] text-red-700">{localImportError}</p>}
+        {localImportOpen && <div className="mt-3 space-y-2">
+          {localProjects.length === 0
+            ? <p className="text-[12px] text-[#9898AB]">No local projects are available in this browser.</p>
+            : localProjects.map(project => <div key={project.projectId} className="flex items-center justify-between gap-3 rounded-lg bg-[#F8F7F5] px-3 py-2">
+              <span className="truncate text-[12px] text-[#33333F]">{project.projectName}</span>
+              <button type="button" disabled={!!localImportBusy} onClick={() => void handleLocalProjectImport(project)}
+                className="shrink-0 rounded-md bg-[#5B5BD6] px-3 py-1.5 text-[11px] font-medium text-white disabled:opacity-50">
+                {localImportBusy === project.projectId ? 'Validating and importing…' : 'Import copy'}
+              </button>
+            </div>)}
+        </div>}
+      </div>}
       {restoreError && <div role="alert" className="mb-4 p-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] text-[12px] text-[#B91C1C]">{restoreError}</div>}
       {restoreMessage && <div role="status" className="mb-4 p-3 rounded-lg border border-[#A7D9B1] bg-[#F0FDF4] text-[12px] text-[#166534]">{restoreMessage}</div>}
 
@@ -1085,9 +1153,9 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
           </div>
           <p className="text-[15px] font-semibold text-[#111218] mb-1.5">No projects yet</p>
           <p className="text-[13px] text-[#9898AB] mb-6">Create your first project to get started.</p>
-          <button onClick={onNewProject} className="inline-flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-semibold px-5 py-2.5 rounded-lg transition-colors">
+          {!readOnlyViewer && <button onClick={onNewProject} className="inline-flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-semibold px-5 py-2.5 rounded-lg transition-colors">
             + New Project
-          </button>
+          </button>}
         </div>
       ) : (
         <div className="space-y-2">
@@ -1113,9 +1181,9 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
                 <button onClick={() => handleOpen(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] bg-[#EEEEFF] hover:bg-[#E0DEFF] rounded-lg transition-colors disabled:opacity-50">
                   {actionLoading === p.projectId ? '…' : 'Open'}
                 </button>
-                <button onClick={() => handleDuplicate(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Duplicate</button>
+                {!readOnlyViewer && <button onClick={() => handleDuplicate(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Duplicate</button>}
                 <button onClick={() => void handleBackup(p)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Backup</button>
-                <button onClick={() => setDeleteConfirm(p.projectId)} className="px-3 py-1.5 text-[11px] font-medium text-[#DC2626] bg-[#FEF2F2] hover:bg-[#FEE2E2] rounded-lg transition-colors">Delete</button>
+                {!readOnlyViewer && getAccessContext().membership.role !== 'editor' && <button onClick={() => setDeleteConfirm(p.projectId)} className="px-3 py-1.5 text-[11px] font-medium text-[#DC2626] bg-[#FEF2F2] hover:bg-[#FEE2E2] rounded-lg transition-colors">Delete</button>}
               </div>
               <svg className="text-[#C8C6C0] group-hover:text-[#9898AB] transition-colors cursor-pointer flex-shrink-0" width="16" height="16" viewBox="0 0 16 16" fill="none" onClick={() => handleOpen(p.projectId)}>
                 <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>

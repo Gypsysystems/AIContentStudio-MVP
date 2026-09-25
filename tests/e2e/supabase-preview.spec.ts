@@ -24,11 +24,26 @@ test('a member sees the resolved workspace, not browser-local projects', async (
     body: JSON.stringify({
       authenticated: true,
       mode: 'supabase',
+      userId: 'verified-user-123',
       activeWorkspaceId: 'workspace-123',
+      activeRole: 'editor',
       activeOrganizationName: 'GypsySystems',
       activeWorkspaceName: 'AI Content Studio',
     }),
   }))
+  let readinessChecked = false
+  await page.route('**/api/cloud-projects', async route => {
+    const request = route.request().postDataJSON() as { action?: string }
+    if (request.action === 'ready') {
+      readinessChecked = true
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ready: false }),
+      })
+    }
+    return route.fulfill({ status: 400, json: { code: 'UNEXPECTED_ACTION', error: 'Unexpected request.' } })
+  })
   await page.route('**/api/auth/logout', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -36,7 +51,9 @@ test('a member sees the resolved workspace, not browser-local projects', async (
   }))
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'GypsySystems / AI Content Studio' })).toBeVisible()
-  await expect(page.getByText('Cloud project access is not enabled yet.', { exact: false })).toBeVisible()
+  await expect(page.getByText(/Cloud project storage is not ready yet/)).toBeVisible()
+  expect(readinessChecked).toBe(true)
+  // A signed-in member remains behind the readiness gate; local creation stays unavailable.
   await expect(page.getByRole('button', { name: /New Project/ })).toHaveCount(0)
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page.getByText('Signed out.')).toBeVisible()

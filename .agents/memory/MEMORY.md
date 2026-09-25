@@ -22,3 +22,4 @@
 - [Local backup restore boundary](local-backup-restore-boundary.md) — checksummed archives need pre-write hydration checks and destination file-set guards, not only revision guards.
 - [Local ownership boundary](local-ownership-boundary.md) — only fully unowned legacy records get local ownership; current membership role gates project actions.
 - [Server-authorized local bridge](server-authorized-local-bridge.md) — server-owned identity and ownership metadata gate app actions, but browser IndexedDB is not a production security boundary.
+- [Cloud file cleanup boundary](cloud-file-cleanup-boundary.md) — PostgreSQL and private Storage cannot commit together; retain cleanup authority and retry until bytes are gone.

@@ -568,6 +568,7 @@ async function handleSupabaseRoute(
       userId: user.id,
       workspaceIds: memberships.map(({ workspace_id }) => workspace_id),
       activeWorkspaceId: activeWorkspace.workspace_id,
+      activeRole: activeWorkspace.role,
       activeOrganizationName: identity.organizationName,
       activeWorkspaceName: identity.workspaceName,
     })
@@ -611,6 +612,7 @@ async function handleSupabaseRoute(
     userId: user.id,
     workspaceIds: memberships.map(({ workspace_id }) => workspace_id),
     activeWorkspaceId: activeWorkspace.workspace_id,
+    activeRole: activeWorkspace.role,
     activeOrganizationName: identity.organizationName,
     activeWorkspaceName: identity.workspaceName,
   })

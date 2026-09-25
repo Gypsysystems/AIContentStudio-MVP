@@ -13,6 +13,7 @@ import {
   serializeProjectBackup,
   type RestoreOptions,
 } from './projectBackup'
+import { cloudProjectRepository } from './cloudProjectRepository'
 
 type Action = 'list' | 'create' | 'read' | 'write' | 'delete' | 'delete-complete'
   | 'duplicate' | 'backup' | 'restore-new' | 'replace' | 'import-local'
@@ -107,7 +108,7 @@ async function releaseUnwrittenProject(projectId: string): Promise<void> {
 }
 
 /** App-facing adapter; the old IndexedDB repository remains a local primitive. */
-export const authorizedProjectRepository: ProjectRepository = {
+const authorizedLocalProjectRepository: ProjectRepository = {
   async createProject(partial, context) {
     noClientClaims(context)
     const reply = await access('create', { projectId: partial.projectId })
@@ -233,6 +234,36 @@ export const authorizedProjectRepository: ProjectRepository = {
   },
   getActiveProjectId: local.getActiveProjectId,
   setActiveProjectId: local.setActiveProjectId,
+}
+
+let cloudMode = false
+
+/** AuthGate selects the storage adapter before App mounts; no async dispatch race. */
+export function setCloudProjectMode(enabled: boolean): void {
+  cloudMode = enabled
+}
+export function isCloudProjectMode(): boolean {
+  return cloudMode
+}
+
+const selected = () => cloudMode ? cloudProjectRepository : authorizedLocalProjectRepository
+
+export const authorizedProjectRepository: ProjectRepository = {
+  createProject: (...args) => selected().createProject(...args),
+  saveProject: (...args) => selected().saveProject(...args),
+  saveProjectIfCurrent: (...args) => selected().saveProjectIfCurrent(...args),
+  loadProjectSnapshot: (...args) => selected().loadProjectSnapshot(...args),
+  restoreProjectSnapshot: (...args) => selected().restoreProjectSnapshot(...args),
+  loadProject: (...args) => selected().loadProject(...args),
+  listProjects: (...args) => selected().listProjects(...args),
+  deleteProject: (...args) => selected().deleteProject(...args),
+  duplicateProject: (...args) => selected().duplicateProject(...args),
+  saveFile: (...args) => selected().saveFile(...args),
+  loadProjectFiles: (...args) => selected().loadProjectFiles(...args),
+  loadFile: (...args) => selected().loadFile(...args),
+  removeFile: (...args) => selected().removeFile(...args),
+  getActiveProjectId: (...args) => selected().getActiveProjectId(...args),
+  setActiveProjectId: (...args) => selected().setActiveProjectId(...args),
 }
 
 export async function createAuthorizedProjectBackup(projectId: string): Promise<Blob> {

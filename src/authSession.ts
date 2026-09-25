@@ -50,10 +50,17 @@ export class LocalDevAuthSessionAdapter implements AuthSessionService {
 /** Default local session for the current client-only application. */
 export const authSessionService: AuthSessionService = new LocalDevAuthSessionAdapter()
 
+let currentSessionService: AuthSessionService = authSessionService
+
+/** Set only from a server-verified cloud session, before mounting App. */
+export function setCloudAuthSession(session: AuthSession | null): void {
+  currentSessionService = session ? new LocalDevAuthSessionAdapter(session) : authSessionService
+}
+
 export function getSession(): AuthSession {
-  return authSessionService.getSession()
+  return currentSessionService.getSession()
 }
 
 export function getAccessContext(): ProjectAccessContext {
-  return authSessionService.getAccessContext()
+  return currentSessionService.getAccessContext()
 }

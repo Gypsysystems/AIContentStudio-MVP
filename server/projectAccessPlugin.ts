@@ -7,8 +7,11 @@ import {
 } from './projectAccess'
 import { createLocalDevProjectAccessService } from './localDevProjectAccess'
 import { handleSupabaseAuthRequest, isLocalDevAllowed } from './supabaseProjectAccess'
+import { handleCloudFiles, handleCloudProjects } from './cloudProjectApi'
 
 const ENDPOINT = '/api/project-access'
+const CLOUD_PROJECTS_ENDPOINT = '/api/cloud-projects'
+const CLOUD_FILES_ENDPOINT = '/api/cloud-files'
 const MAX_BODY_BYTES = 16 * 1024
 
 function sendJson(
@@ -209,6 +212,39 @@ function installAuthEndpoint(server: ViteDevServer | PreviewServer, localDev: bo
   })
 }
 
+function installCloudEndpoints(server: ViteDevServer | PreviewServer): void {
+  server.middlewares.use((request, response, next) => {
+    const pathname = request.url?.split('?')[0]
+    if (pathname !== CLOUD_PROJECTS_ENDPOINT && pathname !== CLOUD_FILES_ENDPOINT) return next()
+    response.setHeader('Cache-Control', 'no-store')
+    const allowed = pathname === CLOUD_PROJECTS_ENDPOINT ? ['POST'] : ['GET', 'POST']
+    if (!allowed.includes(request.method ?? '')) {
+      response.setHeader('Allow', allowed.join(', '))
+      sendJson(response, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' })
+      return
+    }
+    // Browsers omit Origin on ordinary same-origin GETs. Download still
+    // requires the HttpOnly SameSite session and full workspace/RLS checks;
+    // reject a supplied but untrusted Origin and all cross-origin mutations.
+    const originRequired = !(pathname === CLOUD_FILES_ENDPOINT
+      && request.method === 'GET'
+      && request.headers.origin === undefined)
+    if (originRequired && !isSameOriginRequest(request)) {
+      sendJson(response, 403, { error: 'Same-origin request required', code: 'ORIGIN_REJECTED' })
+      return
+    }
+    if (pathname === CLOUD_PROJECTS_ENDPOINT
+      && request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+      sendJson(response, 415, { error: 'Content-Type must be application/json', code: 'UNSUPPORTED_MEDIA_TYPE' })
+      return
+    }
+    const handler = pathname === CLOUD_PROJECTS_ENDPOINT ? handleCloudProjects : handleCloudFiles
+    void handler(request, response).catch(() => {
+      if (!response.headersSent) sendJson(response, 503, { error: 'Cloud project storage is unavailable', code: 'CLOUD_STORAGE_UNAVAILABLE' })
+    })
+  })
+}
+
 /**
  * Dev uses a fixed local identity with no authentication and must not be
  * exposed as a public service. Production preview deliberately fails closed
@@ -229,6 +265,7 @@ export function projectAccessPlugin(): Plugin {
         })
       })
       installAuthEndpoint(server, localDev)
+      installCloudEndpoints(server)
       if (localDev) installEndpoint(server, createLocalDevProjectAccessService())
       else server.middlewares.use((request, response, next) => {
         if (request.url?.split('?')[0] !== ENDPOINT) return next()
@@ -240,6 +277,7 @@ export function projectAccessPlugin(): Plugin {
     },
     configurePreviewServer(server) {
       installAuthEndpoint(server, false)
+      installCloudEndpoints(server)
       server.middlewares.use((request, response, next) => {
         if (request.url?.split('?')[0] !== ENDPOINT) return next()
         sendJson(response, 503, {

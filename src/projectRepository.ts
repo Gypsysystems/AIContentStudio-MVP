@@ -243,9 +243,27 @@ export async function createProject(
   if ((partial.workspaceId !== undefined && partial.workspaceId !== context.workspace.id) ||
     (partial.ownerUserId !== undefined && partial.ownerUserId !== context.user.id))
     throw new Error('Project ownership must match its creator and workspace.')
+  const record = createProjectRecord(partial, context)
   const db = await openDB()
+  await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
+    if (await getByKey<ProjectRecord>(s, record.projectId))
+      throw new Error(`Project "${record.projectId}" already exists.`)
+    await put(s, record)
+  })
+  return record
+}
+
+/** Build a new project's complete default record without writing local storage. */
+export function createProjectRecord(
+  partial: Partial<ProjectRecord> & { projectId: string; projectName: string },
+  context: ProjectAccessContext = getAccessContext(),
+): ProjectRecord {
+  authorizeWorkspace(context, 'create')
+  if ((partial.workspaceId !== undefined && partial.workspaceId !== context.workspace.id) ||
+    (partial.ownerUserId !== undefined && partial.ownerUserId !== context.user.id))
+    throw new Error('Project ownership must match its creator and workspace.')
   const now = Date.now()
-  const record: ProjectRecord = {
+  return {
     documentType: 'user-guide',
     version: '1.0',
     createdAt: now,
@@ -294,12 +312,6 @@ export async function createProject(
     schemaVersion: SCHEMA_VERSION,
     recordRevision: 0,
   }
-  await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
-    if (await getByKey<ProjectRecord>(s, record.projectId))
-      throw new Error(`Project "${record.projectId}" already exists.`)
-    await put(s, record)
-  })
-  return record
 }
 
 export async function saveProject(
@@ -458,7 +470,7 @@ function remapExtractionFileReferences(
   return remapped
 }
 
-function createProjectCopySnapshot(
+export function createProjectCopySnapshot(
   snapshot: ProjectSnapshot,
   newId: string,
   newName: string,
@@ -572,7 +584,7 @@ function createProjectCopySnapshot(
   return { record: copy, files: newFiles }
 }
 
-function validateProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
+export function validateProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
   if (!snapshot || !snapshot.record || typeof snapshot.record !== 'object')
     throw new Error('Project backup is missing its project record.')
   const record = migrateProjectRecord(snapshot.record).record

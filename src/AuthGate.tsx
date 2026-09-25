@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { setCloudAuthSession } from './authSession'
+import { setCloudProjectMode } from './authorizedProjectService'
+import { isCloudProjectStorageReady } from './cloudProjectRepository'
+import type { MembershipRole } from './ownership'
 
 type AuthState =
   | { kind: 'loading' }
   | { kind: 'signed-in'; mode: 'local-dev' }
-  | { kind: 'signed-in'; mode: 'supabase'; organizationName: string; workspaceName: string }
+  | { kind: 'signed-in'; mode: 'supabase'; userId: string; workspaceId: string; role: MembershipRole; organizationName: string; workspaceName: string }
+  | { kind: 'cloud-pending'; userId: string; workspaceId: string; role: MembershipRole; organizationName: string; workspaceName: string; message: string }
   | { kind: 'signed-out'; message?: string }
   | { kind: 'unavailable'; message: string }
 
@@ -30,11 +35,17 @@ function sessionState(status: number, body: Record<string, unknown>): AuthState 
   if (status === 200 && body.authenticated === true) {
     if (body.mode === 'local-dev') return { kind: 'signed-in', mode: 'local-dev' }
     if (body.mode === 'supabase'
+      && typeof body.userId === 'string' && body.userId
+      && typeof body.activeWorkspaceId === 'string' && body.activeWorkspaceId
       && typeof body.activeOrganizationName === 'string' && body.activeOrganizationName.trim()
       && typeof body.activeWorkspaceName === 'string' && body.activeWorkspaceName.trim())
       return {
         kind: 'signed-in',
         mode: 'supabase',
+        userId: body.userId,
+        workspaceId: body.activeWorkspaceId,
+        role: ['owner', 'admin', 'editor', 'viewer'].includes(String(body.activeRole))
+          ? body.activeRole as MembershipRole : 'viewer',
         organizationName: body.activeOrganizationName,
         workspaceName: body.activeWorkspaceName,
       }
@@ -48,6 +59,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
+  const cloudAppReady = useRef(false)
 
   const checkSession = useCallback(async () => {
     try {
@@ -57,7 +69,34 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         if (refreshed.status === 200) ({ status, body } = await authRequest('session'))
         else if (refreshed.status === 503) ({ status, body } = refreshed)
       }
-      setState(sessionState(status, body))
+      const next = sessionState(status, body)
+      if (next.kind === 'signed-in' && next.mode === 'supabase') {
+        try {
+          if (!await isCloudProjectStorageReady()) {
+            if (cloudAppReady.current) return
+            setState({ ...next, kind: 'cloud-pending', message: 'Cloud project storage is not ready yet.' })
+            return
+          }
+          setCloudAuthSession({
+            user: { id: next.userId },
+            workspace: { id: next.workspaceId, name: next.workspaceName },
+            // This context is only consumed by client defaults; cloud requests never send it.
+            membership: { userId: next.userId, workspaceId: next.workspaceId, role: next.role },
+          })
+          setCloudProjectMode(true)
+          cloudAppReady.current = true
+        } catch (error) {
+          if (cloudAppReady.current) return
+          setState({ ...next, kind: 'cloud-pending',
+            message: (error as Error).message || 'Cloud project storage is not ready yet.' })
+          return
+        }
+      } else {
+        cloudAppReady.current = false
+        setCloudProjectMode(false)
+        setCloudAuthSession(null)
+      }
+      setState(next)
     } catch {
       setState({ kind: 'unavailable', message: 'Authentication server is unavailable. Local project changes are paused.' })
     }
@@ -94,7 +133,12 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     try {
       const { status, body } = await authRequest('logout')
       if (status !== 200) setState(sessionState(status, body))
-      else setState({ kind: 'signed-out', message: 'Signed out.' })
+      else {
+        cloudAppReady.current = false
+        setCloudProjectMode(false)
+        setCloudAuthSession(null)
+        setState({ kind: 'signed-out', message: 'Signed out.' })
+      }
     } catch {
       setState({ kind: 'unavailable', message: 'Could not reach the authentication server to sign out.' })
     } finally {
@@ -105,21 +149,24 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   if (state.kind === 'loading') return <div role="status" className="min-h-screen grid place-items-center text-sm text-gray-600">Checking session…</div>
   if (state.kind === 'signed-in') {
     if (state.mode === 'local-dev') return <>{children}</>
-    return <main className="min-h-screen bg-[#F8F7F5] flex items-center justify-center p-5">
+    return <Fragment key={state.workspaceId}>{children}<div className="fixed right-4 top-4 z-50 flex items-center gap-3 rounded-lg border border-gray-200 bg-white/95 px-3 py-2 text-xs shadow-sm">
+      <span className="text-gray-600">{state.organizationName} / {state.workspaceName}</span>
+      <button type="button" disabled={busy} onClick={() => void logout()} className="text-[#5B5BD6] disabled:opacity-60">Sign out</button>
+    </div></Fragment>
+  }
+  if (state.kind === 'cloud-pending') return <main className="min-h-screen bg-[#F8F7F5] flex items-center justify-center p-5">
       <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
         <h1 className="text-xl font-semibold text-gray-900">{state.organizationName} / {state.workspaceName}</h1>
         <p className="mt-2 text-sm text-gray-600">Signed in to Content Studio</p>
-        <p className="mt-3 text-sm text-gray-600">
-          Cloud project access is not enabled yet. Existing projects and files remain in this browser;
-          they have not been moved to a shared workspace.
-        </p>
+        <p role="status" className="mt-3 text-sm text-gray-600">{state.message} Your signed-in session is retained; local projects have not been moved.</p>
+        <button type="button" disabled={busy} onClick={() => { setState({ kind: 'loading' }); void checkSession() }}
+          className="mt-5 rounded-md bg-[#5B5BD6] px-4 py-2 text-sm text-white disabled:opacity-60">Retry readiness</button>
         <button type="button" disabled={busy} onClick={() => void logout()}
-          className="mt-6 rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 disabled:opacity-60">
+          className="ml-3 mt-5 rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 disabled:opacity-60">
           Sign out
         </button>
       </div>
     </main>
-  }
 
   return <main className="min-h-screen bg-[#F8F7F5] flex items-center justify-center p-5">
     <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
