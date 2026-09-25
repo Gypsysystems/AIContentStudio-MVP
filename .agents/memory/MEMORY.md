@@ -10,3 +10,4 @@
 - [Author draft review boundary](author-draft-review-boundary.md) — drafts and regeneration diffs stay separate; confirmed selected changes preserve manual and approved content.
 - [Author project search](author-project-search.md) — index persisted topic content by stable TOC ID; real projects never use demo search fallback.
 - [Review data boundary](review-data-boundary.md) — persisted real Review history is project-scoped; demo findings never hydrate into it.
+- [Brand guideline font evidence](brand-guideline-font-evidence.md) — map font families to typography roles only from explicit document evidence; metadata cannot fill unresolved roles.

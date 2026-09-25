@@ -107,7 +107,7 @@ function normalizeHex(hex: string): string {
 }
 
 function normalizeFamily(family: string): string {
-  return family.replace(/\s+/g, ' ').trim()
+  return family.replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
 }
 
 // ── Semantic role detection ────────────────────────────────────────────────
@@ -159,8 +159,8 @@ function detectFontRole(text: string): string | null {
 }
 
 // Column header patterns for typography tables
-const FONT_FAMILY_HEADER_RE = /font[\s-]*family|typeface|font\s+name|^font$|^typeface$|^type\s*face$|family\s*name|font\s*type|^font\b/i
-const FONT_ROLE_HEADER_RE = /role|style\s*name|element|typography|type\s+style|text\s+style|^style$/i
+const FONT_FAMILY_HEADER_RE = /^(?:font[\s-]*family|type[\s-]*face|font\s+name|family\s*name|font\s*type|font)$/i
+const FONT_ROLE_HEADER_RE = /^(?:.*\brole|style\s*name|element|text\s+element|typography|type\s+style|text\s+style|style|usage|use)$/i
 const FONT_WEIGHT_HEADER_RE = /weight|font[\s-]*weight/i
 const FONT_SIZE_HEADER_RE = /size|font[\s-]*size|default\s+size/i
 const FONT_COLOR_HEADER_RE = /colou?r|hex/i
@@ -179,12 +179,15 @@ const INVALID_FONT_CANDIDATES = new Set([
   '100', '200', '300', '400', '500', '600', '700', '800', '900',
 ])
 
-const GENERIC_FONT_FAMILIES = new Set(['sans-serif', 'serif', 'monospace'])
+const GENERIC_FONT_FAMILIES = new Set(['sans-serif', 'serif', 'monospace', 'system-ui', 'cursive', 'fantasy'])
 
 function isValidFontFamily(value: string): boolean {
   if (!value || value.length < 2) return false
   const lower = value.toLowerCase().trim()
-  if (INVALID_FONT_CANDIDATES.has(lower) || GENERIC_FONT_FAMILIES.has(lower)) return false
+  if (INVALID_FONT_CANDIDATES.has(lower) || GENERIC_FONT_FAMILIES.has(lower) || lower === 'sans serif') return false
+  if (/^(?:g_d\d+_f\d+|f\d+|[a-z]{6}\+|pdfjs[_-])/i.test(value)) return false
+  if (/^(?:n\/?a|none|not (?:specified|detected|available)|unknown|[-—–]+)$/i.test(value)) return false
+  if (/^#|^\d+(?:\.\d+)?\s*(?:pt|px|em|rem|%)?$/i.test(value)) return false
   // Must contain at least one letter, not be all digits/punctuation
   if (!/[a-zA-Z]/.test(value)) return false
   // Must be 2+ chars
@@ -194,7 +197,7 @@ function isValidFontFamily(value: string): boolean {
 
 // ── PDF Text Extraction ────────────────────────────────────────────────────
 
-type PdfPositionedItem = { str: string; x: number; y: number; fontName?: string }
+type PdfPositionedItem = { str: string; x: number; y: number; width?: number; fontName?: string }
 
 async function extractPdfText(file: File): Promise<{
   text: string
@@ -217,7 +220,7 @@ async function extractPdfText(file: File): Promise<{
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i)
     const content = await page.getTextContent()
-    type PdfItem = { str: string; transform: number[]; fontName?: string }
+    type PdfItem = { str: string; transform: number[]; width?: number; fontName?: string }
     const items = content.items.filter(item => 'str' in item) as PdfItem[]
 
     const pagePositioned: PdfPositionedItem[] = []
@@ -238,7 +241,7 @@ async function extractPdfText(file: File): Promise<{
         pdfFontNameSet.add(fontFamily)
       }
       if (item.str.trim()) {
-        pagePositioned.push({ str: item.str, x, y, fontName: fontFamily })
+        pagePositioned.push({ str: item.str, x, y, width: item.width, fontName: fontFamily })
       }
     }
     positionedItems.push(pagePositioned)
@@ -269,54 +272,49 @@ function reconstructPdfTables(positionedItems: PdfPositionedItem[][]): string[][
   for (const pageItems of positionedItems) {
     if (pageItems.length < 4) continue
 
-    // Group items into rows by Y proximity (within 4 units)
-    const yGroups = new Map<number, PdfPositionedItem[]>()
-    for (const item of pageItems) {
-      const ry = Math.round(item.y / 4) * 4
-      if (!yGroups.has(ry)) yGroups.set(ry, [])
-      yGroups.get(ry)!.push(item)
+    const sorted = [...pageItems].sort((a, b) => b.y - a.y || a.x - b.x)
+    const rows: PdfPositionedItem[][] = []
+    for (const item of sorted) {
+      const last = rows[rows.length - 1]
+      if (last && Math.abs(last[0].y - item.y) <= 3) last.push(item)
+      else rows.push([item])
     }
 
-    // Sort rows top-to-bottom (PDF Y increases upward, so descending = top-first)
-    const sortedRows = Array.from(yGroups.entries())
-      .sort((a, b) => b[0] - a[0])
-      .map(([, items]) => items.sort((a, b) => a.x - b.x))
-
-    if (sortedRows.length < 2) continue
-
-    // Detect column boundaries from the first few rows (header + data)
-    // Use X positions to cluster into columns
-    const firstRowXs = sortedRows[0].map(i => i.x)
-    if (firstRowXs.length < 2) continue  // single-column row, not a table
-
-    // Only include row groups that have multi-column content (potential table rows)
-    const multiColRows = sortedRows.filter(row => row.length >= 2)
-    if (multiColRows.length < 2) continue
-
-    // Determine column X boundaries from header row
-    const headerItems = multiColRows[0]
-    const colXs = headerItems.map(i => i.x)
-    const colTolerance = 30  // pixels
-
-    // Assign each item in each row to the nearest column
-    const tableRows: string[][] = []
-    for (const rowItems of multiColRows) {
-      const cells: string[] = new Array(colXs.length).fill('')
-      for (const item of rowItems) {
-        // Find nearest column header X
-        let bestCol = 0
-        let bestDist = Infinity
-        for (let ci = 0; ci < colXs.length; ci++) {
-          const dist = Math.abs(item.x - colXs[ci])
-          if (dist < bestDist) { bestDist = dist; bestCol = ci }
-        }
-        if (bestDist <= colTolerance) {
-          cells[bestCol] = cells[bestCol] ? cells[bestCol] + ' ' + item.str : item.str
+    // PDF.js can split "Font family" into several text runs. Join nearby
+    // runs before locating the header, but keep genuinely separate columns.
+    const chunks = (row: PdfPositionedItem[]) => {
+      const grouped: { x: number; end: number; text: string }[] = []
+      for (const item of [...row].sort((a, b) => a.x - b.x)) {
+        const previous = grouped[grouped.length - 1]
+        if (previous && item.x - previous.end <= 12) {
+          previous.text += ` ${item.str}`
+          previous.end = Math.max(previous.end, item.x + (item.width ?? 0))
+        } else {
+          grouped.push({ x: item.x, end: item.x + (item.width ?? 0), text: item.str })
         }
       }
-      tableRows.push(cells.map(c => c.trim()))
+      return grouped
     }
-
+    const headerIndex = rows.findIndex(row => {
+      const labels = chunks(row).map(chunk => chunk.text.trim())
+      return labels.some(label => FONT_ROLE_HEADER_RE.test(label))
+        && labels.some(label => FONT_FAMILY_HEADER_RE.test(label))
+    })
+    if (headerIndex < 0) continue
+    const header = chunks(rows[headerIndex])
+    const colXs = header.map(cell => cell.x)
+    const tableRows: string[][] = [header.map(cell => cell.text.trim())]
+    for (const row of rows.slice(headerIndex + 1)) {
+      const cells = new Array<string>(colXs.length).fill('')
+      for (const item of row) {
+        const col = colXs.reduce((best, x, index) =>
+          Math.abs(item.x - x) < Math.abs(item.x - colXs[best]) ? index : best, 0)
+        // Permit split words within a cell, but ignore text beyond the table.
+        if (item.x < colXs[0] - 35 || item.x > colXs[colXs.length - 1] + 100) continue
+        cells[col] = cells[col] ? `${cells[col]} ${item.str}` : item.str
+      }
+      if (cells.filter(Boolean).length >= 2) tableRows.push(cells.map(cell => cell.trim()))
+    }
     if (tableRows.length >= 2) allTables.push(tableRows)
   }
 
@@ -578,22 +576,69 @@ export function extractColors(text: string, tableRows: string[] = []): Extracted
 // Plausible font family: 1-4 words, mixed/title case, not all-digit, min 3 chars
 const FONT_FAMILY_WORD_RE = /([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+){0,3})/
 
-const FONT_ROLE_PROSE_PATTERNS: [RegExp, string][] = [
-  [/heading\s+font\s*[:\-–=]/i,    'Heading'],
-  [/body\s+font\s*[:\-–=]/i,       'Body'],
-  [/primary\s+font\s*[:\-–=]/i,    'Heading'],
-  [/fallback\s+font\s*[:\-–=]/i,   'Fallback'],
-  [/code\s+font\s*[:\-–=]/i,       'Code'],
-  [/mono(?:space)?\s+font\s*[:\-–=]/i, 'Code'],
-  [/caption\s+font\s*[:\-–=]/i,    'Caption'],
-  [/display\s+font\s*[:\-–=]/i,    'Display'],
-  [/title\s+font\s*[:\-–=]/i,      'Heading'],
-  [/subtitle\s+font\s*[:\-–=]/i,   'Subheading'],
-  [/paragraph\s+font\s*[:\-–=]/i,  'Body'],
-  [/typeface\s*[:\-–=]/i,          'Body'],
-  [/font\s+family\s*[:\-–=]/i,     'Body'],
-  [/sans[- ]serif\s*[:\-–=]/i,     'Body'],
-]
+const TYPO_ROLE_LABELS = [
+  ['Document Title', /^document\s+title\b/i],
+  ['Heading 1',      /^(?:heading\s*1|h1)\b/i],
+  ['Heading 2',      /^(?:heading\s*2|h2)\b/i],
+  ['Heading 3',      /^(?:heading\s*3|h3)\b/i],
+  ['Heading 4',      /^(?:heading\s*4|h4)\b/i],
+  ['Body',           /^body(?:\s+text)?\b/i],
+  ['Caption',        /^caption\b/i],
+  ['Code',           /^(?:code|mono(?:space)?)\b/i],
+  ['Footnote',       /^footnote\b/i],
+  ['Title',          /^title\b/i],
+  ['Heading',        /^(?:heading|primary|display)\b/i],
+  ['Fallback',       /^fallback\b/i],
+] as const
+
+function typographyRole(text: string): string | undefined {
+  const label = text.trim().replace(/^[-•]\s*/, '')
+  return TYPO_ROLE_LABELS.find(([, re]) => re.test(label))?.[0]
+}
+
+function parseFontFamily(raw: string): string | undefined {
+  const family = normalizeFamily(
+    raw.replace(/^(?:font(?:\s+(?:family|name))?|typeface)\s*[:=]\s*/i, '')
+      .split(/\b(?:weight|size|style|colou?r|line[\s-]*height)\s*[:=]/i)[0]
+      .replace(/\s+\d{1,3}\s*(?:pt|px)\b.*$/i, '')
+      .replace(/[.,;:]+$/, ''),
+  )
+  if (!isValidFontFamily(family) || family.split(/\s+/).length > 5) return undefined
+  return family
+}
+
+function labeledFontFamily(line: string): string | undefined {
+  const label = line.match(/\b(?:font(?:\s+(?:family|name))?|typeface)\s*[:=]\s*([^|;,]+)/i)
+  if (label) return parseFontFamily(label[1])
+  const roleValue = line.match(/^\s*(?:document\s+title|heading\s*[1-4]|h[1-4]|body(?:\s+text)?|caption|code|footnote|title)\s*[:=]\s*([^|;,]+)/i)
+  return roleValue ? parseFontFamily(roleValue[1]) : undefined
+}
+
+function localTypographyLines(lines: string[], index: number): string[] {
+  const context = [lines[index]]
+  for (let offset = 1; offset <= 4 && index + offset < lines.length; offset++) {
+    const next = lines[index + offset].trim()
+    if (typographyRole(next)) break
+    context.push(next)
+  }
+  return context
+}
+
+function localFontFamily(lines: string[]): string | undefined {
+  for (const line of lines) {
+    const found = labeledFontFamily(line)
+    if (found) return found
+    // A declared but invalid/missing family must not be replaced by a later
+    // label that may belong to a different typography block.
+    if (/\b(?:font(?:\s+(?:family|name))?|typeface)\s*[:=]/i.test(line)) return undefined
+  }
+  // A standalone family immediately after a role is also an explicit label/value pair.
+  const next = lines[1]?.trim()
+  if (next && /^([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+){0,4})(?:\s+\d)?$/.test(next)) {
+    return parseFontFamily(next)
+  }
+  return undefined
+}
 
 export function extractFonts(
   text: string,
@@ -614,22 +659,26 @@ export function extractFonts(
     results.push({ id: `fnt-${results.length}`, family: normalizedFamily, suggestedRole: role, sourceSnippet: snippet, detectionMethod: method, confidence })
   }
 
-  // ── Strategy 1: Explicit prose patterns ("Heading font: Inter") ────────────
-  for (const [roleRe, role] of FONT_ROLE_PROSE_PATTERNS) {
-    const pat = new RegExp(roleRe.source + '\\s*' + FONT_FAMILY_WORD_RE.source, 'im')
-    const m = text.match(pat)
-    if (m && m[1]) {
-      const family = normalizeFamily(m[1])
-      const idx = text.indexOf(m[0])
-      addFont(family, role, windowAround(text, idx, 150), 'explicit-label', 'high')
-    }
+  // Explicit role blocks from PDF text or DOCX prose; never use a nearby
+  // font from a different role as a substitute for a missing declaration.
+  const lines = text.split('\n')
+  for (let li = 0; li < lines.length; li++) {
+    const role = typographyRole(lines[li])
+    if (!role) continue
+    const context = localTypographyLines(lines, li)
+    const family = localFontFamily(context)
+    if (family) addFont(family, role, context.join(' ').trim(), 'explicit-label', 'high')
+  }
+  // A standalone "Typeface: X" is still an explicit family, but has no
+  // supported semantic role until the author reviews and maps it.
+  for (const line of lines) {
+    if (typographyRole(line)) continue
+    const family = labeledFontFamily(line)
+    if (family) addFont(family, 'Unknown', line.trim(), 'explicit-label', 'medium')
   }
 
   // ── Strategy 2: Schema-aware typography tables ─────────────────────────────
   // Inspect each table's header row to find the font-family column specifically
-  let typographyTablesFound = 0
-  let fontFamilyCellsDetected = 0
-
   for (const table of tableCells) {
     if (table.length < 2) continue
 
@@ -638,92 +687,53 @@ export function extractFonts(
     // Find the font-family column index
     const fontFamilyCol = headerRow.findIndex(h => FONT_FAMILY_HEADER_RE.test(h))
     const roleCol = headerRow.findIndex(h => FONT_ROLE_HEADER_RE.test(h))
-    const weightCol = headerRow.findIndex(h => FONT_WEIGHT_HEADER_RE.test(h))
-    const sizeCol = headerRow.findIndex(h => FONT_SIZE_HEADER_RE.test(h))
-    const colorCol = headerRow.findIndex(h => FONT_COLOR_HEADER_RE.test(h))
-
     // Check for token/summary table: "Token | Value" or "Key | Font"
     const tokenCol = headerRow.findIndex(h => TOKEN_NAME_HEADER_RE.test(h))
     const valueCol = headerRow.findIndex(h => TOKEN_VALUE_HEADER_RE.test(h))
 
     if (fontFamilyCol >= 0) {
       // Typography table with explicit Font family column
-      typographyTablesFound++
       for (let ri = 1; ri < table.length; ri++) {
         const row = table[ri]
         const cellFamily = row[fontFamilyCol]?.trim() ?? ''
-        if (!cellFamily || cellFamily.length < 2) continue
-        if (!/[a-zA-Z]/.test(cellFamily)) continue // skip pure numbers
-
-        fontFamilyCellsDetected++
+        const family = parseFontFamily(cellFamily)
+        if (!family) continue
         // Role: prefer role column, else detect from any cell text
         const rowText = row.join(' | ')
         const roleCellText = roleCol >= 0 ? (row[roleCol] ?? '') : ''
-        const detectedRole = detectFontRole(roleCellText) ?? detectFontRole(rowText) ?? 'Body'
+        const detectedRole = typographyRole(roleCellText) ?? detectFontRole(rowText) ?? 'Unknown'
 
-        addFont(cellFamily, detectedRole, `Typography table row: ${rowText}`, 'typography-table', 'high')
+        addFont(family, detectedRole, `Typography table row: ${rowText}`, 'typography-table', 'high')
       }
     } else if (tokenCol >= 0 && valueCol >= 0) {
       // Token/summary table: Token | Value | Description
-      typographyTablesFound++
       for (let ri = 1; ri < table.length; ri++) {
         const row = table[ri]
         const tokenName = row[tokenCol]?.trim().toLowerCase() ?? ''
         const tokenValue = row[valueCol]?.trim() ?? ''
-        if (!tokenValue || tokenValue.length < 2) continue
         if (!FONT_TOKEN_VALUE_RE.test(tokenName)) continue
 
-        fontFamilyCellsDetected++
-        const detectedRole = detectFontRole(tokenName) ?? 'Body'
+        const family = parseFontFamily(tokenValue)
+        if (!family) continue
+        const detectedRole = typographyRole(tokenName) ?? detectFontRole(tokenName) ?? 'Unknown'
         const rowText = row.join(' | ')
-        addFont(tokenValue, detectedRole, `Token table row: ${rowText}`, 'token-table', 'high')
+        addFont(family, detectedRole, `Token table row: ${rowText}`, 'token-table', 'high')
       }
     } else if (roleCol >= 0 && table[0].length >= 2) {
-      // Has a role column but no explicit font-family column — try next column after role
-      typographyTablesFound++
-      const guessedFontCol = roleCol === 0 ? 1 : 0
+      // No family header: accept only a labeled declaration in the same row.
       for (let ri = 1; ri < table.length; ri++) {
         const row = table[ri]
         const roleCellText = row[roleCol]?.trim() ?? ''
-        const familyGuess = row[guessedFontCol]?.trim() ?? ''
-        if (!familyGuess || familyGuess.length < 2 || !FONT_FAMILY_WORD_RE.test(familyGuess)) continue
-        const detectedRole = detectFontRole(roleCellText) ?? detectFontRole(familyGuess)
-        if (!detectedRole) continue
-
-        fontFamilyCellsDetected++
-        const m = familyGuess.match(FONT_FAMILY_WORD_RE)
-        if (m && m[1]) {
-          const rowText = row.join(' | ')
-          addFont(normalizeFamily(m[1]), detectedRole, `Typography table row: ${rowText}`, 'typography-table', 'medium')
-        }
+        const family = row.map(labeledFontFamily).find(Boolean)
+        const role = typographyRole(roleCellText)
+        if (family && role) addFont(family, role, `Typography table row: ${row.join(' | ')}`, 'typography-table', 'high')
       }
     }
   }
 
-  // ── Strategy 3: Multi-line font block in prose ─────────────────────────────
-  // A role keyword line followed by a plausible font name on the next 1-2 lines
-  const lines = text.split('\n')
-  for (let li = 0; li < lines.length; li++) {
-    const roleFromLine = detectFontRole(lines[li])
-    if (!roleFromLine) continue
-    for (let offset = 1; offset <= 2; offset++) {
-      const nextLine = lines[li + offset]?.trim() ?? ''
-      if (!nextLine) continue
-      const m = nextLine.match(/^([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+){0,2})\s*$/)
-      if (m) {
-        const family = normalizeFamily(m[1])
-        if (family.length > 2) {
-          const snippet = lines.slice(Math.max(0, li - 1), li + offset + 2).join('\n')
-          addFont(family, roleFromLine, snippet, 'explicit-label', 'medium')
-        }
-        break
-      }
-    }
-  }
-
-  // ── Strategy 4: Table rows as joined strings (fallback for non-schema tables) ─
+  // Table rows as joined strings (fallback for non-schema DOCX tables).
   for (const row of tableRows) {
-    const role = detectFontRole(row)
+    const role = typographyRole(row.split(' | ')[0]) ?? detectFontRole(row)
     if (!role) continue
     // Only use if NOT already covered by a structured table above
     // Find a plausible font name that is NOT the role/first word
@@ -760,19 +770,6 @@ export function extractFonts(
 
 // ── Typography Style Extraction ────────────────────────────────────────────
 
-const TYPO_ROLE_LABELS = [
-  ['Document Title', /document\s+title/i],
-  ['Title',          /\btitle\b(?!\s+font)/i],
-  ['Heading 1',      /heading\s*1\b|h1\b/i],
-  ['Heading 2',      /heading\s*2\b|h2\b/i],
-  ['Heading 3',      /heading\s*3\b|h3\b/i],
-  ['Heading 4',      /heading\s*4\b|h4\b/i],
-  ['Body',           /\bbody\b(?!\s+text|\s+font)/i],
-  ['Caption',        /\bcaption\b/i],
-  ['Code',           /\bcode\b(?!\s+font)/i],
-  ['Footnote',       /\bfootnote\b/i],
-] as const
-
 function normalizeWeight(w: string): string {
   const l = w.toLowerCase().replace(/[\s-]/g, '')
   if (l === 'bold' || l === 'extrabold') return '700'
@@ -786,41 +783,8 @@ function normalizeWeight(w: string): string {
   return w
 }
 
-function findFontForRole(role: string, context: string, fonts: ExtractedFont[]): string | undefined {
-  // Primary: non-metadata fonts whose name appears in the context text
-  for (const f of fonts) {
-    if (f.detectionMethod === 'docx-style-metadata' || f.detectionMethod === 'pdf-font-metadata') continue
-    if (context.toLowerCase().includes(f.family.toLowerCase())) return f.family
-  }
-  // Secondary: role-matched non-metadata fonts
-  const r = role.toLowerCase()
-  const highConfidence = fonts.filter(f => f.confidence !== 'low')
-  const roleMatch =
-    r.includes('code')
-      ? highConfidence.find(f => f.suggestedRole === 'Code')?.family
-      : r.includes('heading') || r.includes('title')
-        ? highConfidence.find(f => ['Heading', 'Display', 'Subheading'].includes(f.suggestedRole))?.family
-        : r.includes('caption')
-          ? (highConfidence.find(f => f.suggestedRole === 'Caption')?.family ?? highConfidence.find(f => f.suggestedRole === 'Body')?.family)
-          : highConfidence.find(f => f.suggestedRole === 'Body')?.family
-  if (roleMatch) return roleMatch
-
-  // Last resort: use document-embedded font metadata (DOCX styles.xml / PDF font stream).
-  // These are real fonts from the file; we just have less certainty about role assignment.
-  const metaFonts = fonts.filter(f => f.detectionMethod === 'docx-style-metadata' || f.detectionMethod === 'pdf-font-metadata')
-  if (metaFonts.length === 0) return undefined
-  // Prefer a mono/code face for code roles
-  if (r.includes('code')) {
-    const mono = metaFonts.find(f => /mono|courier|consolas|inconsolata|fira\s*code|source\s*code/i.test(f.family))
-    if (mono) return mono.family
-  }
-  // Return the most frequently embedded face (first in list = highest occurrence from extractDocxFontNames)
-  return metaFonts[0].family
-}
-
 export function extractTypographyStyles(
   text: string,
-  fonts: ExtractedFont[],
   tableCells: string[][][] = [],
 ): ExtractedTypoStyle[] {
   const results: ExtractedTypoStyle[] = []
@@ -856,21 +820,15 @@ export function extractTypographyStyles(
 
       if (!roleRaw) continue
 
-      const matchedRole = TYPO_ROLE_LABELS.find(([, re]) => re.test(roleRaw))
-      const roleName = matchedRole?.[0] ?? roleRaw
+      const roleName = typographyRole(roleRaw) ?? roleRaw
 
       // Font family: use the cell value directly if it's a valid font name
       // Never borrow from another row or infer from the role name
-      let fontFamily: string | undefined
-      if (isValidFontFamily(fontFamilyRaw)) {
-        fontFamily = normalizeFamily(fontFamilyRaw)
-      } else if (!fontFamilyRaw) {
-        // Column absent or blank — try to find from extracted fonts list as last resort
-        const rowText = row.join(' | ')
-        const found = findFontForRole(roleName, rowText, fonts)
-        fontFamily = found && isValidFontFamily(found) ? found : undefined
-      }
-      // If fontFamilyRaw is present but invalid (e.g., "Bold") → leave undefined
+      const fontFamily = fontFamilyCol >= 0
+        ? parseFontFamily(fontFamilyRaw)
+        : row.map(labeledFontFamily).find((value): value is string => !!value)
+      // An empty or invalid family cell stays unresolved even if another row
+      // or PDF font stream names a family.
 
       const fontWeight = weightRaw ? normalizeWeight(weightRaw) : undefined
       const sizeMatch = sizeRaw.match(/(\d{1,3})/)
@@ -900,13 +858,11 @@ export function extractTypographyStyles(
 
   // Second pass: text-based detection for roles not yet found in tables
   const foundRoles = new Set(results.map(r => r.role))
-  for (const [role, re] of TYPO_ROLE_LABELS) {
+  for (const [role] of TYPO_ROLE_LABELS) {
     if (foundRoles.has(role)) continue
     for (let li = 0; li < lines.length; li++) {
-      if (!re.test(lines[li])) continue
-      const ctxStart = Math.max(0, li - 1)
-      const ctxEnd = Math.min(lines.length - 1, li + 6)
-      const ctxLines = lines.slice(ctxStart, ctxEnd + 1)
+      if (typographyRole(lines[li]) !== role) continue
+      const ctxLines = localTypographyLines(lines, li)
       const context = ctxLines.join('\n')
 
       const sizeM = context.match(/(\d{1,3})\s*pt\b/i)
@@ -918,8 +874,7 @@ export function extractTypographyStyles(
       const cm = context.match(/#([0-9A-Fa-f]{6})\b/i)
       const color = cm ? normalizeHex(cm[0]) : undefined
 
-      const foundFamily = findFontForRole(role, context, fonts)
-      const fontFamily = foundFamily && isValidFontFamily(foundFamily) ? foundFamily : undefined
+      const fontFamily = localFontFamily(ctxLines)
 
       if (!fontSize && !fontWeight && !color && !fontFamily) continue
 
@@ -977,6 +932,7 @@ export async function extractBrandFromFile(file: File): Promise<BrandExtractionR
       // Reconstruct table cells from PDF positioned items (position-based, not text-order)
       const pdfTables = reconstructPdfTables(result.positionedItems)
       if (pdfTables.length > 0) tableCells = pdfTables
+      diag.tablesFound = tableCells.length
     } else if (
       fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
       fileName.endsWith('.docx')
@@ -1021,7 +977,7 @@ export async function extractBrandFromFile(file: File): Promise<BrandExtractionR
     if (hasFontCol) diag.fontFamilyCellsDetected += table.length - 1
   }
 
-  const typographyStyles = extractTypographyStyles(extractedText, fonts, tableCells)
+  const typographyStyles = extractTypographyStyles(extractedText, tableCells)
   diag.typographyStylesDetected = typographyStyles.length
 
   // Derive the Detected Fonts list from typography styles (spec §10)
