@@ -3,8 +3,9 @@ import {
 } from './reviewModel'
 import { hydrateAuthorTopicMetadata, type AuthorMetadataTopic } from './authorMetadata'
 import type { ProjectRecord } from './projectRepository'
+import { LOCAL_USER_ID, LOCAL_WORKSPACE_ID } from './ownership'
 
-export const CURRENT_PROJECT_SCHEMA_VERSION = 3
+export const CURRENT_PROJECT_SCHEMA_VERSION = 4
 
 export class UnsupportedProjectSchemaError extends Error {
   constructor(readonly version: number) {
@@ -64,6 +65,23 @@ export function migrateProjectRecord(raw: unknown): {
     for (const [key, value] of Object.entries(defaults))
       if (record[key] === undefined) record[key] = value
   }
+  if (record.schemaVersion === 3) {
+    // All pre-ownership records were local-only. Do not fill an incomplete
+    // ownership pair: that could silently turn future remote data into local data.
+    const missingOwner = record.ownerUserId === undefined
+    const missingWorkspace = record.workspaceId === undefined
+    if (missingOwner !== missingWorkspace)
+      throw new Error('Project record has incomplete ownership.')
+    record = {
+      ...record,
+      ownerUserId: missingOwner ? LOCAL_USER_ID : record.ownerUserId,
+      workspaceId: missingWorkspace ? LOCAL_WORKSPACE_ID : record.workspaceId,
+      schemaVersion: 4,
+    }
+  }
+  if (typeof record.ownerUserId !== 'string' || !record.ownerUserId.trim() ||
+    typeof record.workspaceId !== 'string' || !record.workspaceId.trim())
+    throw new Error('Project record has invalid ownership.')
   if (!Number.isSafeInteger(record.recordRevision) || (record.recordRevision as number) < 0)
     throw new Error('Invalid project record revision.')
   return { record: record as unknown as ProjectRecord, fromVersion: fromVersion as number,

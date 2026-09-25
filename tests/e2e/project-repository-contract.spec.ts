@@ -178,7 +178,7 @@ test('v1 and v2 migration is deterministic, idempotent, and rejects future schem
 
   expect(result.migratedV1).toMatchObject({ changed: true, fromVersion: 1 })
   expect(result.migratedV1.record).toMatchObject({
-    schemaVersion: 3,
+    schemaVersion: 4,
     recordRevision: 0,
     projectId: 'fixture-v1-project',
     sourceExtractions: {},
@@ -199,12 +199,12 @@ test('v1 and v2 migration is deterministic, idempotent, and rejects future schem
   expect(result.repeatedV1).toEqual({
     record: result.migratedV1.record,
     changed: false,
-    fromVersion: 3,
+    fromVersion: 4,
   })
   expect(result.migratedV2).toMatchObject({
     changed: true,
     fromVersion: 2,
-    record: { schemaVersion: 3, recordRevision: 0 },
+    record: { schemaVersion: 4, recordRevision: 0 },
   })
   expect(result.migratedV2.record.sourceExtractions).toEqual(v2Fixture.sourceExtractions)
   expect(result.migratedV2.record.appToc).toEqual(v2Fixture.appToc)
@@ -213,7 +213,7 @@ test('v1 and v2 migration is deterministic, idempotent, and rejects future schem
   expect(result.repeatedV2).toEqual({
     record: result.migratedV2.record,
     changed: false,
-    fromVersion: 3,
+    fromVersion: 4,
   })
   expect(result.futureVersionError).toMatch(/unsupported|future|version/i)
 })
@@ -247,8 +247,8 @@ test('loading old persisted records upgrades the IndexedDB records in place', as
 
   expect(persisted).toHaveLength(2)
   for (const item of persisted) {
-    expect(item.loaded).toMatchObject({ schemaVersion: 3, recordRevision: 0 })
-    expect(item.stored).toMatchObject({ schemaVersion: 3, recordRevision: 0 })
+    expect(item.loaded).toMatchObject({ schemaVersion: 4, recordRevision: 0 })
+    expect(item.stored).toMatchObject({ schemaVersion: 4, recordRevision: 0 })
   }
   expect(persisted[1].stored?.sourceExtractions).toEqual(v2Fixture.sourceExtractions)
   expect(persisted[1].loaded?.authorTopicMetadata).toEqual(v2Fixture.authorTopicMetadata)
@@ -308,7 +308,7 @@ test('v1 App hydration restores default styles, layouts, and conditions after re
     const { projectRepository } = await import('/src/projectService.ts' as string)
     return projectRepository.loadProject(projectId)
   }, legacy.projectId as string)
-  expect(storedBeforeReload).toMatchObject({ schemaVersion: 3, projectId: legacy.projectId })
+  expect(storedBeforeReload).toMatchObject({ schemaVersion: 4, projectId: legacy.projectId })
 
   await page.reload()
   await expectDefaultsInApp()
@@ -464,7 +464,7 @@ test('reload and duplicate preserve stable project content IDs while remapping f
   expect(duplicateFileId).not.toBe(sourceFileId)
   expect(state.duplicate).toMatchObject({
     projectName: 'Field Operations Guide Copy',
-    schemaVersion: 3,
+    schemaVersion: 4,
     recordRevision: 0,
     appToc: v2Fixture.appToc,
     topicContent: v2Fixture.topicContent,

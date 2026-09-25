@@ -95,7 +95,7 @@ test('backup round-trip preserves complete project state, assets, provenance, an
   expect(result.summary).toMatchObject({
     projectId,
     projectName: 'Complete backup project',
-    projectSchemaVersion: 3,
+    projectSchemaVersion: 4,
     fileCount: 1,
   })
   expect(result.restoredId).not.toBe(projectId)
@@ -104,7 +104,7 @@ test('backup round-trip preserves complete project state, assets, provenance, an
   expect(result.restoredBlobText).toBe('source bytes for a complete backup')
   expect(result.restored).toMatchObject({
     projectName: 'Complete backup project (Restored)',
-    schemaVersion: 3,
+    schemaVersion: 4,
     recordRevision: 0,
     themes: v2Fixture.themes.concat([{
       id: 'theme-backup-brand',
@@ -195,7 +195,7 @@ test('backup round-trip preserves complete project state, assets, provenance, an
   expect(reloaded.record).toMatchObject({
     projectId: result.restoredId,
     projectName: 'Complete backup project (Restored)',
-    schemaVersion: 3,
+    schemaVersion: 4,
     topicContent: result.restored.topicContent,
     reviewModel: result.restored.reviewModel,
   })
@@ -244,7 +244,7 @@ test('v1 and v2 project records inside backups migrate safely before restore', a
   }, { v1: v1Fixture, v2: v2Fixture })
 
   expect(restored.v1Restored).toMatchObject({
-    schemaVersion: 3,
+    schemaVersion: 4,
     recordRevision: 0,
     projectName: `${v1Fixture.projectName} (Restored)`,
     appToc: v1Fixture.appToc,
@@ -252,7 +252,7 @@ test('v1 and v2 project records inside backups migrate safely before restore', a
   })
   expect(restored.v1Restored.sourceFileIds).toHaveLength(1)
   expect(restored.v2Restored).toMatchObject({
-    schemaVersion: 3,
+    schemaVersion: 4,
     recordRevision: 0,
     projectName: `${v2Fixture.projectName} (Restored)`,
     appToc: v2Fixture.appToc,

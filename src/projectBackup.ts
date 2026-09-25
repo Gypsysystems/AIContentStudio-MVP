@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import { migrateProjectRecord, validateRestorableProjectRecord } from './projectMigrations'
 import { projectRepository, type ProjectRecord, type ProjectSnapshot, type StoredFile } from './projectService'
+import type { ProjectAccessContext } from './ownership'
 
 export const BACKUP_FORMAT_VERSION = 1
 const FORMAT = 'docflow-project-backup'
@@ -168,8 +169,8 @@ export async function serializeProjectBackup(snapshot: ProjectSnapshot, exported
   return archive
 }
 
-export async function createProjectBackup(projectId: string): Promise<Blob> {
-  const snapshot = await projectRepository.loadProjectSnapshot(projectId)
+export async function createProjectBackup(projectId: string, context?: ProjectAccessContext): Promise<Blob> {
+  const snapshot = await projectRepository.loadProjectSnapshot(projectId, context)
   if (!snapshot) throw new Error(`Project "${projectId}" does not exist.`)
   return serializeProjectBackup(snapshot)
 }
@@ -256,7 +257,9 @@ export async function inspectProjectBackup(archive: Blob): Promise<BackupSummary
 }
 
 /** Revalidates before the repository's single atomic create/replace transaction. */
-export async function restoreProjectBackup(archive: Blob, options: RestoreOptions): Promise<ProjectRecord> {
+export async function restoreProjectBackup(
+  archive: Blob, options: RestoreOptions, context?: ProjectAccessContext,
+): Promise<ProjectRecord> {
   const { snapshot } = await decodeBackup(archive)
-  return projectRepository.restoreProjectSnapshot(snapshot, options)
+  return projectRepository.restoreProjectSnapshot(snapshot, options, context)
 }

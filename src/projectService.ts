@@ -1,7 +1,9 @@
 import * as indexedDb from './projectRepository'
 
-// The UI depends only on this contract. A future remote repository must
-// implement the same semantics, including guarded writes and file remapping.
+// The UI depends only on this contract. Every project/file operation accepts
+// an optional access context; the local adapter supplies the dev session when
+// omitted. A future server-backed adapter must resolve a trusted identity and
+// enforce these scope, authorization, guarded-write, and file-remapping rules.
 export interface ProjectRepository {
   createProject: typeof indexedDb.createProject
   saveProject: typeof indexedDb.saveProject
@@ -40,6 +42,8 @@ export const indexedDbProjectRepository: ProjectRepository = {
 
 export const projectRepository: ProjectRepository = indexedDbProjectRepository
 export { SCHEMA_VERSION, ProjectConflictError } from './projectRepository'
+export { ProjectAuthorizationError } from './ownership'
+export type { ProjectAccessContext, ProjectOwnership } from './ownership'
 export type {
   ProjectRecord,
   ProjectSnapshot,

@@ -31,6 +31,11 @@ import {
 import {
   CURRENT_PROJECT_SCHEMA_VERSION, migrateProjectRecord, validateRestorableProjectRecord,
 } from './projectMigrations'
+import { getAccessContext } from './authSession'
+import {
+  authorizeProject, authorizeWorkspace, LOCAL_WORKSPACE_ID,
+  type ProjectAccessContext, type ProjectOwnership,
+} from './ownership'
 
 export const SCHEMA_VERSION = CURRENT_PROJECT_SCHEMA_VERSION
 export { migrateProjectRecord, UnsupportedProjectSchemaError } from './projectMigrations'
@@ -60,7 +65,7 @@ export type RestoreProjectSnapshotOptions =
   | { mode: 'new' }
   | { mode: 'replace'; expectedRevision: number; expectedFileIds: string[] }
 
-export type ProjectRecord = {
+export type ProjectRecord = ProjectOwnership & {
   projectId: string
   schemaVersion: number
   recordRevision: number
@@ -125,7 +130,7 @@ export type ProjectRecord = {
   publishConfig: unknown
 }
 
-export type ProjectSummary = {
+export type ProjectSummary = ProjectOwnership & {
   projectId: string
   projectName: string
   documentType: string
@@ -230,7 +235,14 @@ function getAllByIndex<T>(store: IDBObjectStore, indexName: string, value: IDBVa
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-export async function createProject(partial: Partial<ProjectRecord> & { projectId: string; projectName: string }): Promise<ProjectRecord> {
+export async function createProject(
+  partial: Partial<ProjectRecord> & { projectId: string; projectName: string },
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectRecord> {
+  authorizeWorkspace(context, 'create')
+  if ((partial.workspaceId !== undefined && partial.workspaceId !== context.workspace.id) ||
+    (partial.ownerUserId !== undefined && partial.ownerUserId !== context.user.id))
+    throw new Error('Project ownership must match its creator and workspace.')
   const db = await openDB()
   const now = Date.now()
   const record: ProjectRecord = {
@@ -277,22 +289,37 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     docComments: [],
     publishConfig: { selectedFormats: [], activeVariant: '' },
     ...partial,
+    ownerUserId: context.user.id,
+    workspaceId: context.workspace.id,
     schemaVersion: SCHEMA_VERSION,
     recordRevision: 0,
   }
-  await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => { await put(s, record) })
+  await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
+    if (await getByKey<ProjectRecord>(s, record.projectId))
+      throw new Error(`Project "${record.projectId}" already exists.`)
+    await put(s, record)
+  })
   return record
 }
 
-export async function saveProject(record: ProjectRecord): Promise<ProjectRecord> {
+export async function saveProject(
+  record: ProjectRecord, context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectRecord> {
   const db = await openDB()
   let saved: ProjectRecord | null = null
   // Legacy local save remains last-write-wins for existing UI flows. The
   // guarded operation below is the explicit cloud-ready conflict primitive.
   await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
     const previous = await getByKey<ProjectRecord>(s, record.projectId)
-    const revision = previous ? migrateProjectRecord(previous).record.recordRevision : 0
+    if (!previous) throw new Error(`Project "${record.projectId}" does not exist.`)
+    const current = migrateProjectRecord(previous).record
+    authorizeProject(context, current, 'write')
+    const incoming = migrateProjectRecord(record).record
+    if (incoming.ownerUserId !== current.ownerUserId || incoming.workspaceId !== current.workspaceId)
+      throw new Error('Project ownership cannot be changed by a content save.')
+    const revision = current.recordRevision
     saved = { ...migrateProjectRecord(record).record,
+      ownerUserId: current.ownerUserId, workspaceId: current.workspaceId,
       schemaVersion: SCHEMA_VERSION, recordRevision: revision + 1, modifiedAt: Date.now() }
     await put(s, saved)
   })
@@ -306,7 +333,10 @@ export class ProjectConflictError extends Error {
   }
 }
 
-export async function saveProjectIfCurrent(record: ProjectRecord, expectedRevision: number): Promise<ProjectRecord> {
+export async function saveProjectIfCurrent(
+  record: ProjectRecord, expectedRevision: number,
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectRecord> {
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
     throw new Error('Expected project revision must be a nonnegative integer.')
   const db = await openDB()
@@ -315,57 +345,89 @@ export async function saveProjectIfCurrent(record: ProjectRecord, expectedRevisi
     const previous = await getByKey<ProjectRecord>(s, record.projectId)
     if (!previous) throw new Error(`Project "${record.projectId}" does not exist.`)
     const current = migrateProjectRecord(previous).record
+    authorizeProject(context, current, 'write')
     if (current.recordRevision !== expectedRevision)
       throw new ProjectConflictError(record.projectId, expectedRevision, current.recordRevision)
-    saved = { ...migrateProjectRecord(record).record, schemaVersion: SCHEMA_VERSION,
+    const incoming = migrateProjectRecord(record).record
+    if (incoming.ownerUserId !== current.ownerUserId || incoming.workspaceId !== current.workspaceId)
+      throw new Error('Project ownership cannot be changed by a content save.')
+    saved = { ...incoming, ownerUserId: current.ownerUserId, workspaceId: current.workspaceId,
+      schemaVersion: SCHEMA_VERSION,
       recordRevision: current.recordRevision + 1, modifiedAt: Date.now() }
     await put(s, saved)
   })
   return saved!
 }
 
-export async function loadProject(projectId: string): Promise<ProjectRecord | null> {
+export async function loadProject(
+  projectId: string, context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectRecord | null> {
+  authorizeWorkspace(context, 'read')
   const db = await openDB()
   let result: ProjectRecord | undefined
   await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
     const stored = await getByKey<ProjectRecord>(s, projectId)
     if (!stored) return
     const migrated = migrateProjectRecord(stored)
+    authorizeProject(context, migrated.record, 'read')
     result = migrated.record
     if (migrated.changed) await put(s, migrated.record)
   })
   return result ?? null
 }
 
-export async function loadProjectSnapshot(projectId: string): Promise<ProjectSnapshot | null> {
+export async function loadProjectSnapshot(
+  projectId: string, context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectSnapshot | null> {
+  authorizeWorkspace(context, 'backup')
   const db = await openDB()
   let snapshot: ProjectSnapshot | null = null
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readonly', async ([ps, fs]) => {
     const raw = await getByKey<ProjectRecord>(ps, projectId)
     if (!raw) return
+    const record = migrateProjectRecord(raw).record
+    authorizeProject(context, record, 'backup')
     snapshot = {
-      record: migrateProjectRecord(raw).record,
+      record,
       files: await getAllByIndex<StoredFile>(fs, 'projectId', projectId),
     }
   })
   return snapshot
 }
 
-export async function listProjects(): Promise<ProjectSummary[]> {
+export async function listProjects(
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectSummary[]> {
+  authorizeWorkspace(context, 'read')
   const db = await openDB()
   let records: ProjectRecord[] = []
   await tx(db, STORE_PROJECTS, 'readonly', async ([s]) => {
     records = await getAll<ProjectRecord>(s)
   })
   return records
+    .filter(raw => {
+      // Filter raw ownership before schema migration so an incompatible record
+      // from another workspace cannot break this workspace's listing.
+      if (raw.workspaceId === context.workspace.id) return true
+      return raw.workspaceId === undefined && raw.ownerUserId === undefined
+        && context.workspace.id === LOCAL_WORKSPACE_ID
+    })
     .map(raw => migrateProjectRecord(raw).record)
-    .map(r => ({ projectId: r.projectId, projectName: r.projectName, documentType: r.documentType, version: r.version, createdAt: r.createdAt, modifiedAt: r.modifiedAt }))
+    .map(r => ({ projectId: r.projectId, ownerUserId: r.ownerUserId, workspaceId: r.workspaceId,
+      projectName: r.projectName, documentType: r.documentType, version: r.version,
+      createdAt: r.createdAt, modifiedAt: r.modifiedAt }))
     .sort((a, b) => b.modifiedAt - a.modifiedAt)
 }
 
-export async function deleteProject(projectId: string): Promise<void> {
+export async function deleteProject(
+  projectId: string, context: ProjectAccessContext = getAccessContext(),
+): Promise<void> {
+  authorizeWorkspace(context, 'read')
   const db = await openDB()
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
+    const raw = await getByKey<ProjectRecord>(ps, projectId)
+    if (!raw) return
+    authorizeProject(context, migrateProjectRecord(raw).record, 'delete')
     await deleteByKey(ps, projectId)
     const projectFiles = await getAllByIndex<StoredFile>(fs, 'projectId', projectId)
     for (const f of projectFiles) await deleteByKey(fs, f.fileId)
@@ -402,9 +464,11 @@ function createProjectCopySnapshot(
   newName: string,
   now: number,
   newFileIdMap: Record<string, string>,
+  ownership: ProjectOwnership = snapshot.record,
 ): ProjectSnapshot {
   const source = snapshot.record
   const copy: ProjectRecord = { ...source, projectId: newId, projectName: newName,
+    ownerUserId: ownership.ownerUserId, workspaceId: ownership.workspaceId,
     schemaVersion: SCHEMA_VERSION, recordRevision: 0, createdAt: now, modifiedAt: now }
   const newFiles: StoredFile[] = snapshot.files.map(sf => ({
     ...sf, fileId: newFileIdMap[sf.fileId], projectId: newId,
@@ -556,8 +620,12 @@ function freshId(prefix: string): string {
 export async function restoreProjectSnapshot(
   input: ProjectSnapshot,
   options: RestoreProjectSnapshotOptions,
+  context: ProjectAccessContext = getAccessContext(),
 ): Promise<ProjectRecord> {
   const snapshot = validateProjectSnapshot(input)
+  // As-new imports are portable; the destination actor deliberately becomes
+  // owner. Replacement must authorize the existing project, not the archive.
+  authorizeWorkspace(context, options.mode === 'new' ? 'restore-new' : 'read')
   const db = await openDB()
 
   if (options.mode === 'new') {
@@ -571,6 +639,7 @@ export async function restoreProjectSnapshot(
       `${snapshot.record.projectName} (Restored)`,
       now,
       newFileIdMap,
+      { ownerUserId: context.user.id, workspaceId: context.workspace.id },
     )
     await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
       if (await getByKey<ProjectRecord>(ps, restored.record.projectId))
@@ -600,6 +669,9 @@ export async function restoreProjectSnapshot(
     if (!previous)
       throw new Error(`Project "${snapshot.record.projectId}" does not exist; replacement was not performed.`)
     const current = migrateProjectRecord(previous).record
+    authorizeProject(context, current, 'replace')
+    if (snapshot.record.workspaceId !== current.workspaceId)
+      throw new Error('A backup from another workspace cannot replace this project; restore it as new.')
     if (current.recordRevision !== options.expectedRevision)
       throw new ProjectConflictError(snapshot.record.projectId, options.expectedRevision, current.recordRevision)
 
@@ -619,6 +691,8 @@ export async function restoreProjectSnapshot(
     restored = {
       ...snapshot.record,
       projectId: current.projectId,
+      ownerUserId: current.ownerUserId,
+      workspaceId: current.workspaceId,
       createdAt: current.createdAt,
       schemaVersion: SCHEMA_VERSION,
       recordRevision: current.recordRevision + 1,
@@ -631,13 +705,19 @@ export async function restoreProjectSnapshot(
   return restored!
 }
 
-export async function duplicateProject(sourceId: string, newName: string): Promise<ProjectRecord | null> {
+export async function duplicateProject(
+  sourceId: string, newName: string,
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectRecord | null> {
+  authorizeWorkspace(context, 'duplicate')
   const db = await openDB()
   const snapshot: { record: ProjectRecord | null; files: StoredFile[] } = { record: null, files: [] }
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readonly', async ([ps, fs]) => {
     const raw = await getByKey<ProjectRecord>(ps, sourceId)
     if (!raw) return
-    snapshot.record = migrateProjectRecord(raw).record
+    const source = migrateProjectRecord(raw).record
+    authorizeProject(context, source, 'duplicate')
+    snapshot.record = source
     snapshot.files = await getAllByIndex<StoredFile>(fs, 'projectId', sourceId)
   })
   const source = snapshot.record
@@ -649,7 +729,8 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
   for (const file of snapshot.files) {
     newFileIdMap[file.fileId] = `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   }
-  const copySnapshot = createProjectCopySnapshot(sourceSnapshot, newId, newName, now, newFileIdMap)
+  const copySnapshot = createProjectCopySnapshot(sourceSnapshot, newId, newName, now, newFileIdMap,
+    { ownerUserId: context.user.id, workspaceId: context.workspace.id })
   const copy = copySnapshot.record
   const newFiles = copySnapshot.files
   const sourceFiles = snapshot.files
@@ -657,12 +738,19 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     const currentRaw = await getByKey<ProjectRecord>(ps, sourceId)
     if (!currentRaw) throw new Error(`Source project "${sourceId}" was deleted during duplication.`)
     const current = migrateProjectRecord(currentRaw).record
+    authorizeProject(context, current, 'duplicate')
     if (current.recordRevision !== source.recordRevision)
       throw new ProjectConflictError(sourceId, source.recordRevision, current.recordRevision)
     const currentFiles = await getAllByIndex<StoredFile>(fs, 'projectId', sourceId)
     if (currentFiles.map(file => file.fileId).sort().join('\0')
       !== sourceFiles.map(file => file.fileId).sort().join('\0'))
       throw new Error(`Source files changed during duplication of project "${sourceId}".`)
+    if (await getByKey<ProjectRecord>(ps, copy.projectId))
+      throw new Error(`Duplicate project ID "${copy.projectId}" already exists.`)
+    for (const file of newFiles) {
+      if (await getByKey<StoredFile>(fs, file.fileId))
+        throw new Error(`Duplicate file ID "${file.fileId}" already exists.`)
+    }
     await put(ps, copy)
     for (const f of newFiles) await put(fs, f)
   })
@@ -671,48 +759,85 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
 
 // ── File persistence ───────────────────────────────────────────────────────
 
-export async function saveFile(projectId: string, file: File): Promise<StoredFile> {
+export async function saveFile(
+  projectId: string, file: File, context: ProjectAccessContext = getAccessContext(),
+): Promise<StoredFile> {
   const db = await openDB()
   const fileId = `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const stored: StoredFile = { fileId, projectId, name: file.name, type: file.type, size: file.size, uploadedAt: Date.now(), blob: file }
-  await tx(db, STORE_FILES, 'readwrite', async ([s]) => { await put(s, stored) })
+  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
+    const project = await getByKey<ProjectRecord>(ps, projectId)
+    if (!project) throw new Error(`Project "${projectId}" does not exist.`)
+    authorizeProject(context, migrateProjectRecord(project).record, 'write')
+    if (await getByKey<StoredFile>(fs, fileId))
+      throw new Error(`File ID "${fileId}" already exists.`)
+    await put(fs, stored)
+  })
   return stored
 }
 
-export async function loadProjectFiles(projectId: string): Promise<StoredFile[]> {
+export async function loadProjectFiles(
+  projectId: string, context: ProjectAccessContext = getAccessContext(),
+): Promise<StoredFile[]> {
+  authorizeWorkspace(context, 'read')
   const db = await openDB()
   let files: StoredFile[] = []
-  await tx(db, STORE_FILES, 'readonly', async ([s]) => {
-    files = await getAllByIndex<StoredFile>(s, 'projectId', projectId)
+  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readonly', async ([ps, fs]) => {
+    const project = await getByKey<ProjectRecord>(ps, projectId)
+    if (!project) return
+    authorizeProject(context, migrateProjectRecord(project).record, 'read')
+    files = await getAllByIndex<StoredFile>(fs, 'projectId', projectId)
   })
   return files
 }
 
-export async function loadFile(fileId: string): Promise<StoredFile | null> {
+export async function loadFile(
+  fileId: string, context: ProjectAccessContext = getAccessContext(),
+): Promise<StoredFile | null> {
+  authorizeWorkspace(context, 'read')
   const db = await openDB()
   let result: StoredFile | undefined
-  await tx(db, STORE_FILES, 'readonly', async ([s]) => {
-    result = await getByKey<StoredFile>(s, fileId)
+  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readonly', async ([ps, fs]) => {
+    const file = await getByKey<StoredFile>(fs, fileId)
+    if (!file) return
+    const project = await getByKey<ProjectRecord>(ps, file.projectId)
+    if (!project) throw new Error(`File "${fileId}" has no owning project.`)
+    authorizeProject(context, migrateProjectRecord(project).record, 'read')
+    result = file
   })
   return result ?? null
 }
 
-export async function removeFile(fileId: string): Promise<void> {
+export async function removeFile(
+  fileId: string, context: ProjectAccessContext = getAccessContext(),
+): Promise<void> {
+  authorizeWorkspace(context, 'read')
   const db = await openDB()
-  await tx(db, STORE_FILES, 'readwrite', ([s]) =>
-    new Promise<void>((resolve, reject) => {
-      const req = s.delete(fileId)
-      req.onsuccess = () => resolve()
-      req.onerror = () => reject(req.error)
-    })
-  )
+  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
+    const file = await getByKey<StoredFile>(fs, fileId)
+    if (!file) return
+    const project = await getByKey<ProjectRecord>(ps, file.projectId)
+    if (!project) throw new Error(`File "${fileId}" has no owning project.`)
+    authorizeProject(context, migrateProjectRecord(project).record, 'write')
+    await deleteByKey(fs, fileId)
+  })
 }
 
 // ── Active project tracking (localStorage — tiny, fast) ───────────────────
 
 const ACTIVE_KEY = 'docflow-active-project'
-export const getActiveProjectId = (): string | null => localStorage.getItem(ACTIVE_KEY)
-export const setActiveProjectId = (id: string | null): void => {
-  if (id) localStorage.setItem(ACTIVE_KEY, id)
-  else localStorage.removeItem(ACTIVE_KEY)
+function activeKey(context: ProjectAccessContext): string {
+  authorizeWorkspace(context, 'read')
+  return context.workspace.id === LOCAL_WORKSPACE_ID
+    ? ACTIVE_KEY : `${ACTIVE_KEY}:${context.workspace.id}`
+}
+export const getActiveProjectId = (
+  context: ProjectAccessContext = getAccessContext(),
+): string | null => localStorage.getItem(activeKey(context))
+export const setActiveProjectId = (
+  id: string | null, context: ProjectAccessContext = getAccessContext(),
+): void => {
+  const key = activeKey(context)
+  if (id) localStorage.setItem(key, id)
+  else localStorage.removeItem(key)
 }

@@ -9,6 +9,8 @@ import {
   createProjectBackup, inspectProjectBackup, restoreProjectBackup,
   type BackupSummary, type RestoreOptions,
 } from './projectBackup'
+import { getAccessContext } from './authSession'
+import type { ProjectOwnership } from './ownership'
 const {
   createProject, loadProject, listProjects, deleteProject, duplicateProject,
   saveProjectIfCurrent, saveFile, loadProjectFiles, removeFile, getActiveProjectId, setActiveProjectId,
@@ -14237,6 +14239,10 @@ export default function App() {
   const [projectId, setProjectId] = useState<string | null>(null)
   const projectRevisionRef = useRef(0)
   const projectCreatedAtRef = useRef(0)
+  const projectOwnershipRef = useRef<ProjectOwnership>({
+    ownerUserId: getAccessContext().user.id,
+    workspaceId: getAccessContext().workspace.id,
+  })
   const saveEpochRef = useRef(0)
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -14399,6 +14405,10 @@ export default function App() {
         isDemoMode, reviewModel: emptyReviewModel,
       })
       projectCreatedAtRef.current = created.createdAt
+      projectOwnershipRef.current = {
+        ownerUserId: created.ownerUserId,
+        workspaceId: created.workspaceId,
+      }
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2000)
     } catch { setSaveStatus('error') }
@@ -14646,6 +14656,7 @@ export default function App() {
     if (!projectId) return null
     return {
       projectId,
+      ...projectOwnershipRef.current,
       schemaVersion: SCHEMA_VERSION,
       recordRevision: projectRevisionRef.current,
       projectName,
@@ -15497,6 +15508,10 @@ export default function App() {
   const hydrateFromRecord = async (record: ProjectRecord) => {
     projectRevisionRef.current = record.recordRevision
     projectCreatedAtRef.current = record.createdAt
+    projectOwnershipRef.current = {
+      ownerUserId: record.ownerUserId,
+      workspaceId: record.workspaceId,
+    }
     // Apply v1→v2 schema defaults for newly added fields
     if (!record.snippets) record = { ...record, snippets: [] }
     if (!record.conditionGroups) record = { ...record, conditionGroups: DEFAULT_CONDITION_GROUPS }
