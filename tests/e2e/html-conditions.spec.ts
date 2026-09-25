@@ -87,6 +87,7 @@ async function openPublish(page: Page) {
   await page.getByRole('button', { name: /New Project/ }).first().click()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill('HTML conditions QA')
   await page.getByRole('button', { name: 'Continue — Theme & Styles' }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('docflow-active-project'))).not.toBeNull()
   await page.evaluate(async () => {
     const { getActiveProjectId, loadProject, saveProject } = await import('/src/projectRepository.ts' as string)
     const record = await loadProject(getActiveProjectId())

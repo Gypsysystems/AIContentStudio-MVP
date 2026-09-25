@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Plugin, ViteDevServer } from 'vite'
+import type { Plugin, PreviewServer, ViteDevServer } from 'vite'
 import { isIP } from 'node:net'
 import {
   ProjectAccessServiceError,
   type ProjectAccessService,
 } from './projectAccess'
 import { createLocalDevProjectAccessService } from './localDevProjectAccess'
+import { handleSupabaseAuthRequest, isLocalDevAllowed } from './supabaseProjectAccess'
 
 const ENDPOINT = '/api/project-access'
 const MAX_BODY_BYTES = 16 * 1024
@@ -25,8 +26,20 @@ function sendJson(
 
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (normalized.startsWith('::ffff:')) return isLoopbackHostname(normalized.slice(7))
   if (normalized === 'localhost' || normalized === '::1') return true
   return isIP(normalized) === 4 && normalized.startsWith('127.')
+}
+
+function isPrivateLocalRequest(request: IncomingMessage): boolean {
+  const address = request.socket?.remoteAddress
+  const host = request.headers.host
+  if (!address || !host) return false
+  try {
+    return isLoopbackHostname(address) && isLoopbackHostname(new URL(`http://${host}`).hostname)
+  } catch {
+    return false
+  }
 }
 
 function configuredDevHostname(): string | null {
@@ -34,6 +47,17 @@ function configuredDevHostname(): string | null {
   if (!configured) return null
   try {
     return new URL(configured.includes('://') ? configured : `https://${configured}`).hostname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+function configuredAppOrigin(): string | null {
+  const value = process.env.APP_ORIGIN
+  if (!value) return null
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'https:' && parsed.origin === value ? parsed.origin : null
   } catch {
     return null
   }
@@ -51,6 +75,7 @@ export function isSameOriginRequest(request: IncomingMessage): boolean {
     const trustedDevHostname = configuredDevHostname()
     const trustedHost = isLoopbackHostname(hostname)
       || (trustedDevHostname !== null && hostname === trustedDevHostname)
+      || configuredAppOrigin() === origin.origin
     const schemeAllowed = isLoopbackHostname(hostname)
       ? origin.protocol === 'http:' || origin.protocol === 'https:'
       : origin.protocol === 'https:'
@@ -152,6 +177,38 @@ function installEndpoint(server: ViteDevServer, service: ProjectAccessService): 
   })
 }
 
+function installAuthEndpoint(server: ViteDevServer | PreviewServer, localDev: boolean): void {
+  server.middlewares.use((request, response, next) => {
+    if (!request.url?.split('?')[0].startsWith('/api/auth/')) return next()
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST')
+      sendJson(response, 405, { code: 'METHOD_NOT_ALLOWED', error: 'Method not allowed' })
+      return
+    }
+    if (!isSameOriginRequest(request)) {
+      sendJson(response, 403, { code: 'ORIGIN_REJECTED', error: 'Same-origin request required' })
+      return
+    }
+    if (request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+      sendJson(response, 415, { code: 'UNSUPPORTED_MEDIA_TYPE', error: 'Content-Type must be application/json' })
+      return
+    }
+    if (localDev) {
+      if (request.url?.split('?')[0] === '/api/auth/session') {
+        sendJson(response, 200, { authenticated: true, mode: 'local-dev' })
+      } else {
+        sendJson(response, 403, { code: 'LOCAL_AUTH_ONLY', error: 'Local development has no cloud sign-in' })
+      }
+      return
+    }
+    void handleSupabaseAuthRequest(request, response).then(handled => {
+      if (!handled && !response.headersSent) sendJson(response, 404, { code: 'NOT_FOUND', error: 'Unknown auth endpoint' })
+    }).catch(() => {
+      if (!response.headersSent) sendJson(response, 503, { code: 'AUTH_PROVIDER_UNAVAILABLE', error: 'Authentication is unavailable' })
+    })
+  })
+}
+
 /**
  * Dev uses a fixed local identity with no authentication and must not be
  * exposed as a public service. Production preview deliberately fails closed
@@ -161,9 +218,28 @@ export function projectAccessPlugin(): Plugin {
   return {
     name: 'project-access-api',
     configureServer(server) {
-      installEndpoint(server, createLocalDevProjectAccessService())
+      const localDev = isLocalDevAllowed()
+      if (localDev) server.middlewares.use((request, response, next) => {
+        const pathname = request.url?.split('?')[0] ?? ''
+        if (pathname !== ENDPOINT && !pathname.startsWith('/api/auth/')) return next()
+        if (isPrivateLocalRequest(request)) return next()
+        sendJson(response, 403, {
+          error: 'Fixed local development identity is restricted to loopback requests',
+          code: 'LOCAL_DEV_PRIVATE_ONLY',
+        })
+      })
+      installAuthEndpoint(server, localDev)
+      if (localDev) installEndpoint(server, createLocalDevProjectAccessService())
+      else server.middlewares.use((request, response, next) => {
+        if (request.url?.split('?')[0] !== ENDPOINT) return next()
+        sendJson(response, 503, {
+          error: 'Cloud project content storage is not configured',
+          code: 'PROJECT_STORAGE_UNAVAILABLE',
+        })
+      })
     },
     configurePreviewServer(server) {
+      installAuthEndpoint(server, false)
       server.middlewares.use((request, response, next) => {
         if (request.url?.split('?')[0] !== ENDPOINT) return next()
         sendJson(response, 503, {

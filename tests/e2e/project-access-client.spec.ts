@@ -128,5 +128,5 @@ test('creating a project cannot advance past a denied or unavailable server gate
   await page.unroute('**/api/project-access')
   await page.getByRole('button', { name: /Continue — Theme & Styles/i }).click()
   await expect(page.getByRole('alert')).toHaveCount(0)
-  expect(await page.evaluate(() => localStorage.getItem('docflow-active-project'))).toBeTruthy()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('docflow-active-project'))).toBeTruthy()
 })

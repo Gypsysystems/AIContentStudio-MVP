@@ -25,7 +25,7 @@ export type MembershipLookupResult =
   | { status: 'revoked' | 'missing' }
 
 export interface WorkspaceMembershipLookup {
-  lookup(userId: string, workspaceId: string): Promise<MembershipLookupResult>
+  lookup(userId: string, workspaceId: string, request?: IncomingMessage): Promise<MembershipLookupResult>
 }
 
 export interface ProjectOwnershipDirectory {
@@ -291,7 +291,8 @@ export class ProjectAccessService {
     let session: VerifiedSession | null
     try {
       session = await this.dependencies.sessionVerifier.verify(request)
-    } catch {
+    } catch (error) {
+      if (error instanceof ProjectAccessServiceError) throw error
       throw new ProjectAccessServiceError(503, 'SESSION_VERIFIER_UNAVAILABLE', 'Session verification is unavailable')
     }
     const now = (this.dependencies.now ?? Date.now)()
@@ -306,7 +307,11 @@ export class ProjectAccessService {
     let membership: MembershipLookupResult
     try {
       // Always load current membership; session role or stale membership is never used.
-      membership = await this.dependencies.membershipLookup.lookup(session.userId, session.activeWorkspaceId)
+      membership = await this.dependencies.membershipLookup.lookup(
+        session.userId,
+        session.activeWorkspaceId,
+        request,
+      )
     } catch {
       throw new ProjectAccessServiceError(503, 'MEMBERSHIP_LOOKUP_UNAVAILABLE', 'Workspace membership lookup is unavailable')
     }
