@@ -245,6 +245,18 @@ function blockPayload(block: ReviewInputDocBlock): Omit<ReviewInputBlock, 'finge
   }
 }
 
+export function reviewBlockFingerprint(block: ReviewInputDocBlock): string {
+  const payload = {
+    ...blockPayload(block),
+    tableData: block.tableData ?? null,
+    procedureSteps: block.procedureSteps ?? null,
+    caption: block.caption ?? null,
+    conditions: block.conditions ?? null,
+    listItems: block.listItems ?? null,
+  }
+  return fingerprint('review-block', payload)
+}
+
 function topicBlocks(
   topic: ReviewInputTocItem,
   topicContent: Record<string, ReviewInputDocBlock[]>,
@@ -252,17 +264,9 @@ function topicBlocks(
   const topicId = stableTopicId(topic)
   const blocks = topicContent[topicId] ?? topicContent[String(topic.id)] ?? []
   return blocks.map(block => {
-    const payload = {
-      ...blockPayload(block),
-      tableData: block.tableData ?? null,
-      procedureSteps: block.procedureSteps ?? null,
-      caption: block.caption ?? null,
-      conditions: block.conditions ?? null,
-      listItems: block.listItems ?? null,
-    }
     return {
       ...blockPayload(block),
-      fingerprint: fingerprint('review-block', payload),
+      fingerprint: reviewBlockFingerprint(block),
     }
   })
 }

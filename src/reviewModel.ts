@@ -13,6 +13,7 @@ export type ReviewFindingStatus =
   | 'open'
   | 'in-review'
   | 'resolved'
+  | 'rejected'
   | 'dismissed'
   | 'retired'
 
@@ -53,6 +54,9 @@ export type ReviewSuggestionDiff = {
   blockId: string
   originalText?: string
   proposedText?: string
+  expectedBlockFingerprint?: string
+  method?: 'deterministic-spelling-v1'
+  confidence?: 'high'
   range?: {
     start: number
     end: number
@@ -63,6 +67,7 @@ export type ReviewSuggestionDiff = {
 export type ReviewResolutionEvent = {
   eventId: string
   status: ReviewFindingStatus
+  action?: 'applied' | 'rejected'
   reason?: string
   actor: 'user' | 'system'
   at: number

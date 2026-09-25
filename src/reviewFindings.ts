@@ -343,6 +343,7 @@ export function buildGroundedReviewRun(
         { sources: [], evidence: [] },
       ),
       styleReferences: check.styleReferences,
+      suggestion: check.category === 'Spelling' ? check.suggestion ?? null : null,
     })),
   ].sort((left, right) => left.findingKey.localeCompare(right.findingKey))
   const findings = seeds.map(seed => ({

@@ -1,5 +1,5 @@
 import type { ReviewInputSnapshot, ReviewInputStandard } from './reviewInput'
-import type { ReviewFinding, ReviewStyleReference } from './reviewModel'
+import type { ReviewFinding, ReviewStyleReference, ReviewSuggestionDiff } from './reviewModel'
 
 export type LanguageCheck = {
   key: string
@@ -10,6 +10,7 @@ export type LanguageCheck = {
   rationale: string
   severity: ReviewFinding['severity']
   styleReferences: ReviewStyleReference[]
+  suggestion?: ReviewSuggestionDiff
 }
 
 type WritingRules = {
@@ -52,6 +53,9 @@ const SPELLINGS: Record<string, string> = {
   seperate: 'separate',
   occured: 'occurred',
 }
+export function deterministicSpellingCorrection(word: string): string | null {
+  return Object.prototype.hasOwnProperty.call(SPELLINGS, word) ? SPELLINGS[word] : null
+}
 const DUPLICATED_FUNCTION_WORD = /\b(the|a|an|to|of|in|is|are|and|for|with)\s+\1\b/gi
 const PASSIVE_WITH_AGENT = /\b(?:is|are|was|were)\s+(?:not\s+)?(?:created|generated|updated|deleted|displayed|sent|saved|selected|completed)\s+by\b/i
 const THIRD_PERSON_USER = /^(?:the\s+)?users?\s+(?:can|should|must|need(?:s)? to|will)\b/i
@@ -85,10 +89,23 @@ export function languageAndStandardsChecks(snapshot: ReviewInputSnapshot): Langu
         DUPLICATED_FUNCTION_WORD.lastIndex = 0
         if (duplicate) add('Grammar', 'repeated-function-word', duplicate[0],
           `The function word “${duplicate[1]}” appears twice in succession.`, language!, 'warning', duplicate.index)
-        for (const match of text.matchAll(/\b[a-z]+\b/g)) {
-          const correction = SPELLINGS[match[0]]
-          if (correction) add('Spelling', `known-misspelling-${match[0]}`, match[0],
-            `“${match[0]}” is a common misspelling of “${correction}”.`, language!, 'warning', match.index)
+        for (const match of block.content.matchAll(/\b[a-z]+\b/g)) {
+          const correction = deterministicSpellingCorrection(match[0])
+          if (correction) {
+            add('Spelling', `known-misspelling-${match[0]}`, match[0],
+              `“${match[0]}” is a common misspelling of “${correction}”.`, language!, 'warning', match.index)
+            checks[checks.length - 1].suggestion = {
+              kind: 'replace',
+              blockId: block.blockId,
+              originalText: block.content,
+              proposedText: block.content.slice(0, match.index) + correction + block.content.slice(match.index + match[0].length),
+              range: { start: match.index, end: match.index + match[0].length },
+              expectedBlockFingerprint: block.fingerprint,
+              method: 'deterministic-spelling-v1',
+              confidence: 'high',
+              rationale: `Replace “${match[0]}” with “${correction}”.`,
+            }
+          }
         }
         if (writingStandard && writing) {
           const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? []

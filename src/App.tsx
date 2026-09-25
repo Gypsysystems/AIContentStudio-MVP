@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { flushSync } from 'react-dom'
 import {
   SCHEMA_VERSION,
   createProject, saveProject, loadProject, listProjects, deleteProject, duplicateProject,
@@ -76,6 +77,7 @@ import {
   type ReviewModel,
 } from './reviewModel'
 import { resolveReviewAuthorTarget, type ReviewAuthorTarget } from './reviewNavigation'
+import { prepareSpellingApply, recordReviewFindingStatus } from './reviewSuggestions'
 import {
   buildReviewInputSnapshot,
   type ReviewInputSnapshot,
@@ -12338,6 +12340,7 @@ function RealReviewFindingsPanel({
   topicContent,
   onRun,
   onSetStatus,
+  onApplyFinding,
   onOpenFinding,
 }: {
   reviewModel: ReviewModel
@@ -12346,6 +12349,7 @@ function RealReviewFindingsPanel({
   topicContent: Record<string, DocBlock[]>
   onRun: () => string | null
   onSetStatus: (findingId: string, status: ReviewFindingStatus) => void
+  onApplyFinding: (findingId: string) => string | null
   onOpenFinding: (finding: ReviewFinding) => void
 }) {
   const [categoryFilter, setCategoryFilter] = useState('All')
@@ -12353,6 +12357,7 @@ function RealReviewFindingsPanel({
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null)
   const [viewRunId, setViewRunId] = useState<string | null>(reviewModel.activeReviewRunId)
   const [runError, setRunError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   useEffect(() => {
     setViewRunId(reviewModel.activeReviewRunId)
     setSelectedFindingId(null)
@@ -12420,6 +12425,9 @@ function RealReviewFindingsPanel({
           {runError}
         </div>
       )}
+      {actionError && (
+        <p data-testid="review-action-error" role="alert" className="mb-5 rounded-xl border border-[#FECACA] bg-[#FEF2F2] p-4 text-[12px] text-[#991B1B]">{actionError}</p>
+      )}
 
       {reviewModel.runs.length === 0 ? (
         <div className="rounded-xl border border-[#E2DED7] bg-[#F9F8F6] p-8 text-center">
@@ -12466,6 +12474,7 @@ function RealReviewFindingsPanel({
                 <option value="active">Open / In Review</option>
                 <option value="all">All</option>
                 <option value="resolved">Resolved</option>
+                <option value="rejected">Rejected</option>
                 <option value="dismissed">Dismissed</option>
                 <option value="retired">Retired</option>
               </select>
@@ -12577,15 +12586,51 @@ function RealReviewFindingsPanel({
                         ))}
                       </div>
                     )}
+                    {selectedFinding.category === 'Spelling' && selectedFinding.suggestion?.method === 'deterministic-spelling-v1'
+                      && selectedFinding.suggestion.confidence === 'high' && (
+                      <div data-testid="review-suggestion-preview" className="mt-3 rounded-lg border border-[#C7C5F4] bg-[#FAFAFF] p-3 text-[11px]">
+                        <p className="font-semibold text-[#3D3D4E]">Proposed spelling replacement · high confidence</p>
+                        <p className="mt-2 text-[#6B6B7E]">Original block text</p>
+                        <del data-testid="review-suggestion-original" className="block whitespace-pre-wrap break-words text-[#991B1B]">{selectedFinding.suggestion.originalText}</del>
+                        <p className="mt-2 text-[#6B6B7E]">Corrected block text</p>
+                        <ins data-testid="review-suggestion-proposed" className="block whitespace-pre-wrap break-words text-[#15803D]">{selectedFinding.suggestion.proposedText}</ins>
+                        {['open', 'in-review'].includes(selectedFinding.status) && (
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              data-testid="review-apply-spelling"
+                              disabled={navigation.status !== 'ready' || selectedFinding.reviewRunId !== reviewModel.activeReviewRunId}
+                              onClick={() => setActionError(onApplyFinding(selectedFinding.findingId))}
+                              className="rounded-lg bg-[#5B5BD6] px-3 py-1.5 font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                            >Apply correction</button>
+                            <button
+                              type="button"
+                              data-testid="review-reject-spelling"
+                              disabled={navigation.status !== 'ready' || selectedFinding.reviewRunId !== reviewModel.activeReviewRunId}
+                              onClick={() => { onSetStatus(selectedFinding.findingId, 'rejected'); setActionError(null) }}
+                              className="rounded-lg border border-[#E2DED7] px-3 py-1.5 font-medium text-[#6B6B7E] disabled:opacity-40"
+                            >Reject suggestion</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {selectedFinding.resolutionHistory.length > 0 && (
+                      <div data-testid="review-resolution-history" className="mt-3 text-[11px] text-[#6B6B7E]">
+                        <p className="font-semibold">Resolution history</p>
+                        {selectedFinding.resolutionHistory.map(event => (
+                          <p key={event.eventId}>{event.action ?? event.status} · {event.reason ?? 'Status changed'}</p>
+                        ))}
+                      </div>
+                    )}
                     {selectedFinding.status !== 'retired' && (
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {selectedFinding.status !== 'resolved' && (
+                        {selectedFinding.status !== 'resolved' && selectedFinding.category !== 'Spelling' && (
                           <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'resolved')} className="rounded-lg border border-[#86EFAC] bg-[#F0FDF4] px-3 py-1.5 text-[11px] font-medium text-[#15803D]">Mark resolved</button>
                         )}
                         {selectedFinding.status !== 'dismissed' && (
                           <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'dismissed')} className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E]">Dismiss</button>
                         )}
-                        {(selectedFinding.status === 'resolved' || selectedFinding.status === 'dismissed') && (
+                        {(['resolved', 'dismissed', 'rejected'] as ReviewFindingStatus[]).includes(selectedFinding.status) && (
                           <button type="button" onClick={() => onSetStatus(selectedFinding.findingId, 'open')} className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6]">Reopen</button>
                         )}
                       </div>
@@ -12619,6 +12664,7 @@ function QualityScreen({
   topicContent,
   onRunGroundedReview,
   onSetGroundedFindingStatus,
+  onApplyGroundedFinding,
   onOpenGroundedFinding,
 }: {
   onNav: (s: Screen) => void
@@ -12637,6 +12683,7 @@ function QualityScreen({
   topicContent: Record<string, DocBlock[]>
   onRunGroundedReview: () => string | null
   onSetGroundedFindingStatus: (findingId: string, status: ReviewFindingStatus) => void
+  onApplyGroundedFinding: (findingId: string) => string | null
   onOpenGroundedFinding: (finding: ReviewFinding) => void
 }) {
   const stage = reviewStage
@@ -13118,6 +13165,7 @@ function QualityScreen({
       topicContent={topicContent}
       onRun={onRunGroundedReview}
       onSetStatus={onSetGroundedFindingStatus}
+      onApplyFinding={onApplyGroundedFinding}
       onOpenFinding={onOpenGroundedFinding}
     />
   ) : (
@@ -15210,33 +15258,31 @@ export default function App() {
     findingId: string,
     status: ReviewFindingStatus,
   ) => {
-    const at = Date.now()
-    setReviewModel(current => {
-      let changed = false
-      const findings = current.findings.map(finding => {
-        if (finding.findingId !== findingId || finding.status === status) return finding
-        changed = true
-        return {
-          ...finding,
-          status,
-          dismissalReason: status === 'dismissed' ? 'Dismissed in Review' : null,
-          updatedAt: at,
-          resolutionHistory: [
-            ...finding.resolutionHistory,
-            {
-              eventId: `review-history-${findingId}-${at}`,
-              status,
-              reason: status === 'dismissed' ? 'Dismissed in Review' : undefined,
-              actor: 'user' as const,
-              at,
-            },
-          ],
-        }
-      })
-      return changed ? { ...current, findings, updatedAt: at } : current
-    })
+    if (isDemoMode) return
+    if (status === 'rejected') {
+      const finding = reviewModel.findings.find(item => item.findingId === findingId)
+      if (!finding || finding.reviewRunId !== reviewModel.activeReviewRunId
+        || resolveReviewAuthorTarget(finding, currentReviewInputSnapshot, appToc, topicContentRef.current).status !== 'ready') return
+    }
+    setReviewModel(current => recordReviewFindingStatus(current, findingId, status))
     triggerAutosave()
-  }, [triggerAutosave])
+  }, [appToc, currentReviewInputSnapshot, isDemoMode, reviewModel, triggerAutosave])
+  const handleApplyGroundedFinding = (findingId: string): string | null => {
+    if (isDemoMode) return 'Real Review corrections are unavailable in demo mode.'
+    const result = prepareSpellingApply(
+      reviewModel, findingId, currentReviewInputSnapshot, appToc, topicContentRef.current,
+    )
+    if (!result.ok) return result.reason
+    // Use Author's normal content-update path to retain manual/approved/mixed block provenance.
+    // Flush the content, metadata, revision, and Review history before scheduling one save.
+    flushSync(() => {
+      handleTopicContentChange(result.topicContent)
+      setContentRevision(revision => revision + 1)
+      setReviewModel(result.model)
+    })
+    triggerAutosave(true)
+    return null
+  }
   const groundingTheme = themes.find(theme => theme.id === projectMeta.themeId)
   const buildGroundingInput = useCallback((topic: TocItem): TopicGroundingBuildInput => {
     const topicId = stableAuthorTopicId(topic)
@@ -16072,7 +16118,7 @@ export default function App() {
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
-      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onOpenGroundedFinding={handleOpenGroundedFinding} />
+      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
       case 'publish':   return <PublishScreen onNav={navigate} themes={themes} projectMeta={projectMeta} projectName={displayName} variables={getThemeVars(projectMeta.themeId)} htmlMasterPages={htmlMasterPages} pageLayouts={pageLayouts} getDocBlocks={() => sharedDocBlocksRef.current} toc={appToc} masterAssignments={masterAssignments} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
       default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />

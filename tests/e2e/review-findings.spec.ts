@@ -1,13 +1,14 @@
 import { expect, test, type Page } from '@playwright/test'
-import type { ConceptAnalysis } from '../../src/conceptAnalysis'
+import { buildConceptAnalysis, type ConceptAnalysis } from '../../src/conceptAnalysis'
 import { buildEvidenceIndex, type EvidenceIndex } from '../../src/evidenceIndex'
 import type { SourceExtraction } from '../../src/sourceExtractor'
 import {
   buildGroundedReviewRun,
   markReviewHistoryFreshness,
 } from '../../src/reviewFindings'
-import type { ReviewInputSnapshot } from '../../src/reviewInput'
+import { reviewBlockFingerprint, type ReviewInputSnapshot } from '../../src/reviewInput'
 import { resolveReviewAuthorTarget } from '../../src/reviewNavigation'
+import { prepareSpellingApply, recordReviewFindingStatus } from '../../src/reviewSuggestions'
 import {
   createEmptyReviewModel,
   remapReviewModelForDuplicate,
@@ -380,6 +381,13 @@ test('emits conservative language and explicit-standard findings with stable exa
   const spelling = newFindings.find(finding => finding.category === 'Spelling')!
   expect(grammar).toMatchObject({ topicId: 'topic-recovery', blockId: 'prose-1', originalText: 'The the' })
   expect(spelling).toMatchObject({ topicId: 'topic-recovery', blockId: 'prose-1', originalText: 'recieve' })
+  expect(spelling.suggestion).toMatchObject({
+    kind: 'replace', blockId: 'prose-1',
+    originalText: snapshot.topics[0].blocks[0].content,
+    proposedText: snapshot.topics[0].blocks[0].content.replace('recieve', 'receive'),
+    method: 'deterministic-spelling-v1', confidence: 'high',
+    expectedBlockFingerprint: 'prose-fingerprint',
+  })
   expect(newFindings.filter(finding => finding.category === 'Writing Style').map(finding => finding.rationale).join(' '))
     .toMatch(/active voice.*direct address.*word limit/)
   expect(newFindings.filter(finding => finding.category === 'Formatting / Standards')
@@ -392,7 +400,7 @@ test('emits conservative language and explicit-standard findings with stable exa
     expect(finding.styleReferences[0].fingerprint).toBeTruthy()
     expect(finding.originalText).toBeTruthy()
     expect(finding.rationale).toBeTruthy()
-    expect(finding.suggestion).toBeNull()
+    if (finding.category !== 'Spelling') expect(finding.suggestion).toBeNull()
     expect(snapshot.topics.find(topic => topic.topicId === finding.topicId)?.blocks
       .some(block => block.blockId === finding.blockId)).toBe(true)
   }
@@ -446,6 +454,70 @@ test('does not infer language or writing and formatting rules absent from the sn
   expect(otherLanguage.ok).toBe(true)
   if (!otherLanguage.ok) return
   expect(otherLanguage.findings.map(finding => finding.category)).toEqual(absent.findings.map(finding => finding.category))
+})
+
+test('previews only deterministic spelling diffs and guards exact content, fingerprint, freshness, and target on Apply', () => {
+  const data = fixtures()
+  const block = { id: 'block-recovery', type: 'para', content: 'Please recieve updates.' }
+  const snapshot: ReviewInputSnapshot = {
+    ...data.snapshot,
+    snapshotId: 'review-spelling-input',
+    standards: [{ standardId: 'language', label: 'Language', value: 'en-US', fingerprint: 'english' }],
+    topics: [{
+      ...data.snapshot.topics[0],
+      blocks: [{
+        blockId: block.id, type: block.type, content: block.content,
+        fingerprint: reviewBlockFingerprint(block),
+      }],
+    }],
+  }
+  const run = buildGroundedReviewRun(
+    createEmptyReviewModel(data.projectId), snapshot,
+    data.evidenceIndex, data.conceptAnalysis, data.unsupportedAnalysis,
+  )
+  expect(run.ok).toBe(true)
+  if (!run.ok) return
+  const spelling = run.findings.find(finding => finding.category === 'Spelling')!
+  const topics = [{ id: 1, topicId: 'topic-recovery' }]
+  const content = { 'topic-recovery': [block] }
+  expect(spelling.suggestion).toMatchObject({
+    originalText: 'Please recieve updates.', proposedText: 'Please receive updates.',
+    range: { start: 7, end: 14 }, expectedBlockFingerprint: reviewBlockFingerprint(block),
+  })
+  const applied = prepareSpellingApply(run.model, spelling.findingId, snapshot, topics, content)
+  expect(applied.ok).toBe(true)
+  if (!applied.ok) return
+  expect(applied.topicContent['topic-recovery']).toEqual([{ ...block, content: 'Please receive updates.' }])
+  expect(content['topic-recovery'][0].content).toBe('Please recieve updates.')
+  expect(applied.model.findings.find(item => item.findingId === spelling.findingId))
+    .toMatchObject({ status: 'resolved', resolutionHistory: [expect.objectContaining({ action: 'applied', status: 'resolved' })] })
+  expect(prepareSpellingApply(applied.model, spelling.findingId, snapshot, topics, applied.topicContent).ok).toBe(false)
+  expect(prepareSpellingApply(run.model, spelling.findingId,
+    { ...snapshot, snapshotId: 'changed-snapshot' }, topics, content)).toMatchObject({ ok: false, reason: expect.stringContaining('Rerun Review') })
+  expect(prepareSpellingApply(run.model, spelling.findingId, snapshot, topics,
+    { 'topic-recovery': [{ ...block, content: 'Different text.' }] })).toMatchObject({ ok: false, reason: expect.stringContaining('fingerprint') })
+  expect(prepareSpellingApply(run.model, spelling.findingId, snapshot, topics,
+    { 'topic-recovery': [{ ...block, caption: 'Changed metadata' }] })).toMatchObject({ ok: false, reason: expect.stringContaining('fingerprint') })
+  expect(prepareSpellingApply(run.model, spelling.findingId, snapshot, topics,
+    { 'topic-recovery': [{ ...block, id: 'another-block' }] })).toMatchObject({ ok: false, reason: expect.stringContaining('missing') })
+  expect(prepareSpellingApply(run.model, spelling.findingId, snapshot,
+    [{ id: 2, topicId: 'other-topic' }], content).ok).toBe(false)
+  expect(prepareSpellingApply(run.model, run.findings.find(item => item.category === 'Unsupported Claim')!.findingId,
+    snapshot, topics, content).ok).toBe(false)
+
+  const rejected = recordReviewFindingStatus(run.model, spelling.findingId, 'rejected')
+  expect(rejected.findings.find(item => item.findingId === spelling.findingId))
+    .toMatchObject({ status: 'rejected', resolutionHistory: [expect.objectContaining({ action: 'rejected' })] })
+  expect(prepareSpellingApply(rejected, spelling.findingId, snapshot, topics, content).ok).toBe(false)
+  const dismissed = recordReviewFindingStatus(run.model, spelling.findingId, 'dismissed')
+  expect(dismissed.findings.find(item => item.findingId === spelling.findingId))
+    .toMatchObject({ status: 'dismissed', resolutionHistory: [expect.objectContaining({ status: 'dismissed' })] })
+  expect(content['topic-recovery']).toEqual([block])
+  const reloaded = structuredClone(applied.model)
+  expect(reloaded.findings.find(item => item.findingId === spelling.findingId)?.resolutionHistory[0].action).toBe('applied')
+  const duplicated = remapReviewModelForDuplicate(run.model, data.projectId, 'copied-project', {})
+  expect(duplicated.findings.find(item => item.findingId === spelling.findingId)?.suggestion).toEqual(spelling.suggestion)
+  expect(prepareSpellingApply(duplicated, spelling.findingId, snapshot, topics, content).ok).toBe(false)
 })
 
 test('resolves exact real Author IDs across topic rename, reorder, and persisted reload; rejects missing and stale targets', () => {
@@ -913,6 +985,85 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await expect(page.getByTestId('real-review-author-context')).toHaveCount(0)
 })
 
+test('previews, rejects, dismisses, and applies only the exact real spelling replacement with persisted history', async ({ page }) => {
+  test.setTimeout(90_000)
+  const projectName = `Guarded spelling Review ${Date.now()}`
+  const original = 'Users should recieve updates.'
+  await createProject(page, projectName)
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'operations.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# Recovery\n\nUsers should receive updates.'),
+  })
+  await expect.poll(async () => {
+    const project = await readProject(page, projectName)
+    return Object.values((project.sourceExtractions ?? {}) as Record<string, { status: string }>)
+      .filter(item => item.status === 'extracted').length
+  }).toBe(1)
+  const stored = await readProject(page, projectName)
+  const evidenceIndex = buildEvidenceIndex(
+    stored.sourceExtractions as Record<string, SourceExtraction>, stored.sourcesRevision,
+  )
+  await patchProject(page, projectName, {
+    appToc: [{ id: 1, topicId: 'topic-spelling', title: 'Recovery', level: 1, words: 100 }],
+    topicContent: { 'topic-spelling': [{ id: 'block-spelling', type: 'para', content: original }] },
+    contentRevision: 1,
+    evidenceIndex,
+    conceptAnalysis: buildConceptAnalysis(evidenceIndex),
+    analysisRevision: evidenceIndex.sourcesRevision,
+    unsupportedAnalysis: null,
+    reviewModel: createEmptyReviewModel(stored.projectId),
+  })
+  await page.reload()
+  await page.getByRole('button', { name: 'Analysis' }).click()
+  await page.getByRole('button', { name: /Recheck Content|Check Content/ }).click()
+  await expect.poll(async () => (await readProject(page, projectName)).reviewModel.inputSnapshot?.readiness).toBe('ready')
+  await page.getByRole('button', { name: /Review/ }).click()
+  await page.getByTestId('run-grounded-review').click()
+  await page.getByTestId('review-category-filter').selectOption('Spelling')
+  await expect(page.getByTestId('grounded-review-finding')).toHaveCount(1)
+  await page.getByTestId('grounded-review-finding').getByRole('button', { name: 'Inspect' }).click()
+  await expect(page.getByTestId('review-suggestion-original')).toHaveText(original)
+  await expect(page.getByTestId('review-suggestion-proposed')).toHaveText('Users should receive updates.')
+  const findingId = (await readProject(page, projectName)).reviewModel.findings.find(item => item.category === 'Spelling')!.findingId
+  await page.getByTestId('review-reject-spelling').click()
+  await page.getByTestId('review-status-filter').selectOption('rejected')
+  await expect(page.getByTestId('grounded-review-finding')).toHaveCount(1)
+  await expect.poll(async () => (await readProject(page, projectName)).reviewModel.findings.find(item => item.findingId === findingId)?.status).toBe('rejected')
+  expect((await readProject(page, projectName)).topicContent['topic-spelling'][0].content).toBe(original)
+  await expect(page.getByTestId('review-resolution-history')).toContainText('rejected')
+  await page.getByRole('button', { name: 'Reopen' }).click()
+  await page.getByTestId('review-status-filter').selectOption('active')
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).click()
+  await page.getByTestId('review-status-filter').selectOption('dismissed')
+  await expect.poll(async () => (await readProject(page, projectName)).reviewModel.findings.find(item => item.findingId === findingId)?.status).toBe('dismissed')
+  expect((await readProject(page, projectName)).topicContent['topic-spelling'][0].content).toBe(original)
+  await expect(page.getByTestId('review-resolution-history')).toContainText('dismissed')
+  await page.getByRole('button', { name: 'Reopen' }).click()
+  await page.getByTestId('review-status-filter').selectOption('active')
+  await page.getByTestId('review-apply-spelling').click()
+  await page.getByTestId('review-status-filter').selectOption('resolved')
+  await expect.poll(async () => {
+    const project = await readProject(page, projectName)
+    return [project.topicContent['topic-spelling'][0].content, project.reviewModel.findings.find(item => item.findingId === findingId)?.status]
+  }).toEqual(['Users should receive updates.', 'resolved'])
+  const applied = await readProject(page, projectName)
+  expect(applied.contentRevision).toBe(2)
+  expect(applied.reviewModel.findings.find(item => item.findingId === findingId)?.resolutionHistory.map(event => event.action ?? event.status))
+    .toEqual(['rejected', 'open', 'dismissed', 'open', 'applied'])
+  await page.reload()
+  const reloaded = await readProject(page, projectName)
+  expect(reloaded.topicContent['topic-spelling'][0].content).toBe('Users should receive updates.')
+  expect(reloaded.reviewModel.findings.find(item => item.findingId === findingId))
+    .toMatchObject({ status: 'resolved', resolutionHistory: expect.arrayContaining([expect.objectContaining({ action: 'applied' })]) })
+  await page.getByRole('button', { name: /Review/ }).click()
+  await page.getByTestId('review-category-filter').selectOption('Spelling')
+  await page.getByTestId('review-status-filter').selectOption('resolved')
+  await page.getByTestId('grounded-review-finding').getByRole('button', { name: 'Inspect' }).click()
+  await expect(page.getByTestId('review-resolution-history')).toContainText('applied')
+  await expect(page.getByTestId('review-apply-spelling')).toHaveCount(0)
+})
+
 test('never exposes or persists grounded real-project findings from explicit demo Review data', async ({ page }) => {
   const projectName = `Grounded Review demo isolation ${Date.now()}`
   await createProject(page, projectName)
@@ -925,4 +1076,6 @@ test('never exposes or persists grounded real-project findings from explicit dem
   const project = await readProject(page, projectName)
   expect(project.reviewModel.runs).toEqual([])
   expect(project.reviewModel.findings).toEqual([])
+  await expect(page.getByTestId('review-apply-spelling')).toHaveCount(0)
+  await expect(page.getByTestId('review-reject-spelling')).toHaveCount(0)
 })
