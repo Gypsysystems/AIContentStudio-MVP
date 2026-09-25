@@ -89,6 +89,7 @@ import {
 } from './reviewFindings'
 import { buildPublishProjection, flattenPublishBlocks, type PublishProjection } from './publishProjection'
 import { generateHtmlPackage, getHtmlPublishDiagnostics } from './htmlPublisher'
+import { generateWordDocument } from './wordPublisher'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -13814,106 +13815,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     return doc.output('blob')
   }
 
-  const generateDOCX = async (blocks: DocBlock[]): Promise<Blob> => {
-    const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, AlignmentType, ShadingType, BorderStyle, UnderlineType } = await import('docx')
-
-    const primary = activeBrand?.primaryColor ?? '#5B5BD6'
-    const hexColor = (h: string) => h.replace('#', '')
-
-    const makeChildren = (block: DocBlock) => {
-      const text = resolveVars(block.content ?? '')
-
-      if (block.type === 'h1') return [new Paragraph({ text, heading: HeadingLevel.HEADING_1 })]
-      if (block.type === 'h2') return [new Paragraph({ text, heading: HeadingLevel.HEADING_2 })]
-      if (block.type === 'h3') return [new Paragraph({ text, heading: HeadingLevel.HEADING_3 })]
-      if (block.type === 'h4') return [new Paragraph({ text, heading: HeadingLevel.HEADING_4 })]
-
-      if (block.type === 'para') return [new Paragraph({ children: [new TextRun({ text })] })]
-
-      if (block.type === 'quote') return [new Paragraph({
-        children: [new TextRun({ text, italics: true })],
-        indent: { left: 720 },
-        border: { left: { color: hexColor(primary), size: 12, space: 8, style: BorderStyle.THICK } }
-      })]
-
-      if (block.type === 'code') return [new Paragraph({
-        children: [new TextRun({ text, font: 'Courier New', size: 18, shading: { type: ShadingType.SOLID, color: 'F4F2EE', fill: 'F4F2EE' } })],
-      })]
-
-      if (block.type === 'callout') {
-        const variant = block.calloutVariant ?? 'note'
-        const fillMap: Record<string, string> = { note: 'E0F2FE', tip: 'DCFCE7', warning: 'FEF3C7', important: 'F3F0FF', example: 'F9F8F6' }
-        return [new Paragraph({
-          children: [new TextRun({ text: `[${variant.toUpperCase()}] ${text}`, size: 20 })],
-          shading: { type: ShadingType.SOLID, color: fillMap[variant] ?? 'E0F2FE', fill: fillMap[variant] ?? 'E0F2FE' },
-          indent: { left: 360, right: 360 },
-        })]
-      }
-
-      if (block.type === 'list' && block.listItems) {
-        return block.listItems.map(item => new Paragraph({
-          children: [new TextRun({ text: resolveVars(item.text) })],
-          bullet: item.type === 'bullet' ? { level: item.level - 1 } : undefined,
-          numbering: item.type === 'ordered' ? { reference: 'default-numbering', level: item.level - 1 } : undefined,
-        }))
-      }
-
-      if (block.type === 'procedure' && block.procedureSteps) {
-        return [
-          new Paragraph({ children: [new TextRun({ text: resolveVars(text), bold: true })], }),
-          ...(block.procedureSteps.map((s, i) => new Paragraph({
-            children: [new TextRun({ text: `${i + 1}. ${resolveVars(s)}` })],
-            indent: { left: 360 },
-          })))
-        ]
-      }
-
-      if (block.type === 'table' && block.tableData) {
-        const rows = block.tableData.rows
-        return [new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          rows: rows.map((row, ri) => new TableRow({
-            children: row.map(cell => new TableCell({
-              shading: ri === 0 && block.tableData?.hasHeader ? { type: ShadingType.SOLID, color: hexColor(primary), fill: hexColor(primary) } : undefined,
-              children: [new Paragraph({
-                children: [new TextRun({ text: String(cell), bold: ri === 0 && block.tableData?.hasHeader, color: ri === 0 && block.tableData?.hasHeader ? 'FFFFFF' : '111218' })],
-              })]
-            }))
-          }))
-        })]
-      }
-
-      if (block.type === 'divider') return [new Paragraph({ border: { bottom: { color: 'E2DED7', size: 6, space: 1, style: BorderStyle.SINGLE } } })]
-
-      return [new Paragraph({ children: [new TextRun({ text })] })]
-    }
-
-    const allChildren = blocks.flatMap(b => { try { return makeChildren(b) } catch { return [] } })
-
-    const docxDoc = new Document({
-      sections: [{
-        properties: {},
-        children: [
-          new Paragraph({
-            children: [new TextRun({ text: projectName, bold: true, size: 56, color: hexColor(primary) })],
-            spacing: { after: 400 },
-          }),
-          new Paragraph({
-            children: [new TextRun({ text: activeTheme?.name ?? '', size: 28, color: '6B6B7E' })],
-            spacing: { after: 200 },
-          }),
-          new Paragraph({
-            children: [new TextRun({ text: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), size: 24, color: '9898AB' })],
-            spacing: { after: 800 },
-          }),
-          ...allChildren,
-        ]
-      }]
-    })
-
-    return await Packer.toBlob(docxDoc)
-  }
-
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -13947,7 +13848,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     if (selectedFormats.includes('word')) {
       try {
         await step('Generating Word document…', 200)
-        const blob = await generateDOCX(blocks)
+        const blob = await generateWordDocument(projection)
         newBlobs.word = blob
       } catch (e) {
         newErrors.word = `Word generation failed: ${(e as Error).message}`
