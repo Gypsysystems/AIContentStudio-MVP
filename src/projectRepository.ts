@@ -1,5 +1,4 @@
-// ProjectRepository — IndexedDB-backed persistence for DocFlow projects
-// All project state flows through here; individual screens never write directly.
+// IndexedDB adapter. The app consumes the stable boundary in projectService.ts.
 
 import {
   isEvidenceIndexFresh,
@@ -29,8 +28,10 @@ import {
   remapReviewModelForDuplicate,
   type ReviewModel,
 } from './reviewModel'
+import { CURRENT_PROJECT_SCHEMA_VERSION, migrateProjectRecord } from './projectMigrations'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = CURRENT_PROJECT_SCHEMA_VERSION
+export { migrateProjectRecord, UnsupportedProjectSchemaError } from './projectMigrations'
 const DB_NAME = 'docflow-db'
 const DB_VERSION = 2
 const STORE_PROJECTS = 'projects'
@@ -51,6 +52,7 @@ export type StoredFile = {
 export type ProjectRecord = {
   projectId: string
   schemaVersion: number
+  recordRevision: number
   projectName: string
   documentType: string
   version: string
@@ -211,7 +213,6 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
   const db = await openDB()
   const now = Date.now()
   const record: ProjectRecord = {
-    schemaVersion: SCHEMA_VERSION,
     documentType: 'user-guide',
     version: '1.0',
     createdAt: now,
@@ -255,22 +256,62 @@ export async function createProject(partial: Partial<ProjectRecord> & { projectI
     docComments: [],
     publishConfig: { selectedFormats: [], activeVariant: '' },
     ...partial,
+    schemaVersion: SCHEMA_VERSION,
+    recordRevision: 0,
   }
   await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => { await put(s, record) })
   return record
 }
 
-export async function saveProject(record: ProjectRecord): Promise<void> {
+export async function saveProject(record: ProjectRecord): Promise<ProjectRecord> {
   const db = await openDB()
-  const updated = { ...record, modifiedAt: Date.now() }
-  await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => { await put(s, updated) })
+  let saved: ProjectRecord | null = null
+  // Legacy local save remains last-write-wins for existing UI flows. The
+  // guarded operation below is the explicit cloud-ready conflict primitive.
+  await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
+    const previous = await getByKey<ProjectRecord>(s, record.projectId)
+    const revision = previous ? migrateProjectRecord(previous).record.recordRevision : 0
+    saved = { ...migrateProjectRecord(record).record,
+      schemaVersion: SCHEMA_VERSION, recordRevision: revision + 1, modifiedAt: Date.now() }
+    await put(s, saved)
+  })
+  return saved!
+}
+
+export class ProjectConflictError extends Error {
+  constructor(readonly projectId: string, readonly expectedRevision: number, readonly actualRevision: number) {
+    super(`Project "${projectId}" changed: expected revision ${expectedRevision}, found ${actualRevision}.`)
+    this.name = 'ProjectConflictError'
+  }
+}
+
+export async function saveProjectIfCurrent(record: ProjectRecord, expectedRevision: number): Promise<ProjectRecord> {
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+    throw new Error('Expected project revision must be a nonnegative integer.')
+  const db = await openDB()
+  let saved: ProjectRecord | null = null
+  await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
+    const previous = await getByKey<ProjectRecord>(s, record.projectId)
+    if (!previous) throw new Error(`Project "${record.projectId}" does not exist.`)
+    const current = migrateProjectRecord(previous).record
+    if (current.recordRevision !== expectedRevision)
+      throw new ProjectConflictError(record.projectId, expectedRevision, current.recordRevision)
+    saved = { ...migrateProjectRecord(record).record, schemaVersion: SCHEMA_VERSION,
+      recordRevision: current.recordRevision + 1, modifiedAt: Date.now() }
+    await put(s, saved)
+  })
+  return saved!
 }
 
 export async function loadProject(projectId: string): Promise<ProjectRecord | null> {
   const db = await openDB()
   let result: ProjectRecord | undefined
-  await tx(db, STORE_PROJECTS, 'readonly', async ([s]) => {
-    result = await getByKey<ProjectRecord>(s, projectId)
+  await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
+    const stored = await getByKey<ProjectRecord>(s, projectId)
+    if (!stored) return
+    const migrated = migrateProjectRecord(stored)
+    result = migrated.record
+    if (migrated.changed) await put(s, migrated.record)
   })
   return result ?? null
 }
@@ -282,6 +323,7 @@ export async function listProjects(): Promise<ProjectSummary[]> {
     records = await getAll<ProjectRecord>(s)
   })
   return records
+    .map(raw => migrateProjectRecord(raw).record)
     .map(r => ({ projectId: r.projectId, projectName: r.projectName, documentType: r.documentType, version: r.version, createdAt: r.createdAt, modifiedAt: r.modifiedAt }))
     .sort((a, b) => b.modifiedAt - a.modifiedAt)
 }
@@ -320,17 +362,22 @@ function remapExtractionFileReferences(
 }
 
 export async function duplicateProject(sourceId: string, newName: string): Promise<ProjectRecord | null> {
-  const source = await loadProject(sourceId)
-  if (!source) return null
   const db = await openDB()
+  const snapshot: { source: ProjectRecord | null; files: StoredFile[] } = { source: null, files: [] }
+  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readonly', async ([ps, fs]) => {
+    const raw = await getByKey<ProjectRecord>(ps, sourceId)
+    if (!raw) return
+    snapshot.source = migrateProjectRecord(raw).record
+    snapshot.files = await getAllByIndex<StoredFile>(fs, 'projectId', sourceId)
+  })
+  const source = snapshot.source
+  if (!source) return null
   const now = Date.now()
   const newId = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const copy: ProjectRecord = { ...source, projectId: newId, projectName: newName, createdAt: now, modifiedAt: now }
+  const copy: ProjectRecord = { ...source, projectId: newId, projectName: newName,
+    schemaVersion: SCHEMA_VERSION, recordRevision: 0, createdAt: now, modifiedAt: now }
   // Deep-copy file blobs for new project
-  let sourceFiles: StoredFile[] = []
-  await tx(db, STORE_FILES, 'readonly', async ([fs]) => {
-    sourceFiles = await getAllByIndex<StoredFile>(fs, 'projectId', sourceId)
-  })
+  const sourceFiles = snapshot.files
   const newFileIdMap: Record<string, string> = {}
   const newFiles: StoredFile[] = sourceFiles.map(sf => {
     const newFileId = `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -434,6 +481,15 @@ export async function duplicateProject(sourceId: string, newName: string): Promi
     newFileIdMap,
   )
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
+    const currentRaw = await getByKey<ProjectRecord>(ps, sourceId)
+    if (!currentRaw) throw new Error(`Source project "${sourceId}" was deleted during duplication.`)
+    const current = migrateProjectRecord(currentRaw).record
+    if (current.recordRevision !== source.recordRevision)
+      throw new ProjectConflictError(sourceId, source.recordRevision, current.recordRevision)
+    const currentFiles = await getAllByIndex<StoredFile>(fs, 'projectId', sourceId)
+    if (currentFiles.map(file => file.fileId).sort().join('\0')
+      !== sourceFiles.map(file => file.fileId).sort().join('\0'))
+      throw new Error(`Source files changed during duplication of project "${sourceId}".`)
     await put(ps, copy)
     for (const f of newFiles) await put(fs, f)
   })

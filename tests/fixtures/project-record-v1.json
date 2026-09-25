@@ -1,0 +1,25 @@
+{
+  "projectId": "fixture-v1-project",
+  "schemaVersion": 1,
+  "projectName": "Legacy Field Operations Guide",
+  "documentType": "user-guide",
+  "version": "1.0",
+  "createdAt": 1700000000000,
+  "modifiedAt": 1700000000100,
+  "isDemoMode": false,
+  "sourceFileIds": ["fixture-v1-source"],
+  "sourcesRevision": 1,
+  "analysisResult": null,
+  "appToc": [
+    { "id": 101, "topicId": "stable-intro", "title": "Introduction", "level": 1, "words": 42 }
+  ],
+  "docBlocks": [
+    { "id": "legacy-block-1", "type": "para", "content": "Legacy authored instructions." }
+  ],
+  "topicContent": {
+    "stable-intro": [
+      { "id": "legacy-author-block", "type": "para", "content": "Preserve authored content during migration." }
+    ]
+  },
+  "publishConfig": { "selectedFormats": ["html"], "activeVariant": "standard" }
+}

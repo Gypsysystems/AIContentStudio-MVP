@@ -1,0 +1,293 @@
+{
+  "projectId": "fixture-v2-project",
+  "schemaVersion": 2,
+  "projectName": "Field Operations Guide",
+  "documentType": "user-guide",
+  "version": "2.4",
+  "createdAt": 1700000000000,
+  "modifiedAt": 1700000000100,
+  "isDemoMode": false,
+  "themes": [
+    { "id": "theme-field", "name": "Field Blue", "primaryColor": "#174a72" }
+  ],
+  "projectMeta": { "contentType": "user-guide", "owner": "Operations" },
+  "activeStyleProfileId": "style-field",
+  "themeVariables": { "theme": [{ "name": "PRODUCT", "value": "Field Kit" }] },
+  "pageLayouts": [{ "id": "layout-cover", "name": "Cover", "layoutType": "cover" }],
+  "htmlMasterPages": [{ "id": "master-standard", "name": "Standard", "masterType": "topic" }],
+  "sourceFileIds": ["fixture-source-a"],
+  "sourcesRevision": 1,
+  "analysisResult": { "summary": "Field kit setup and verification." },
+  "analysisRevision": 3,
+  "conceptAnalysis": {
+    "version": 2,
+    "method": "deterministic-evidence-heuristics-v1",
+    "evidenceSourcesRevision": 1,
+    "evidenceExtractionRevision": "extract-1-fixture",
+    "builtAt": 1700000000200,
+    "concepts": [{
+      "id": "concept-field-kit",
+      "label": "Field Kit",
+      "exactTerms": ["Field Kit"],
+      "occurrenceCount": 1,
+      "sourceCount": 1,
+      "evidenceIds": ["evidence-fixture-1"],
+      "evidenceRefs": [{
+        "evidenceId": "evidence-fixture-1",
+        "sourceId": "fixture-source-a",
+        "fileId": "fixture-source-a",
+        "sourceFileName": "field-manual.md",
+        "location": "Setup"
+      }]
+    }],
+    "terminology": []
+  },
+  "unsupportedAnalysis": null,
+  "appToc": [
+    { "id": 101, "topicId": "stable-setup", "title": "Prepare the Field Kit", "level": 1, "words": 48 }
+  ],
+  "tocProposal": {
+    "version": 1,
+    "method": "evidence-grounded-toc-v1",
+    "contentType": "user-guide",
+    "evidenceSourcesRevision": 1,
+    "evidenceExtractionRevision": "extract-1-fixture",
+    "groundedAnalysisBuiltAt": 1700000000200,
+    "generatedAt": 1700000000300,
+    "items": [{
+      "id": 101,
+      "topicId": "stable-setup",
+      "title": "Prepare the Field Kit",
+      "level": 1,
+      "words": 48,
+      "order": 0,
+      "rationale": "Supported by the setup source.",
+      "supportingEvidenceIds": ["evidence-fixture-1"],
+      "proposalKind": "evidence-backed",
+      "sourceSectionPaths": [["Setup"]]
+    }]
+  },
+  "tocRevision": 2,
+  "tocGeneratedFromRev": 1,
+  "tocGeneratedFromEvidenceSourcesRevision": 1,
+  "tocGeneratedFromEvidenceExtractionRevision": "extract-1-fixture",
+  "tocGeneratedFromConceptBuiltAt": 1700000000200,
+  "tocGeneratedFromContentType": "user-guide",
+  "tocHumanModified": true,
+  "masterAssignments": { "101": "master-standard" },
+  "sourceExtractions": {
+    "fixture-source-a": {
+      "sourceId": "fixture-source-a",
+      "fileName": "field-manual.md",
+      "fileType": "text/markdown",
+      "status": "extracted",
+      "blocks": [{
+        "id": "source-block-1",
+        "sourceId": "fixture-source-a",
+        "type": "heading",
+        "text": "Setup",
+        "order": 0,
+        "headingLevel": 1,
+        "sectionPath": ["Setup"]
+      }, {
+        "id": "source-block-2",
+        "sourceId": "fixture-source-a",
+        "type": "paragraph",
+        "text": "Connect the Field Kit before starting calibration.",
+        "order": 1,
+        "sectionPath": ["Setup"]
+      }],
+      "extractedText": "Setup\nConnect the Field Kit before starting calibration.",
+      "warnings": [],
+      "extractedAt": 1700000000150,
+      "sourceRevision": 1,
+      "extractionRevision": 1,
+      "charCount": 56,
+      "parser": "markdown"
+    }
+  },
+  "evidenceIndex": {
+    "items": [{
+      "id": "evidence-fixture-1",
+      "sourceId": "fixture-source-a",
+      "fileId": "fixture-source-a",
+      "blockId": "source-block-2",
+      "sourceFileName": "field-manual.md",
+      "text": "Connect the Field Kit before starting calibration.",
+      "blockType": "paragraph",
+      "order": 1,
+      "location": "Setup",
+      "sectionPath": ["Setup"]
+    }],
+    "sourcesRevision": 1,
+    "extractionRevision": "extract-1-fixture",
+    "builtAt": 1700000000180
+  },
+  "docBlocks": [{ "id": "active-author-block", "type": "para", "content": "Calibrate the Field Kit." }],
+  "topicContent": {
+    "stable-setup": [
+      { "id": "authored-heading", "type": "h1", "content": "Prepare the Field Kit" },
+      { "id": "authored-body", "type": "para", "content": "Connect the Field Kit before calibration." }
+    ]
+  },
+  "authorTopicMetadata": {
+    "stable-setup": {
+      "topicId": "stable-setup",
+      "generationStatus": "generated",
+      "contentOrigin": "approved",
+      "evidenceIds": ["evidence-fixture-1"],
+      "sourcePaths": [["Setup"]],
+      "sourceFileIds": ["fixture-source-a"],
+      "groundingContext": null,
+      "draft": null,
+      "appliedBaseline": null,
+      "regenerationProposal": null,
+      "blockStates": { "authored-body": { "origin": "generated" } },
+      "provenance": {
+        "sourcesRevision": 1,
+        "evidenceExtractionRevision": "extract-1-fixture",
+        "evidenceIndexBuiltAt": 1700000000180,
+        "analysisBuiltAt": 1700000000200,
+        "analysisRevision": 3,
+        "tocRevision": 2,
+        "contentType": "user-guide",
+        "variableSnapshot": { "PRODUCT": "Field Kit" },
+        "variableFingerprint": "variables-fixture",
+        "groundingContextId": null,
+        "language": "en",
+        "styleProfileId": "style-field",
+        "styleFingerprint": "style-fixture"
+      },
+      "generatedAt": 1700000000250,
+      "generatedFreshness": "current",
+      "generatedFreshnessReason": null,
+      "manualEdited": false,
+      "approved": true,
+      "legacyHydrated": false
+    }
+  },
+  "contentRevision": 5,
+  "reviewModel": {
+    "version": 1,
+    "projectId": "fixture-v2-project",
+    "activeReviewRunId": "review-run-fixture",
+    "inputSnapshot": null,
+    "runs": [{
+      "reviewRunId": "review-run-fixture",
+      "inputSnapshotId": "",
+      "projectId": "fixture-v2-project",
+      "findingIds": ["finding-fixture"],
+      "inputProvenance": {
+        "projectId": "fixture-v2-project",
+        "contentRevision": 5,
+        "contentFingerprint": "content-fixture",
+        "sourcesRevision": 1,
+        "sourceFileIds": ["fixture-source-a"],
+        "evidenceExtractionRevision": "extract-1-fixture",
+        "evidenceIndexBuiltAt": 1700000000180,
+        "analysisRevision": 3,
+        "analysisBuiltAt": 1700000000200,
+        "tocRevision": 2,
+        "contentType": "user-guide",
+        "styleProfileId": "style-field",
+        "styleFingerprint": "style-fixture",
+        "standardsFingerprint": "standards-fixture",
+        "capturedAt": 1700000000300
+      },
+      "status": "complete",
+      "createdAt": 1700000000300,
+      "updatedAt": 1700000000400,
+      "completedAt": 1700000000400
+    }],
+    "findings": [{
+      "findingId": "finding-fixture",
+      "findingKey": "finding-key-fixture",
+      "reviewRunId": "review-run-fixture",
+      "inputSnapshotId": "",
+      "projectId": "fixture-v2-project",
+      "topicId": "stable-setup",
+      "blockId": "authored-body",
+      "category": "source-grounding",
+      "severity": "warning",
+      "required": true,
+      "originalText": "Connect the Field Kit before calibration.",
+      "claimFingerprint": "claim-fixture",
+      "rationale": "The instruction is supported by source evidence.",
+      "sourceReferences": [{
+        "projectId": "fixture-v2-project",
+        "sourceId": "fixture-source-a",
+        "fileId": "fixture-source-a",
+        "sourceFileName": "field-manual.md",
+        "blockId": "source-block-2",
+        "location": "Setup",
+        "sectionPath": ["Setup"]
+      }],
+      "evidenceReferences": [{
+        "evidenceId": "evidence-fixture-1",
+        "projectId": "fixture-v2-project",
+        "sourceId": "fixture-source-a",
+        "fileId": "fixture-source-a",
+        "sourceFileName": "field-manual.md",
+        "location": "Setup"
+      }],
+      "styleReferences": [{
+        "styleProfileId": "style-field",
+        "standardId": "standard-plain-language",
+        "label": "Plain language",
+        "fingerprint": "standard-fixture"
+      }],
+      "suggestion": {
+        "kind": "replace",
+        "blockId": "authored-body",
+        "originalText": "Connect the Field Kit before calibration.",
+        "proposedText": "Connect the Field Kit before you calibrate.",
+        "range": { "start": 0, "end": 43 },
+        "rationale": "Use direct language."
+      },
+      "status": "resolved",
+      "dismissalReason": null,
+      "resolutionHistory": [{
+        "eventId": "review-history-finding-fixture-1700000000450",
+        "status": "resolved",
+        "reason": "updated",
+        "actor": "user",
+        "at": 1700000000450
+      }],
+      "inputProvenance": {
+        "projectId": "fixture-v2-project",
+        "contentRevision": 5,
+        "contentFingerprint": "content-fixture",
+        "sourcesRevision": 1,
+        "sourceFileIds": ["fixture-source-a"],
+        "evidenceExtractionRevision": "extract-1-fixture",
+        "evidenceIndexBuiltAt": 1700000000180,
+        "analysisRevision": 3,
+        "analysisBuiltAt": 1700000000200,
+        "tocRevision": 2,
+        "contentType": "user-guide",
+        "styleProfileId": "style-field",
+        "styleFingerprint": "style-fixture",
+        "standardsFingerprint": "standards-fixture",
+        "capturedAt": 1700000000300
+      },
+      "freshness": { "status": "current", "reasons": [], "checkedAt": 1700000000400 },
+      "createdAt": 1700000000350,
+      "updatedAt": 1700000000450,
+      "retiredAt": null,
+      "retirementReason": null
+    }],
+    "updatedAt": 1700000000450
+  },
+  "findingStatuses": { "1": "resolved" },
+  "aiReviewDone": true,
+  "reviewStage": 2,
+  "reviewRevision": 4,
+  "snippets": [{ "id": "snippet-warning", "name": "Warning", "content": "Disconnect power first." }],
+  "conditionGroups": [{ "id": "condition-advanced", "name": "Advanced users", "expression": "level=advanced" }],
+  "docComments": [{ "id": "comment-fixture", "text": "Verify this wording." }],
+  "publishConfig": {
+    "selectedFormats": ["html", "pdf"],
+    "activeVariant": "standard",
+    "includeTableOfContents": true
+  }
+}

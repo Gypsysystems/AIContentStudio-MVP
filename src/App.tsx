@@ -2,11 +2,13 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { flushSync } from 'react-dom'
 import {
   SCHEMA_VERSION,
-  createProject, saveProject, loadProject, listProjects, deleteProject, duplicateProject,
-  saveFile, loadProjectFiles, removeFile,
-  getActiveProjectId, setActiveProjectId,
+  projectRepository,
   type ProjectRecord, type ProjectSummary, type StoredFile,
-} from './projectRepository'
+} from './projectService'
+const {
+  createProject, loadProject, listProjects, deleteProject, duplicateProject,
+  saveProjectIfCurrent, saveFile, loadProjectFiles, removeFile, getActiveProjectId, setActiveProjectId,
+} = projectRepository
 import { extractBrandFromFile, type BrandExtractionResult } from './brandExtractor'
 import {
   extractFromFile, isExtractionFresh, searchExtractions,
@@ -14072,7 +14074,13 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [appLoading, setAppLoading] = useState(true)
   const [appLoadError, setAppLoadError] = useState<string | null>(null)
+  const startupInitializedRef = useRef(false)
+  const projectOpenInFlightRef = useRef(false)
   const [projectId, setProjectId] = useState<string | null>(null)
+  const projectRevisionRef = useRef(0)
+  const projectCreatedAtRef = useRef(0)
+  const saveEpochRef = useRef(0)
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [projectName, setProjectName] = useState('')
@@ -14102,15 +14110,31 @@ export default function App() {
 
   const [prevScreen, setPrevScreen] = useState<Screen | null>(null)
 
+  const queueProjectSave = (record: ProjectRecord): Promise<boolean> => {
+    const epoch = saveEpochRef.current
+    const operation = saveQueueRef.current.then(async () => {
+      if (epoch !== saveEpochRef.current) return false
+      const expectedRevision = projectRevisionRef.current
+      const saved = await saveProjectIfCurrent(
+        { ...record, createdAt: projectCreatedAtRef.current, recordRevision: expectedRevision },
+        expectedRevision,
+      )
+      if (epoch !== saveEpochRef.current) return false
+      projectRevisionRef.current = saved.recordRevision
+      return true
+    })
+    // Keep the queue live after a conflict; the failed save still reaches its caller.
+    saveQueueRef.current = operation.then(() => {}, () => {})
+    return operation
+  }
+
   const persistCurrentProject = async (): Promise<boolean> => {
     if (!projectId) return true
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null }
     const record = latestBuildRef.current()
     if (!record) return true
     try {
-      const existing = await loadProject(projectId)
-      if (existing) record.createdAt = existing.createdAt
-      await saveProject(record)
+      if (!await queueProjectSave(record)) return false
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2000)
       return true
@@ -14202,10 +14226,13 @@ export default function App() {
     const newId = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const emptyReviewModel = createEmptyReviewModel(newId)
     setProjectId(newId)
+    projectRevisionRef.current = 0
+    projectCreatedAtRef.current = 0
+    saveEpochRef.current++
     setReviewModel(emptyReviewModel)
     setActiveProjectId(newId)
     try {
-      await createProject({
+      const created = await createProject({
         projectId: newId, projectName: projectName || 'Untitled Project',
         documentType: projectMeta.contentType, version: projectMeta.version,
         themes: themes as unknown[], projectMeta: projectMeta as unknown,
@@ -14213,6 +14240,7 @@ export default function App() {
         pageLayouts: pageLayouts as unknown[], htmlMasterPages: htmlMasterPages as unknown[],
         isDemoMode, reviewModel: emptyReviewModel,
       })
+      projectCreatedAtRef.current = created.createdAt
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 2000)
     } catch { setSaveStatus('error') }
@@ -14461,10 +14489,11 @@ export default function App() {
     return {
       projectId,
       schemaVersion: SCHEMA_VERSION,
+      recordRevision: projectRevisionRef.current,
       projectName,
       documentType: projectMeta.contentType,
       version: projectMeta.version,
-      createdAt: 0,
+      createdAt: projectCreatedAtRef.current,
       modifiedAt: Date.now(),
       isDemoMode,
       themes: themes as unknown[],
@@ -14521,9 +14550,7 @@ export default function App() {
       if (!record) return
       setSaveStatus('saving')
       try {
-        const existing = await loadProject(projectId)
-        if (existing) record.createdAt = existing.createdAt
-        await saveProject(record)
+        if (!await queueProjectSave(record)) return
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus('idle'), 2000)
       } catch {
@@ -15282,6 +15309,10 @@ export default function App() {
 
   // ── Startup: check for active project or show dashboard ───────────────────
   useEffect(() => {
+    // StrictMode replays effects in development; two concurrent hydrations
+    // would compete to reconcile the same project revision.
+    if (startupInitializedRef.current) return
+    startupInitializedRef.current = true
     const init = async () => {
       try {
         const activeId = getActiveProjectId()
@@ -15293,7 +15324,9 @@ export default function App() {
           }
         }
       } catch (e) {
-        setAppLoadError(String(e))
+        resetProjectState()
+        setScreen('dashboard')
+        setAppLoadError(`Could not open project: ${(e as Error).message}`)
       } finally {
         setAppLoading(false)
       }
@@ -15304,6 +15337,8 @@ export default function App() {
   // ── Hydrate App state from a loaded ProjectRecord ─────────────────────────
   // Always sets ALL fields — conditional hydration causes isolation bugs.
   const hydrateFromRecord = async (record: ProjectRecord) => {
+    projectRevisionRef.current = record.recordRevision
+    projectCreatedAtRef.current = record.createdAt
     // Apply v1→v2 schema defaults for newly added fields
     if (!record.snippets) record = { ...record, snippets: [] }
     if (!record.conditionGroups) record = { ...record, conditionGroups: DEFAULT_CONDITION_GROUPS }
@@ -15349,7 +15384,8 @@ export default function App() {
         projectMeta: reconciledProjectMeta,
         activeStyleProfileId: reconciledProfileId,
       }
-      await saveProject(record)
+      record = await saveProjectIfCurrent(record, record.recordRevision)
+      projectRevisionRef.current = record.recordRevision
     }
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
@@ -15391,7 +15427,8 @@ export default function App() {
     setAuthorTopicMetadata(restoredAuthorTopicMetadata)
     if (JSON.stringify(restoredAuthorTopicMetadata) !== JSON.stringify(record.authorTopicMetadata ?? {})) {
       record = { ...record, authorTopicMetadata: restoredAuthorTopicMetadata }
-      await saveProject(record)
+      record = await saveProjectIfCurrent(record, record.recordRevision)
+      projectRevisionRef.current = record.recordRevision
     }
     setContentRevision(record.contentRevision ?? 0)
     setReviewModel(restoredReviewModel)
@@ -15403,7 +15440,10 @@ export default function App() {
     setConditionGroups((record.conditionGroups as ConditionGroup[]) ?? DEFAULT_CONDITION_GROUPS)
     setDocComments((record.docComments as DocComment[]) ?? [])
     setPublishConfig((record.publishConfig as PublishConfig) ?? { selectedFormats: [], activeVariant: '' })
-    if (reviewModelNeedsPersistence) await saveProject(record)
+    if (reviewModelNeedsPersistence) {
+      record = await saveProjectIfCurrent(record, record.recordRevision)
+      projectRevisionRef.current = record.recordRevision
+    }
     // Restore source files from IndexedDB as stable ProjectSource[]
     try {
       const storedFiles = await loadProjectFiles(record.projectId)
@@ -15456,6 +15496,10 @@ export default function App() {
 
   // ── Project state reset ────────────────────────────────────────────────────
   const resetProjectState = () => {
+    setAppLoadError(null)
+    saveEpochRef.current++
+    projectRevisionRef.current = 0
+    projectCreatedAtRef.current = 0
     setProjectId(null)
     setProjectName('')
     setIsDemoMode(false)
@@ -15513,16 +15557,27 @@ export default function App() {
 
   // ── App-level project actions ──────────────────────────────────────────────
   const handleOpenProject = async (record: ProjectRecord) => {
+    if (projectOpenInFlightRef.current) return
+    projectOpenInFlightRef.current = true
     resetProjectState()
-    await hydrateFromRecord(record)
-    setScreen('sources')
+    try {
+      await hydrateFromRecord(record)
+      setAppLoadError(null)
+      setScreen('sources')
+    } catch (error) {
+      resetProjectState()
+      setAppLoadError(`Could not open project: ${(error as Error).message}`)
+      setScreen('dashboard')
+    } finally {
+      projectOpenInFlightRef.current = false
+    }
   }
 
   const handleDeleteProject = async (pid: string) => {
     await deleteProject(pid)
     if (pid === projectId) {
       // Reset state if active project deleted
-      setProjectId(null); setProjectName(''); setActiveProjectId(null)
+      setProjectId(null); saveEpochRef.current++; projectRevisionRef.current = 0; projectCreatedAtRef.current = 0; setProjectName(''); setActiveProjectId(null)
     }
   }
 
@@ -15613,6 +15668,13 @@ export default function App() {
           publish:   'not-started',
         }}
       />
+      {appLoadError && (
+        <div role="alert" data-testid="project-open-error" className="bg-[#FEF2F2] border-b border-[#FCA5A5] px-4 py-2 flex items-center gap-3">
+          <span className="text-[12px] text-[#B91C1C] flex-1">{appLoadError}</span>
+          <button onClick={() => setAppLoadError(null)} aria-label="Dismiss project error"
+            className="text-[#B91C1C] hover:text-[#991B1B] text-[14px]">✕</button>
+        </div>
+      )}
       {navError && (
         <div className="bg-[#FEF2F2] border-b border-[#FCA5A5] px-4 py-2 flex items-center gap-3">
           <span className="text-[12px] text-[#DC2626] flex-1">{navError}</span>
