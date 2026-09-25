@@ -1,5 +1,6 @@
 import type { ConceptAnalysis } from './conceptAnalysis'
 import type { EvidenceIndex, EvidenceItem } from './evidenceIndex'
+import { organizeHeading } from './tocInformationArchitecture'
 
 export type ProposalTopicKind = 'evidence-backed' | 'optional-structural' | 'manual'
 
@@ -83,15 +84,45 @@ function evidenceForConcept(concept: ConceptAnalysis['concepts'][number], index:
   })
 }
 
+function localSectionEvidence(heading: EvidenceItem, index: EvidenceIndex): EvidenceItem[] {
+  const path = heading.sectionPath
+  if (path?.length) {
+    return index.items.filter(item =>
+      item.sourceId === heading.sourceId
+      && item.blockType !== 'heading'
+      && item.sectionPath?.length === path.length
+      && path.every((part, position) => normalized(part) === normalized(item.sectionPath![position])),
+    )
+  }
+  const nextHeading = headingItems(index).find(item => item.sourceId === heading.sourceId && item.order > heading.order)
+  return index.items.filter(item =>
+    item.sourceId === heading.sourceId
+    && item.blockType !== 'heading'
+    && item.order > heading.order
+    && (nextHeading === undefined || item.order < nextHeading.order),
+  )
+}
+
+function uniquePaths(paths: string[][]): string[][] {
+  return unique(paths.map(path => JSON.stringify(path))).map(path => JSON.parse(path) as string[])
+}
+
 export function buildTocProposal(
   evidenceIndex: EvidenceIndex,
   groundedAnalysis: ConceptAnalysis,
   contentType: string,
 ): TocProposal {
   const topics: ProposedTopic[] = []
-  const usedTitles = new Set<string>()
-  const headingByTitle = new Map<string, ProposedTopic>()
-  const headingStack: ProposedTopic[] = []
+  type HeadingSeed = {
+    heading: EvidenceItem
+    title: string
+    section: string
+    sectionOrder: number
+    intent: string
+    evidenceIds: string[]
+    paths: string[][]
+  }
+  const headingByTitle = new Map<string, HeadingSeed>()
 
   const add = (
     input: Omit<ProposedTopic, 'id' | 'order'> & { id?: number },
@@ -102,50 +133,71 @@ export function buildTocProposal(
       order: topics.length,
     }
     topics.push(topic)
-    usedTitles.add(normalized(topic.title))
     return topic
   }
 
   for (const heading of headingItems(evidenceIndex)) {
-    const title = heading.text.trim()
-    const titleKey = normalized(title)
+    const titleKey = normalized(heading.text)
+    const nearby = localSectionEvidence(heading, evidenceIndex)
+    const evidenceIds = unique([heading.id, ...nearby.map(item => item.id)])
+    const paths = heading.sectionPath ? [[...heading.sectionPath]] : []
     if (headingByTitle.has(titleKey)) {
       const existing = headingByTitle.get(titleKey)!
-      existing.supportingEvidenceIds = unique([...existing.supportingEvidenceIds, heading.id])
-      existing.sourceSectionPaths = unique([
-        ...(existing.sourceSectionPaths ?? []).map(path => path.join(' › ')),
-        ...(heading.sectionPath ? [heading.sectionPath.join(' › ')] : []),
-      ]).map(path => path.split(' › '))
+      existing.evidenceIds = unique([...existing.evidenceIds, ...evidenceIds])
+      existing.paths = uniquePaths([...existing.paths, ...paths])
       continue
     }
-
-    const headingLevel = Math.max(1, Math.min(4, heading.headingLevel ?? 1)) as 1 | 2 | 3 | 4
-    while (headingStack.length >= headingLevel) headingStack.pop()
-    const parent = headingLevel > 1 ? headingStack[headingStack.length - 1] : undefined
-    const topic = add({
-      topicId: `heading-${stableHash(titleKey)}`,
-      title,
-      level: parent ? headingLevel : 1,
-      words: 0,
-      parentId: parent?.id,
-      parentTopicId: parent?.topicId,
-      rationale: `Evidence-backed source heading${heading.sectionPath?.length ? ` under ${heading.sectionPath.join(' › ')}` : ''}.`,
-      supportingEvidenceIds: [heading.id],
-      proposalKind: 'evidence-backed',
-      sourceSectionPaths: heading.sectionPath ? [heading.sectionPath] : [],
+    const organized = organizeHeading(heading, nearby, contentType)
+    headingByTitle.set(titleKey, {
+      heading,
+      ...organized,
+      evidenceIds,
+      paths,
     })
-    headingByTitle.set(titleKey, topic)
-    headingStack.push(topic)
+  }
+
+  const seeds = [...headingByTitle.values()]
+  const sections = unique(seeds.map(seed => seed.section)).sort((left, right) =>
+    seeds.find(seed => seed.section === left)!.sectionOrder
+      - seeds.find(seed => seed.section === right)!.sectionOrder)
+  for (const section of sections) {
+    const members = seeds.filter(seed => seed.section === section)
+    const root = add({
+      topicId: `ia-${normalized(contentType).replace(/\s+/g, '-')}-${stableHash(normalized(section))}`,
+      title: section,
+      level: 1,
+      words: 0,
+      rationale: `${contentTypeLabel(contentType)} grouping supported by source sections: ${members.map(seed => seed.heading.text.trim()).join(', ')}. It is not an unsupported generic feature claim.`,
+      supportingEvidenceIds: unique(members.flatMap(seed => seed.evidenceIds)),
+      proposalKind: 'evidence-backed',
+      sourceSectionPaths: uniquePaths(members.flatMap(seed => seed.paths)),
+    })
+    for (const seed of members) {
+      add({
+        topicId: `heading-${stableHash(normalized(seed.heading.text))}`,
+        title: seed.title,
+        level: 2,
+        words: 0,
+        parentId: root.id,
+        parentTopicId: root.topicId,
+        rationale: `The source heading "${seed.heading.text.trim()}"${seed.paths.length ? ` at ${seed.paths.map(path => path.join(' › ')).join('; ')}` : ''} and its local evidence support a ${contentTypeLabel(contentType)} ${seed.intent} topic. Source wording is retained as context, not copied as the final TOC.`,
+        supportingEvidenceIds: seed.evidenceIds,
+        proposalKind: 'evidence-backed',
+        sourceSectionPaths: seed.paths,
+      })
+    }
   }
 
   const conceptOnly = groundedAnalysis.concepts.filter(concept => !headingByTitle.has(normalized(concept.label)))
   if (conceptOnly.length > 0) {
-    const root = add({
+    const userGuide = normalized(contentType) === 'user guide'
+    const rootTitle = userGuide ? 'Key concepts' : 'Core concepts'
+    const root = topics.find(topic => topic.level === 1 && topic.title === rootTitle) ?? add({
       topicId: `structural-${normalized(contentType).replace(/\s+/g, '-')}-concepts`,
-      title: 'Core concepts',
+      title: rootTitle,
       level: 1,
       words: 0,
-      rationale: `Optional structural grouping for ${contentTypeLabel(contentType)} topics that are evidenced in source content but are not source headings.`,
+      rationale: `Optional structural grouping for ${contentTypeLabel(contentType)} concepts supported by source content but not by source headings.`,
       supportingEvidenceIds: [],
       proposalKind: 'optional-structural',
     })
@@ -153,7 +205,7 @@ export function buildTocProposal(
       const evidence = evidenceForConcept(concept, evidenceIndex)
       add({
         topicId: `concept-${stableHash(normalized(concept.label))}`,
-        title: concept.label,
+        title: userGuide ? `Understand ${concept.label}` : concept.label,
         level: 2,
         words: 300,
         parentId: root.id,

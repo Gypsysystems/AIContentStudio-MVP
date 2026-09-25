@@ -87,6 +87,113 @@ async function readProject(page: Page, projectName: string): Promise<StoredProje
   }, projectName)
 }
 
+test("turns the same internal headings into evidence-grounded, content-type-specific TOCs", async ({ page }) => {
+  await page.goto("/")
+  const result = await page.evaluate(async () => {
+    const path = "/src/tocProposal.ts"
+    const { buildTocProposal, isTocProposalFresh } = await import(path)
+    const sections = [
+      ["Internal operating model", "The platform organizes projects."],
+      ["Workspace shell", "Users can navigate workspaces from the dashboard."],
+      ["Search pipeline", "Users can search projects by title."],
+      ["Review queue", "Users can review and approve drafts."],
+      ["Delivery gateway", "Users can export completed reports."],
+      ["Setup sequence", "Users can sign in with their account."],
+      ["Export adapter", "The adapter stores internal archive metadata."],
+    ]
+    const items = sections.flatMap(([title, body], index) => {
+      const sectionPath = index === 0 ? [title] : ["Internal operating model", title]
+      const common = {
+        sourceId: "source-1",
+        fileId: "source-1",
+        sourceFileName: "internal-notes.md",
+        location: sectionPath.join(" › "),
+        sectionPath,
+      }
+      return [
+        { ...common, id: `h${index}`, blockId: `h${index}`, text: title, blockType: "heading" as const, headingLevel: index === 0 ? 1 : 2, order: index * 2 },
+        { ...common, id: `p${index}`, blockId: `p${index}`, text: body, blockType: "paragraph" as const, order: index * 2 + 1 },
+      ]
+    })
+    items.push(
+      { ...items[4], id: "h-duplicate", blockId: "h-duplicate", sourceId: "source-2", fileId: "source-2", sourceFileName: "more-notes.md", order: 14, sectionPath: ["Appendix", "Search pipeline"], location: "Appendix › Search pipeline" },
+      { ...items[5], id: "p-duplicate", blockId: "p-duplicate", sourceId: "source-2", fileId: "source-2", sourceFileName: "more-notes.md", order: 15, sectionPath: ["Appendix", "Search pipeline"], location: "Appendix › Search pipeline", text: "Users can search projects by ID." },
+    )
+    const evidenceIndex = { items, sourcesRevision: 4, extractionRevision: "extract-fixture", builtAt: 100 }
+    const analysis = {
+      version: 2 as const,
+      method: "deterministic-evidence-heuristics-v1" as const,
+      evidenceSourcesRevision: 4,
+      evidenceExtractionRevision: "extract-fixture",
+      builtAt: 200,
+      concepts: [],
+      terminology: [],
+      conflicts: [],
+      gaps: [],
+    }
+    const userGuide = buildTocProposal(evidenceIndex, analysis, "user-guide")
+    const adminGuide = buildTocProposal(evidenceIndex, analysis, "admin-guide")
+    const repeated = buildTocProposal(evidenceIndex, analysis, "user-guide")
+    return {
+      sourceTitles: sections.map(section => section[0]),
+      userGuide,
+      adminGuide,
+      repeated,
+      current: isTocProposalFresh(userGuide, evidenceIndex, analysis, "user-guide"),
+      staleType: isTocProposalFresh(userGuide, evidenceIndex, analysis, "admin-guide"),
+      staleEvidence: isTocProposalFresh(userGuide, { ...evidenceIndex, sourcesRevision: 5 }, analysis, "user-guide"),
+    }
+  })
+
+  const userTopics = result.userGuide.items
+  const adminTopics = result.adminGuide.items
+  const userHeadings = userTopics.filter(topic => topic.topicId.startsWith("heading-"))
+  const adminHeadings = adminTopics.filter(topic => topic.topicId.startsWith("heading-"))
+  expect(userHeadings).toHaveLength(result.sourceTitles.length)
+  expect(userHeadings.map(topic => topic.title).some(title => result.sourceTitles.includes(title))).toBe(false)
+  expect(userHeadings.map(topic => topic.title)).toEqual(expect.arrayContaining([
+    "Sign in with your account",
+    "Navigate workspaces from the dashboard",
+    "Search projects by title",
+    "Review and approve drafts",
+    "Export completed reports",
+    "Understand Export adapter",
+  ]))
+  expect(userHeadings.find(topic => topic.title === "Understand Export adapter")?.parentTopicId)
+    .toBe(userTopics.find(topic => topic.title === "Key concepts")?.topicId)
+  expect(userTopics.filter(topic => topic.level === 1 && topic.proposalKind === "evidence-backed").map(topic => topic.title)).toEqual([
+    "Getting started",
+    "Navigate the product",
+    "Search",
+    "Review and approve",
+    "Export",
+    "Key concepts",
+  ])
+  expect(userTopics.some(topic => topic.title === "Troubleshooting" && topic.proposalKind === "evidence-backed")).toBe(false)
+  expect(userTopics.find(topic => topic.title === "Troubleshooting")?.proposalKind).toBe("optional-structural")
+  expect(adminTopics.some(topic => topic.title === "Workspace and navigation" && topic.proposalKind === "evidence-backed")).toBe(true)
+  expect(adminTopics.map(topic => topic.title)).not.toEqual(userTopics.map(topic => topic.title))
+  expect(adminHeadings.map(topic => topic.topicId)).toEqual(userHeadings.map(topic => topic.topicId))
+  expect(result.repeated.items).toEqual(userTopics)
+  const searchTopic = userHeadings.find(topic => topic.title === "Search projects by title")
+  expect(searchTopic?.supportingEvidenceIds).toEqual(expect.arrayContaining(["h2", "p2", "h-duplicate", "p-duplicate"]))
+  expect(searchTopic?.sourceSectionPaths).toContainEqual(["Appendix", "Search pipeline"])
+  for (let index = 0; index < userHeadings.length; index++) {
+    const topic = userHeadings.find(candidate => candidate.supportingEvidenceIds.includes(`h${index}`))
+    expect(topic?.supportingEvidenceIds).toContain(`p${index}`)
+    expect(topic?.sourceSectionPaths?.[0]).toEqual(index === 0
+      ? ["Internal operating model"] : ["Internal operating model", result.sourceTitles[index]])
+    expect(topic?.rationale).toContain(result.sourceTitles[index])
+    const parent = userTopics.find(candidate => candidate.topicId === topic?.parentTopicId)
+    expect(parent?.supportingEvidenceIds).toContain(`h${index}`)
+  }
+  expect(new Set(userTopics.map(topic => topic.topicId)).size).toBe(userTopics.length)
+  expect(new Set(userTopics.map(topic => topic.id)).size).toBe(userTopics.length)
+  expect(result.current).toBe(true)
+  expect(result.staleType).toBe(false)
+  expect(result.staleEvidence).toBe(false)
+})
+
 test("generates a grounded, reviewable TOC and persists review edits before commit", async ({ page }) => {
   test.setTimeout(60_000)
   const projectName = `Grounded TOC ${Date.now()}`
@@ -95,14 +202,14 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
   await page.getByTestId("generate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-review")).toBeVisible()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
-  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Flight Operations" })).toBeVisible()
-  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: /^H2Access ControlEvidence-backed/ })).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Flight Operations" })).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: /^H2Understand Access ControlEvidence-backed/ })).toBeVisible()
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Evidence-backed" }).first()).toBeVisible()
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Optional structure" }).first()).toBeVisible()
   await expect(page.getByText("Nexus", { exact: false })).toHaveCount(0)
   await expect(page.getByText("Asteria", { exact: false })).toHaveCount(0)
 
-  const flightTopic = page.getByTestId("toc-proposal-topic").filter({ hasText: "Flight Operations" })
+  const flightTopic = page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Flight Operations" })
   await flightTopic.click()
   await page.getByTestId("toc-supporting-evidence").first().click()
   await expect(page.getByTestId("toc-evidence-dialog")).toContainText("flight-operations.md")
@@ -120,7 +227,7 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
 
   await page.getByTestId("commit-toc-proposal").click()
   await expect(page.getByTestId("real-toc-screen")).toBeVisible()
-  await expect(page.getByTestId("committed-toc-panel")).toContainText("Flight Operations")
+  await expect(page.getByTestId("committed-toc-panel")).toContainText("Understand Flight Operations")
 
   await expect.poll(async () => (await readProject(page, projectName)).tocProposal).toBeNull()
   const stored = await readProject(page, projectName)
@@ -154,7 +261,7 @@ test("requires confirmation and preserves committed topics when merging a later 
   await expect.poll(async () => (await readProject(page, projectName)).appToc.some(item => item.title === "Release validation")).toBe(true)
   const after = await readProject(page, projectName)
   expect(after.appToc.slice(0, beforeIds.length).map(item => `${item.id}:${item.topicId}:${item.title}`)).toEqual(beforeIds)
-  expect(after.appToc.filter(item => item.title === "Flight Operations")).toHaveLength(1)
+  expect(after.appToc.filter(item => item.title === "Understand Flight Operations")).toHaveLength(1)
   expect(after.appToc.some(item => item.title === "Release validation")).toBe(true)
 })
 
@@ -190,7 +297,7 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await page.getByRole("button", { name: "TOC" }).click()
   await page.getByTestId("regenerate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
-  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Release Validation" }).first()).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Release Validation" }).first()).toBeVisible()
 })
 
 test("marks a committed TOC stale after the project content type changes without replacing it", async ({ page }) => {
@@ -213,7 +320,7 @@ test("marks a committed TOC stale after the project content type changes without
   await page.getByRole("button", { name: "TOC" }).click()
 
   await expect(page.getByTestId("committed-toc-stale")).toBeVisible()
-  await expect(page.getByTestId("committed-toc-panel")).toContainText("Flight Operations")
+  await expect(page.getByTestId("committed-toc-panel")).toContainText("Understand Flight Operations")
   const after = await readProject(page, projectName)
   expect(after.tocGeneratedFromContentType).toBe("user-guide")
   expect(after.appToc.map(item => `${item.id}:${item.topicId}:${item.title}`)).toEqual(committedTopics)
