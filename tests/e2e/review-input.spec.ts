@@ -285,6 +285,34 @@ test('builds a deterministic snapshot from stable project topic, block, evidence
   })
 })
 
+test('captures only explicitly configured writing and formatting rules plus observable table structure', () => {
+  const input = completeInput('project-rules')
+  input.topicContent['topic-stable'].push({
+    id: 'table-stable', type: 'table', content: 'Name | Value',
+    tableData: { rows: [['Alice', '1']], hasHeader: false },
+  })
+  input.styleProfile = {
+    ...input.styleProfile!,
+    writingRules: { activeVoice: true, directAddress: true },
+    formattingRules: { requireTableHeader: true },
+  }
+  const configured = buildReviewInputSnapshot(input)
+  const writing = configured.standards.find(standard => standard.standardId === 'writing-rules')
+  const formatting = configured.standards.find(standard => standard.standardId === 'formatting-rules')
+  expect(JSON.parse(writing!.value)).toEqual({ activeVoice: true, directAddress: true })
+  expect(JSON.parse(formatting!.value)).toEqual({ requireTableHeader: true })
+  expect(configured.topics[0].blocks.find(block => block.blockId === 'table-stable')?.tableHasHeader).toBe(false)
+  expect(configured.topics[0].blocks.find(block => block.blockId === 'table-stable')?.tableExcerpt).toBe('Alice | 1')
+  expect(configured.topics[0].blocks.find(block => block.blockId === 'block-stable')?.tableHasHeader).toBeUndefined()
+
+  const withoutRules = buildReviewInputSnapshot({
+    ...input, styleProfile: { ...input.styleProfile, writingRules: undefined, formattingRules: undefined },
+  })
+  expect(withoutRules.standards.some(standard => standard.standardId === 'writing-rules'
+    || standard.standardId === 'formatting-rules')).toBe(false)
+  expect(withoutRules.snapshotId).not.toBe(configured.snapshotId)
+})
+
 test('reports deterministic missing and stale Review inputs without creating findings', () => {
   const complete = completeInput('project-stale')
   const missing = buildReviewInputSnapshot({

@@ -38,6 +38,8 @@ export type ReviewInputBlock = {
   type: string
   content: string
   fingerprint: string
+  tableHasHeader?: boolean
+  tableExcerpt?: string
 }
 
 export type ReviewInputSource = {
@@ -177,6 +179,8 @@ export type ReviewStyleProfileInput = {
   lists?: unknown
   tables?: unknown
   callouts?: unknown
+  writingRules?: unknown
+  formattingRules?: unknown
 }
 
 export type BuildReviewInputSnapshotInput = {
@@ -234,6 +238,10 @@ function blockPayload(block: ReviewInputDocBlock): Omit<ReviewInputBlock, 'finge
     blockId: block.id,
     type: block.type,
     content: block.content,
+    ...(block.tableData ? { tableHasHeader: block.tableData.hasHeader } : {}),
+    ...(block.tableData?.rows[0]?.length
+      ? { tableExcerpt: block.tableData.rows[0].join(' | ') }
+      : {}),
   }
 }
 
@@ -284,6 +292,8 @@ function styleStandards(
       ['tables', 'Table treatment', styleProfile.tables ?? null],
       ['callouts', 'Callout treatment', styleProfile.callouts ?? null],
     )
+    if (styleProfile.writingRules) values.push(['writing-rules', 'Writing rules', styleProfile.writingRules])
+    if (styleProfile.formattingRules) values.push(['formatting-rules', 'Formatting rules', styleProfile.formattingRules])
   }
   return values.map(([standardId, label, value]) => ({
     standardId,
@@ -450,6 +460,8 @@ export function buildReviewInputSnapshot(
         lists: input.styleProfile.lists ?? null,
         tables: input.styleProfile.tables ?? null,
         callouts: input.styleProfile.callouts ?? null,
+        writingRules: input.styleProfile.writingRules ?? null,
+        formattingRules: input.styleProfile.formattingRules ?? null,
       }
     : null
   const style = stylePayload

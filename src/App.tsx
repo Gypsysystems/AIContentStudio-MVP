@@ -12296,7 +12296,7 @@ function RealReviewFindingsPanel({
         return finding ? [finding] : []
       })
     : []
-  const categories = ['All', 'Unsupported Claim', 'Source Gap', 'Conflict', 'Terminology']
+  const categories = ['All', 'Unsupported Claim', 'Source Gap', 'Conflict', 'Terminology', 'Grammar', 'Spelling', 'Writing Style', 'Formatting / Standards']
   const visibleFindings = runFindings.filter(finding =>
     (categoryFilter === 'All' || finding.category === categoryFilter)
     && (statusFilter === 'all'
@@ -12309,6 +12309,10 @@ function RealReviewFindingsPanel({
     'Source Gap': 'bg-[#FEE2E2] text-[#991B1B]',
     Conflict: 'bg-[#FCE7F3] text-[#9D174D]',
     Terminology: 'bg-[#E0E7FF] text-[#3730A3]',
+    Grammar: 'bg-[#FEF3C7] text-[#92400E]',
+    Spelling: 'bg-[#FEF3C7] text-[#92400E]',
+    'Writing Style': 'bg-[#E0E7FF] text-[#3730A3]',
+    'Formatting / Standards': 'bg-[#FCE7F3] text-[#9D174D]',
   }
   const canRun = snapshot?.readiness === 'ready'
   const handleRun = () => {
@@ -12473,6 +12477,16 @@ function RealReviewFindingsPanel({
                         </div>
                       )}
                     </div>
+                    {selectedFinding.styleReferences.length > 0 && (
+                      <div className="mt-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Applicable standards</p>
+                        {selectedFinding.styleReferences.map(style => (
+                          <p key={style.standardId ?? style.label} className="mt-1 text-[11px] text-[#6B6B7E]">
+                            {style.label} · {style.value} · {style.standardId}
+                          </p>
+                        ))}
+                      </div>
+                    )}
                     {selectedFinding.status !== 'retired' && (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {selectedFinding.status !== 'resolved' && (

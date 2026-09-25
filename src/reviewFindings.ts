@@ -1,6 +1,7 @@
 import type { ConceptAnalysis, AnalysisEvidenceReference } from './conceptAnalysis'
 import type { EvidenceIndex, EvidenceItem } from './evidenceIndex'
 import type { ReviewInputSnapshot, ReviewInputTopic } from './reviewInput'
+import { languageAndStandardsChecks } from './reviewLanguageChecks'
 import type {
   ReviewEvidenceReference,
   ReviewFinding,
@@ -17,6 +18,10 @@ export type GroundedReviewCategory =
   | 'Source Gap'
   | 'Conflict'
   | 'Terminology'
+  | 'Grammar'
+  | 'Spelling'
+  | 'Writing Style'
+  | 'Formatting / Standards'
 
 export type BuildGroundedReviewResult =
   | { ok: true; model: ReviewModel; run: ReviewRun; findings: ReviewFinding[] }
@@ -326,6 +331,19 @@ export function buildGroundedReviewRun(
     ...gapSeeds(snapshot, conceptAnalysis, byId),
     ...conflictSeeds(snapshot, conceptAnalysis, byId),
     ...terminologySeeds(snapshot, conceptAnalysis, byId),
+    ...languageAndStandardsChecks(snapshot).map(check => ({
+      ...seedBase(
+        `language-standard:${check.key}`,
+        check.category,
+        { topicId: check.topicId, blockId: check.blockId },
+        check.originalText,
+        check.rationale,
+        check.severity,
+        false,
+        { sources: [], evidence: [] },
+      ),
+      styleReferences: check.styleReferences,
+    })),
   ].sort((left, right) => left.findingKey.localeCompare(right.findingKey))
   const findings = seeds.map(seed => ({
     ...seed,
