@@ -87,10 +87,11 @@ import {
   buildGroundedReviewRun,
   markReviewHistoryFreshness,
 } from './reviewFindings'
-import { buildPublishProjection, flattenPublishBlocks, type PublishProjection } from './publishProjection'
+import { buildPublishProjection, type PublishProjection } from './publishProjection'
 import { generateHtmlPackage, getHtmlPublishDiagnostics } from './htmlPublisher'
 import { generateWordDocument } from './wordPublisher'
 import { generatePdfDocument } from './pdfPublisher'
+import { ProjectPreview } from './projectPreview'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -13431,15 +13432,24 @@ function QualityScreen({
 }
 
 // ── Screen: Preview ───────────────────────────────────────────────────────────
-function PreviewScreen({ onNav, isDemoMode, projectName, toc, topicContent }: {
+function PreviewScreen({ onNav, isDemoMode, projectName, toc, topicContent, projection }: {
   onNav: (s: Screen) => void
   isDemoMode?: boolean
   projectName?: string
   toc?: TocItem[]
   topicContent?: Record<string, DocBlock[]>
+  projection?: ProjectPublishProjection
 }) {
   const [template, setTemplate] = useState('default')
   const templates = ['Default', 'Enterprise', 'Minimal', 'Technical']
+
+  if (!isDemoMode && projection) return <div className="flex-1 min-h-0 flex flex-col">
+    <ProjectPreview projection={projection} />
+    <div className="bg-white border-t border-[#E2DED7] px-5 py-3 flex justify-between">
+      <button onClick={() => onNav('quality')} className="text-sm text-[#6B6B7E]">← Back to Review</button>
+      <button onClick={() => onNav('publish')} className="text-sm font-medium text-[#5B5BD6]">Go to Publish →</button>
+    </div>
+  </div>
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -13584,7 +13594,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
   const activeProfile = projection.styleProfile
   const activeBrand = projection.legacyBrandProfile
   const activePack = projection.templatePack
-  const blocks = flattenPublishBlocks(projection)
   const htmlDiagnostics = useMemo(() => getHtmlPublishDiagnostics(projection), [projection])
 
   const selectedFormats = (publishConfig?.selectedFormats ?? ['pdf', 'word', 'html']) as ('pdf' | 'word' | 'html')[]
@@ -13609,10 +13618,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
   ]
 
   const safeFilename = projectName.replace(/[^a-zA-Z0-9 ._-]/g, '').trim().replace(/\s+/g, '-') || 'Document'
-
-  // Existing renderers still call this helper; all fields were resolved by the
-  // projection, so re-substituting here would corrupt nested values.
-  const resolveVars = (text: string) => text
 
   const step = async (msg: string, ms = 300) => {
     setGenStep(msg)
@@ -13693,13 +13698,11 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
   const topicMaster = projection.defaultTopicMaster
   const coverLayout = projection.coverLayout
   const contentLayout = projection.contentLayout
+  const conditionalTopicTitles = projection.topics
+    .filter(topic => topic.blocks.some(block => block.conditions?.length))
+    .map(topic => topic.title)
 
   const cfg = {
-    primary: activeBrand?.primaryColor ?? '#5B5BD6',
-    bodyFont: activeBrand?.bodyFont ?? 'Inter',
-    headingFont: activeBrand?.headingFont ?? activeBrand?.bodyFont ?? 'Inter',
-    logoLabel: activeBrand?.logoLabel ?? ((projectName ?? '').slice(0, 2).toUpperCase() || 'NX'),
-    brandName: activeBrand?.name ?? '',
     themeName: activeTheme?.name ?? '',
     profileName: activeProfile?.name ?? '',
     packName: activePack?.name ?? '',
@@ -13708,20 +13711,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     orientation: contentLayout?.orientation ?? 'portrait',
     marginL: contentLayout?.marginLeft ?? 20,
     marginR: contentLayout?.marginRight ?? 20,
-    marginT: contentLayout?.marginTop ?? 20,
-    marginB: contentLayout?.marginBottom ?? 20,
     coverName: coverLayout?.name ?? 'Default Cover',
-    // HTML master page — all settings flow into preview and generation
-    navWidth: topicMaster?.navWidth ?? 220,
-    showHeader: topicMaster?.showHeader ?? true,
-    showSearch: topicMaster?.showSearch ?? true,
-    showBreadcrumb: topicMaster?.showBreadcrumb ?? true,
-    showLeftNav: topicMaster?.showLeftNav ?? true,
-    showOnThisPage: topicMaster?.showOnThisPage ?? true,
-    showPrevNext: topicMaster?.showPrevNext ?? true,
-    showFooter: topicMaster?.showFooter ?? true,
-    showLogo: topicMaster?.showLogo ?? true,
-    contentWidth: topicMaster?.contentWidth ?? 900,
   }
 
   // Per-format config rows — all sourced from cfg / live state
@@ -13732,7 +13722,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
       { label: 'PDF Layout Pack', value: cfg.packName || '—' },
       { label: 'Cover Page Layout', value: cfg.coverName },
       { label: 'Content Page Layout', value: `${cfg.pageSize} · ${cfg.orientation} · ${cfg.marginL}mm margins` },
-      { label: 'Output Variant', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
+      { label: 'Requested variant (not evaluated)', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
     ],
     word: [
       { label: 'Theme', value: cfg.themeName || '—' },
@@ -13740,7 +13730,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
       { label: 'Word Layout Pack', value: cfg.packName || '—' },
       { label: 'Cover Page Layout', value: cfg.coverName },
       { label: 'Content Page Layout', value: `${cfg.pageSize} · ${cfg.orientation}` },
-      { label: 'Output Variant', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
+      { label: 'Requested variant (not evaluated)', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
     ],
     html: [
       { label: 'Theme', value: cfg.themeName || '—' },
@@ -13748,208 +13738,30 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
       { label: 'Home Page Master', value: homeMaster?.name ?? '—' },
       { label: 'Default Topic Master', value: topicMaster?.name ?? '—' },
       { label: 'Custom Master Assignments', value: `${projection.topics.filter(topic => !!topic.assignedMasterId).length} topics` },
-      { label: 'Output Variant', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
+      { label: 'Requested variant (not evaluated)', value: OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—' },
     ],
   }
 
-  // Shared format preview — reads exclusively from cfg (same source as generators)
+  // This is a snapshot configuration summary, not a simulated output file.
   const renderFormatPreview = (fmt: 'pdf' | 'word' | 'html') => {
-    const { primary, logoLabel, themeName, profileName, bodyFont, headingFont, brandName } = cfg
-    const h1s = blocks.filter(b => b.type === 'h1').map(b => resolveVars(b.content ?? ''))
-    const h2s = blocks.filter(b => b.type === 'h2').map(b => resolveVars(b.content ?? ''))
-    const firstPara = blocks.find(b => b.type === 'para')
-    const excerpt = firstPara ? resolveVars(firstPara.content ?? '').slice(0, 180) : ''
-
-    if (fmt === 'html') {
-      // Renders using cfg.navWidth, cfg.showOnThisPage, cfg.showBreadcrumb, cfg.showFooter, etc.
-      // This small format preview is illustrative; the downloadable HTML uses
-      // the complete projection and each topic's assigned master.
-      const navTopics = h1s.length > 0 ? h1s : ['Introduction', 'Getting Started', 'Overview']
-      return (
-        <div className="bg-white rounded-xl border border-[#E2DED7] overflow-hidden shadow-sm text-[11px]">
-          {/* Browser chrome */}
-          <div className="bg-[#EEECEB] border-b border-[#E2DED7] px-3 py-1.5 flex items-center gap-2">
-            <div className="flex gap-1"><div className="w-2.5 h-2.5 rounded-full bg-[#FC5C64]"/><div className="w-2.5 h-2.5 rounded-full bg-[#FDBC40]"/><div className="w-2.5 h-2.5 rounded-full bg-[#34CA49]"/></div>
-            <div className="flex-1 bg-white border border-[#E2DED7] rounded-full px-2.5 py-0.5 text-[9px] text-[#9898AB]">
-              help.{(projectName ?? 'example').toLowerCase().replace(/\s+/g, '')}.com/docs/index.html
-            </div>
-          </div>
-          {/* Header — driven by cfg.showHeader / cfg.showSearch */}
-          {cfg.showHeader && (
-            <div className="px-4 py-2.5 flex items-center justify-between" style={{ backgroundColor: primary }}>
-              <div className="flex items-center gap-2">
-                {cfg.showLogo && <div className="w-5 h-5 rounded bg-white/20 flex items-center justify-center text-[7px] font-bold text-white">{logoLabel.slice(0,2)}</div>}
-                <span className="text-white text-[11px] font-semibold">{projectName}</span>
-              </div>
-              {cfg.showSearch && (
-                <div className="flex items-center gap-1.5 bg-white/15 rounded px-2 py-0.5 text-white text-[9px]">
-                  <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><circle cx="4" cy="4" r="2.5" stroke="white" strokeWidth="1"/><path d="M6 6l1.5 1.5" stroke="white" strokeWidth="1" strokeLinecap="round"/></svg>
-                  Search…
-                </div>
-              )}
-            </div>
-          )}
-          {/* Breadcrumb — driven by cfg.showBreadcrumb */}
-          {cfg.showBreadcrumb && (
-            <div className="px-3 py-1 bg-[#F9F8F6] border-b border-[#F4F2EE] flex items-center gap-1 text-[8px] text-[#9898AB]">
-              <span style={{ color: primary }}>Home</span>
-              <span>›</span><span style={{ color: primary }}>User Guide</span>
-              <span>›</span><span className="text-[#3D3D4E]">{h1s[0] || 'Introduction'}</span>
-            </div>
-          )}
-          {/* Body layout — nav width driven by cfg.navWidth */}
-          <div className="flex" style={{ minHeight: 210 }}>
-            {cfg.showLeftNav && (
-              <div className="bg-[#F9F8F6] border-r border-[#F4F2EE] p-2 flex-shrink-0" style={{ width: Math.round(cfg.navWidth * 0.5) }}>
-                <p className="text-[8px] font-bold text-[#9898AB] uppercase tracking-wide px-1 mb-1.5">Contents</p>
-                {navTopics.slice(0, 6).map((t, i) => (
-                  <div key={i} className={`text-[9px] px-2 py-1 rounded mb-0.5 truncate ${i === 0 ? 'font-semibold text-white' : 'text-[#6B6B7E]'}`} style={i === 0 ? { backgroundColor: primary } : {}}>{t}</div>
-                ))}
-              </div>
-            )}
-            {/* Main content */}
-            <div className="flex-1 p-4 min-w-0">
-              <p className="text-[13px] font-bold mb-1" style={{ color: primary }}>{h1s[0] || projectName}</p>
-              <p className="text-[8px] text-[#9898AB] mb-2">Last updated · {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-              <p className="text-[9px] text-[#3D3D4E] leading-relaxed mb-2">{excerpt || 'Content will appear here when topics are authored.'}</p>
-              {h2s.slice(0, 2).map((h, i) => <div key={i} className="text-[9px] font-semibold mb-0.5" style={{ color: primary }}>▸ {h}</div>)}
-              {cfg.showPrevNext && (
-                <div className="flex items-center justify-between mt-3 pt-2 border-t border-[#F4F2EE]">
-                  <span className="text-[8px] text-[#9898AB]">← Previous</span>
-                  <span className="text-[8px] text-[#9898AB]">Next →</span>
-                </div>
-              )}
-            </div>
-            {/* On This Page — driven by cfg.showOnThisPage */}
-            {cfg.showOnThisPage && h2s.length > 0 && (
-              <div className="w-20 border-l border-[#F4F2EE] p-2 flex-shrink-0">
-                <p className="text-[8px] font-bold text-[#9898AB] uppercase tracking-wide mb-1.5">On this page</p>
-                {h2s.slice(0, 4).map((h, i) => <div key={i} className="text-[8px] text-[#9898AB] py-0.5 pl-1 border-l-2 border-[#E2DED7] mb-0.5 truncate">{h}</div>)}
-              </div>
-            )}
-          </div>
-          {/* Footer — driven by cfg.showFooter */}
-          {cfg.showFooter && (
-            <div className="bg-[#111218] px-4 py-1.5 flex items-center justify-between">
-              <span className="text-[8px] text-[#6B6B7E]">{projectName} · {themeName}</span>
-              <span className="text-[8px] text-[#6B6B7E]">© {new Date().getFullYear()}</span>
-            </div>
-          )}
-          {/* Config indicator — shows which master page values are active */}
-          <div className="bg-[#F9F8F6] border-t border-[#E2DED7] px-3 py-1 flex items-center gap-2 flex-wrap">
-            <span className="text-[8px] text-[#9898AB]">Master: {topicMaster?.name ?? 'Default'}</span>
-            <span className="text-[8px] text-[#C8C6C0]">·</span>
-            <span className="text-[8px] text-[#9898AB]">Nav {cfg.navWidth}px</span>
-            {!cfg.showOnThisPage && <span className="text-[8px] text-[#D97706]">On This Page off</span>}
-            {!cfg.showBreadcrumb && <span className="text-[8px] text-[#D97706]">Breadcrumb off</span>}
-            {!cfg.showFooter && <span className="text-[8px] text-[#D97706]">Footer off</span>}
-          </div>
-        </div>
-      )
-    }
-
-    if (fmt === 'word') {
-      // Layout reflects cfg.pageSize, cfg.orientation, cfg.marginL, cfg.profileName, cfg.headingFont
-      return (
-        <div className="bg-[#F0EEE8] rounded-xl border border-[#E2DED7] overflow-hidden shadow-sm p-4">
-          <div className="bg-[#F9F8F6] border border-[#E2DED7] rounded-lg mb-3 px-3 py-1.5 flex items-center gap-3 text-[9px] text-[#9898AB]">
-            <span className="font-bold">B</span><span className="italic">I</span><span className="underline">U</span>
-            <div className="w-px h-3 bg-[#E2DED7]" />
-            <span>Heading 1</span><span>·</span><span>{headingFont}</span>
-            <div className="ml-auto text-[8px]">{cfg.pageSize} · {cfg.orientation} · {cfg.marginL}mm</div>
-          </div>
-          <div className="bg-white border border-[#D0CEC8] shadow-sm mx-auto" style={{ maxWidth: 480 }}>
-            <div className="border-b border-[#E2DED7] px-6 py-1.5 flex items-center justify-between">
-              <span className="text-[8px] text-[#9898AB]">{projectName}</span>
-              <span className="text-[8px] text-[#9898AB]">{profileName}</span>
-            </div>
-            <div className="pt-8 pb-6 border-b border-[#E2DED7]" style={{ paddingLeft: `${cfg.marginL * 1.5}px`, paddingRight: `${cfg.marginR * 1.5}px`, borderLeftWidth: 4, borderLeftColor: primary, borderLeftStyle: 'solid' }}>
-              <p className="text-[8px] text-[#9898AB] uppercase tracking-widest mb-2">{themeName}</p>
-              <p className="text-[16px] font-bold font-doc" style={{ color: primary, fontFamily: headingFont }}>{projectName}</p>
-              <p className="text-[10px] text-[#6B6B7E] font-doc mt-0.5">{profileName || 'Technical Documentation'}</p>
-              <p className="text-[8px] text-[#9898AB] mt-3">{new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-            </div>
-            <div className="py-4 border-b border-[#F4F2EE]" style={{ paddingLeft: `${cfg.marginL * 1.5}px`, paddingRight: `${cfg.marginR * 1.5}px` }}>
-              <p className="text-[9px] font-bold text-[#9898AB] uppercase tracking-widest mb-2">Contents</p>
-              {(h1s.length > 0 ? h1s : ['Introduction', 'Getting Started', 'Overview']).slice(0, 5).map((t, i) => (
-                <div key={i} className="flex items-center gap-1 mb-1">
-                  <span className="text-[9px] text-[#9898AB] w-4">{i + 1}</span>
-                  <span className="text-[9px] text-[#111218]">{t}</span>
-                  <div className="flex-1 border-b border-dotted border-[#E2DED7] mx-1" />
-                  <span className="text-[8px] text-[#9898AB]">{i + 2}</span>
-                </div>
-              ))}
-            </div>
-            <div className="py-4" style={{ paddingLeft: `${cfg.marginL * 1.5}px`, paddingRight: `${cfg.marginR * 1.5}px` }}>
-              <p className="text-[13px] font-bold font-doc mb-1" style={{ color: primary, fontFamily: headingFont }}>{h1s[0] || 'Introduction'}</p>
-              <p className="text-[8px] text-[#3D3D4E] leading-relaxed mb-2" style={{ fontFamily: bodyFont }}>{excerpt || 'Body text will appear here using the configured body font and style profile.'}</p>
-              {h2s[0] && <p className="text-[10px] font-semibold font-doc mb-0.5" style={{ color: primary }}>{h2s[0]}</p>}
-              <div className="space-y-0.5 mt-1">
-                <div className="h-1.5 bg-[#F4F2EE] rounded-full w-full" />
-                <div className="h-1.5 bg-[#F4F2EE] rounded-full w-5/6" />
-              </div>
-            </div>
-            <div className="border-t border-[#E2DED7] px-6 py-1.5 flex items-center justify-between">
-              <span className="text-[8px] text-[#9898AB]">{brandName || projectName}</span>
-              <span className="text-[8px] text-[#9898AB]">Page 1</span>
-            </div>
-          </div>
-          <p className="text-center text-[8px] text-[#9898AB] mt-2">Word layout preview · {cfg.pageSize} {cfg.orientation} · {profileName}</p>
-        </div>
-      )
-    }
-
-    // PDF — reflects cfg.pageSize, cfg.marginL, cfg.primary, cfg.headingFont
-    return (
-      <div className="bg-[#DDDBD5] rounded-xl border border-[#D0CEC8] overflow-hidden shadow-sm p-4">
-        <div className="bg-white border border-[#C8C6C0] shadow-md mx-auto" style={{ maxWidth: 480 }}>
-          {/* Running header — uses same logo/title config as PDF generator */}
-          <div className="flex items-center justify-between border-b border-[#E2DED7]" style={{ backgroundColor: primary + '12', paddingLeft: `${cfg.marginL}px`, paddingRight: `${cfg.marginR}px`, paddingTop: 6, paddingBottom: 6 }}>
-            <div className="flex items-center gap-1.5">
-              <div className="w-4 h-4 rounded flex items-center justify-center text-[6px] font-bold text-white" style={{ backgroundColor: primary }}>{logoLabel.slice(0,2)}</div>
-              <span className="text-[8px] font-medium text-[#6B6B7E]">{projectName}</span>
-            </div>
-            <span className="text-[8px] text-[#9898AB]">{profileName}</span>
-          </div>
-          {/* Cover — gradient uses cfg.primary */}
-          <div style={{ padding: `${cfg.marginT * 2}px ${cfg.marginL * 2}px`, background: `linear-gradient(135deg, ${primary} 0%, ${primary}CC 100%)` }}>
-            <p className="text-white/60 text-[8px] font-medium tracking-widest uppercase mb-4">{themeName}</p>
-            <p className="text-white text-[20px] font-bold font-doc leading-tight" style={{ fontFamily: headingFont }}>{projectName}</p>
-            <p className="text-white/80 text-[11px] font-doc mt-1">{profileName || 'Technical Documentation'}</p>
-            <div className="mt-6 pt-4 border-t border-white/20">
-              <p className="text-white/60 text-[8px]">{new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-            </div>
-          </div>
-          {/* TOC */}
-          <div className="border-b border-[#F4F2EE]" style={{ paddingLeft: `${cfg.marginL * 2}px`, paddingRight: `${cfg.marginR * 2}px`, paddingTop: 12, paddingBottom: 12 }}>
-            <p className="text-[9px] font-bold uppercase tracking-widest mb-3" style={{ color: primary }}>Table of Contents</p>
-            {(h1s.length > 0 ? h1s : ['Introduction', 'Getting Started', 'Configuration', 'Troubleshooting']).slice(0, 5).map((t, i) => (
-              <div key={i} className="flex items-center gap-1 mb-1.5">
-                <span className="text-[9px] font-medium text-[#6B6B7E] w-5 flex-shrink-0">{i + 1}</span>
-                <span className="text-[9px] text-[#111218]">{t}</span>
-                <div className="flex-1 border-b border-dotted border-[#E2DED7] mx-1" />
-              </div>
-            ))}
-          </div>
-          {/* Content sample */}
-          <div style={{ paddingLeft: `${cfg.marginL * 2}px`, paddingRight: `${cfg.marginR * 2}px`, paddingTop: 12, paddingBottom: 12 }}>
-            <p className="text-[14px] font-bold font-doc mb-1.5" style={{ color: primary, fontFamily: headingFont }}>{h1s[0] || 'Introduction'}</p>
-            <p className="text-[9px] leading-relaxed mb-2 text-[#3D3D4E]" style={{ fontFamily: bodyFont }}>{excerpt || 'Body content will appear here using the configured brand and style profile.'}</p>
-            {h2s[0] && <p className="text-[11px] font-semibold font-doc mb-1" style={{ color: primary }}>{h2s[0]}</p>}
-            <div className="space-y-1">
-              <div className="h-1.5 bg-[#F4F2EE] rounded-full w-full" />
-              <div className="h-1.5 bg-[#F4F2EE] rounded-full w-5/6" />
-            </div>
-          </div>
-          {/* Footer */}
-          <div className="flex items-center justify-between border-t border-[#E2DED7]" style={{ paddingLeft: `${cfg.marginL * 2}px`, paddingRight: `${cfg.marginR * 2}px`, paddingTop: 5, paddingBottom: 5 }}>
-            <span className="text-[7px] text-[#9898AB]">{projectName} · {themeName}</span>
-            <span className="text-[7px] text-[#9898AB]">Page 2</span>
-          </div>
-        </div>
-        <p className="text-center text-[8px] text-[#9898AB] mt-2">{cfg.pageSize} · {cfg.orientation} · {cfg.marginL}mm margins · {profileName}</p>
-      </div>
-    )
+    const details = fmt === 'html'
+      ? `Responsive HTML topic pages use ${projection.defaultTopicMaster?.name ?? 'no default topic master'} and ${projection.topics.filter(topic => topic.assignedMasterId).length} assigned topic masters. Home cards and search are only available in the generated HTML.`
+      : fmt === 'word'
+        ? `Editable Word output uses ${contentLayout?.name ?? 'the configured layout'}; final pagination depends on the Word viewer.`
+        : `Fixed-page PDF output uses ${contentLayout?.name ?? 'the configured layout'}; fonts without supplied files use bundled PDF substitutes.`
+    return <div data-testid="publish-format-summary" className="bg-white rounded-xl border border-[#E2DED7] p-6 text-[#3D3D4E]">
+      <p className="text-sm font-semibold mb-2">{FORMAT_META[fmt].label} configuration summary</p>
+      <p className="text-xs text-[#6B6B7E] mb-4">This is not a rendered output file. Open the full-project Preview to inspect authored content, then generate a file to verify final formatting.</p>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
+        <dt className="text-[#6B6B7E]">Project</dt><dd>{projection.projectName}</dd>
+        <dt className="text-[#6B6B7E]">Committed topics</dt><dd>{projection.topics.length}</dd>
+        <dt className="text-[#6B6B7E]">Style Profile</dt><dd>{projection.styleProfile.name}</dd>
+        <dt className="text-[#6B6B7E]">Content layout</dt><dd>{contentLayout?.name ?? 'None configured'}</dd>
+        <dt className="text-[#6B6B7E]">Unresolved variables</dt><dd>{projection.unresolvedVariables.length}</dd>
+      </dl>
+      <p className="text-xs text-[#6B6B7E] mt-4">{details}</p>
+      <p className="text-xs text-amber-800 mt-2">This snapshot has no audience selection. HTML includes conditional blocks unfiltered; Word and PDF reject them during generation.</p>
+    </div>
   }
 
   return (
@@ -13983,6 +13795,14 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
               <p className="text-[12px] font-semibold text-[#92400E]">Unresolved variables detected</p>
               <p className="text-[11px] text-[#B45309]">{[...unresolvedVars].map(v => `{{${v}}}`).join(', ')} — define these in Variables before generating.</p>
             </div>
+          </div>
+        )}
+        {conditionalTopicTitles.length > 0 && (
+          <div role="alert" data-testid="publish-conditional-warning"
+            className="bg-red-50 border border-red-300 text-red-950 rounded-xl p-4 mb-4 text-sm">
+            <strong>Conditional content requires review before publishing.</strong>
+            <p className="mt-1">HTML outputs include conditional blocks unfiltered; Word and PDF reject them.
+              No audience is selected in this snapshot. Affected topics: {conditionalTopicTitles.join(', ')}.</p>
           </div>
         )}
 
@@ -14154,7 +13974,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
           {/* Right: output preview */}
           <div className="col-span-3 space-y-4">
             <div className="flex items-center justify-between">
-              <p className="text-[13px] font-semibold text-[#111218]">Output Preview</p>
+              <p className="text-[13px] font-semibold text-[#111218]">Output Configuration Summary</p>
               <div className="flex items-center gap-1 bg-white border border-[#E2DED7] rounded-lg p-0.5">
                 {(['pdf', 'word', 'html'] as const).map(f => (
                   <button key={f} onClick={() => { setActivePreviewFormat(f) }}
@@ -14169,7 +13989,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
 
             <div className="flex items-center justify-between pt-1">
               <p className="text-[11px] text-[#9898AB]">
-                {FORMAT_META[activePreviewFormat].label} preview · {activeTheme?.name ?? 'Default Theme'} · {OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label}
+                {FORMAT_META[activePreviewFormat].label} settings from the committed project snapshot
               </p>
               <button onClick={() => onNav('preview')} className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors">
                 Full Preview →
@@ -15668,6 +15488,20 @@ export default function App() {
 
   const renderScreen = () => {
     const effectiveStyleProfile = resolveEffectiveStyleProfile({ themes, projectMeta, activeStyleProfileId })
+    // The same read-only snapshot is used by Publish and the real-project Preview.
+    const publishProjection = (): ProjectPublishProjection => {
+      const theme = themes.find(t => t.id === projectMeta.themeId) ?? themes[0]
+      return buildPublishProjection({
+        projectName: displayName, topics: appToc, topicContent, masterAssignments,
+        variables: getThemeVars(projectMeta.themeId),
+        theme: theme ? { id: theme.id, name: theme.name } : null,
+        styleProfile: effectiveStyleProfile,
+        legacyBrandProfile: theme?.brandProfiles[0] ?? null,
+        templatePack: theme?.outputTemplatePacks.find(pack => pack.id === projectMeta.templatePackId)
+          ?? theme?.outputTemplatePacks[0] ?? null,
+        pageLayouts, htmlMasters: htmlMasterPages,
+      })
+    }
     switch (screen) {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
@@ -15681,22 +15515,9 @@ export default function App() {
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} />
-      case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} />
+      case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} />
       case 'publish': {
-        const theme = themes.find(t => t.id === projectMeta.themeId) ?? themes[0]
-        const projection = buildPublishProjection({
-          projectName: displayName,
-          topics: appToc,
-          topicContent,
-          masterAssignments,
-          variables: getThemeVars(projectMeta.themeId),
-          theme: theme ? { id: theme.id, name: theme.name } : null,
-          styleProfile: effectiveStyleProfile,
-          legacyBrandProfile: theme?.brandProfiles[0] ?? null,
-          templatePack: theme?.outputTemplatePacks.find(pack => pack.id === projectMeta.templatePackId) ?? theme?.outputTemplatePacks[0] ?? null,
-          pageLayouts,
-          htmlMasters: htmlMasterPages,
-        })
+        const projection = publishProjection()
         return <PublishScreen onNav={navigate} projection={projection} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
       }
       default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onNewProject={startNewProject} />

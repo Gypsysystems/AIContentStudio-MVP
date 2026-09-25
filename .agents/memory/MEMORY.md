@@ -17,3 +17,4 @@
 - [Publish snapshot boundary](publish-snapshot-boundary.md) — export uses a read-only committed-TOC projection; never infer project content from the active Author document.
 - [Publish condition safety](word-condition-safety.md) — Word and PDF reject conditional blocks when the unchanged projection cannot select an audience safely.
 - [PDF font fidelity](pdf-font-fidelity.md) — map typography to bundled PDF fonts or a supported configured fallback; never imply unprovided fonts were embedded.
+- [Preview disclosure boundary](preview-disclosure-boundary.md) — masked conditional content must warn that HTML publishes it unfiltered; a hidden master Body blocks HTML generation.
