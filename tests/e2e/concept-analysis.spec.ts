@@ -141,7 +141,7 @@ async function waitForCurrentEvidence(page: Page) {
   await expect.poll(async () => {
     const sources = await page.getByTestId("source-file-row").count()
     const extracted = await page.getByTestId("extraction-status")
-      .filter({ hasText: /^(✓ Extracted|⚠ Partial)/ }).count()
+      .filter({ hasText: /^(Extracted|Partial extraction)/ }).count()
     return sources > 0 && sources === extracted
   }, { timeout: 15_000 }).toBe(true)
   if (await page.getByTestId("evidence-freshness").textContent() === "Stale") {
@@ -151,7 +151,13 @@ async function waitForCurrentEvidence(page: Page) {
 }
 
 async function openRealAnalysis(page: Page) {
-  await page.getByRole("button", { name: "Analyze Sources" }).click()
+  const primaryAction = page.getByRole("button", { name: "Analyze Sources" })
+  if (await primaryAction.isEnabled()) {
+    await primaryAction.click()
+  } else {
+    await page.locator("header").getByRole("button", { name: /^Analyze & Structure/ }).click()
+    await page.locator("header").getByRole("button", { name: /^Analysis/ }).click()
+  }
   await expect(page.getByRole("heading", { name: "Source-backed Analysis" })).toBeVisible()
 }
 

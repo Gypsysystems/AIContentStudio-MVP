@@ -603,11 +603,11 @@ test("persists a reviewable draft without overwriting manual content and applies
   await expect(page.getByTestId("author-generated-freshness-reason")).toContainText("content type changed")
   expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
 
-  await page.getByTestId("author-draft-toggle").click()
+  await page.getByTestId("author-draft-inspector").getByRole("button", { name: "Close draft inspector" }).click()
   await page.getByTestId("author-grounding-toggle").click()
   await page.getByTestId("refresh-author-grounding").click()
   await expect(page.getByTestId("author-grounding-freshness")).toHaveText("Current")
-  await page.getByTestId("author-grounding-toggle").click()
+  await page.getByTestId("author-grounding-inspector").getByRole("button", { name: "Close grounding inspector" }).click()
   await page.getByTestId("author-draft-toggle").click()
   await page.getByTestId("regenerate-author-draft").click()
 

@@ -119,6 +119,36 @@ type FindingStatus = 'open' | 'in-review' | 'resolved' | 'dismissed'
 type ReviewContext = { findingId: number; section: string; category: string } | null
 type CalloutVariant = 'note' | 'tip' | 'important' | 'warning' | 'example'
 type DocBlockType = 'h1' | 'h2' | 'h3' | 'h4' | 'para' | 'caption' | 'callout' | 'table' | 'procedure' | 'code' | 'divider' | 'quote' | 'media' | 'variable' | 'bookmark' | 'list'
+
+function getReviewInputFix(snapshot: ReviewInputSnapshot | null): { screen: Screen; label: string; reason: string } {
+  if (!snapshot) {
+    return { screen: 'sources', label: 'Open Sources', reason: 'Review inputs are still being prepared.' }
+  }
+  if (snapshot.readiness === 'ready') {
+    return { screen: 'quality', label: 'Open Review', reason: 'Current Review inputs are ready.' }
+  }
+  const issue = snapshot.issues[0]
+  if (!issue) {
+    return { screen: 'sources', label: 'Open Sources', reason: 'Review inputs need attention before a run can start.' }
+  }
+  const fixByCode: Record<string, { screen: Screen; label: string }> = {
+    'toc-missing': { screen: 'structure', label: 'Review TOC' },
+    'topic-content-missing': { screen: 'studio', label: 'Open Author' },
+    'sources-missing': { screen: 'sources', label: 'Choose Sources' },
+    'source-extraction-missing': { screen: 'sources', label: 'Open Sources' },
+    'source-extraction-incomplete': { screen: 'sources', label: 'Finish Source Extraction' },
+    'evidence-missing': { screen: 'sources', label: 'Build Evidence Index' },
+    'evidence-stale': { screen: 'sources', label: 'Refresh Evidence Index' },
+    'grounded-analysis-missing': { screen: 'analysis', label: 'Build Analysis' },
+    'grounded-analysis-stale': { screen: 'analysis', label: 'Refresh Analysis' },
+    'unsupported-analysis-missing': { screen: 'analysis', label: 'Build Claim Check' },
+    'unsupported-analysis-stale': { screen: 'analysis', label: 'Refresh Claim Check' },
+    'style-profile-missing': { screen: 'branding', label: 'Set Style Profile' },
+    'author-grounding-stale': { screen: 'studio', label: 'Review affected topic' },
+  }
+  const fix = fixByCode[issue.code] ?? { screen: 'studio' as Screen, label: 'Open Author' }
+  return { ...fix, reason: issue.message }
+}
 const TYPO_PRESETS = [
   { id: 'modern-sans', label: 'Modern Sans', desc: 'Inter · Clean, contemporary' },
   { id: 'editorial', label: 'Editorial', desc: 'Serif headings · Open body' },
@@ -5269,7 +5299,18 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
 
   const readyEntries = entries.filter(e => e.status === 'ready')
   const addingEntries = entries.filter(e => e.status === 'adding')
-  const canAnalyze = isDemoMode || (readyEntries.length > 0 && addingEntries.length === 0)
+  const canAnalyze = isDemoMode || (readyEntries.length > 0 && addingEntries.length === 0 && evidenceFresh)
+  const analyzeBlockReason = isDemoMode
+    ? null
+    : addingEntries.length > 0
+      ? 'Wait for the current uploads to finish before analyzing.'
+      : readyEntries.length === 0
+        ? 'Add at least one source file to begin analysis.'
+        : !evidenceFresh
+          ? canRebuildEvidence
+            ? 'Refresh the Evidence Index to analyze the latest source revisions.'
+            : 'Source extraction is still in progress. Analysis will be ready when extraction finishes.'
+          : null
 
   const searchResults = searchQuery.trim().length > 1 && sourceExtractions
     ? searchExtractions(sourceExtractions, searchQuery)
@@ -5331,7 +5372,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
 
       {isDemoMode && (
         <div className="mb-4 flex items-center gap-3 bg-[#F3F0FF] border border-[#DDD6FE] rounded-xl px-4 py-3 fade-in">
-          <span className="text-[#8B5CF6] text-[14px]">✦</span>
+          <span className="rounded bg-white/70 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-[#6D28D9]">DEMO</span>
           <p className="text-[12px] text-[#5B21B6] flex-1">Demo mode active — using the Nexus Platform sample project with 4 pre-loaded source documents.</p>
           <button onClick={deactivateDemoMode} className="text-[11px] font-medium text-[#8B5CF6] hover:text-[#5B21B6] transition-colors flex-shrink-0">Exit demo</button>
         </div>
@@ -5562,12 +5603,12 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                               )}
                               {extraction?.status === 'extracted' && (
                                 <span data-testid="extraction-status" className="text-[10px] text-[#16A34A] font-medium">
-                                  ✓ Extracted · {extraction.blocks.length} blocks
+                                  Extracted · {extraction.blocks.length} blocks
                                 </span>
                               )}
                               {extraction?.status === 'partial' && (
                                 <span data-testid="extraction-status" className="text-[10px] text-[#D97706] font-medium">
-                                  ⚠ Partial — {extraction.blocks.length} blocks
+                                  Partial extraction — {extraction.blocks.length} blocks
                                 </span>
                               )}
                               {extraction?.status === 'failed' && (
@@ -5745,14 +5786,14 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
           <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
             <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-3">Import From</p>
             {[
-              { label: 'SharePoint', icon: '📁' },
-              { label: 'OneDrive', icon: '☁️' },
-              { label: 'Microsoft Teams', icon: '💼' },
-              { label: 'Google Drive', icon: '📂' },
-              { label: 'URL / Web Page', icon: '🔗' },
+              { label: 'SharePoint', icon: 'SP' },
+              { label: 'OneDrive', icon: 'OD' },
+              { label: 'Microsoft Teams', icon: 'MT' },
+              { label: 'Google Drive', icon: 'GD' },
+              { label: 'URL / Web Page', icon: 'URL' },
             ].map(int => (
               <div key={int.label} className="flex items-center gap-2.5 py-2 border-b border-[#F4F2EE] last:border-0 opacity-50">
-                <span className="text-base">{int.icon}</span>
+                <span aria-hidden="true" className="flex h-6 min-w-6 items-center justify-center rounded bg-[#F4F2EE] px-1 text-[8px] font-bold tracking-wide text-[#858493]">{int.icon}</span>
                 <span className="text-[13px] text-[#111218] flex-1">{int.label}</span>
                 <span className="text-[9px] font-semibold text-[#9898AB] uppercase tracking-wider bg-[#F4F2EE] px-1.5 py-0.5 rounded">
                   Soon
@@ -5780,27 +5821,44 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                   : 'text-[#5B5BD6] border-[#5B5BD6] hover:bg-[#EEEEFF]'
               }`}
             >
-              {isDemoMode ? '✓ Demo project active' : 'Use demo project'}
+              {isDemoMode ? 'Demo project active' : 'Use demo project'}
             </button>
           </div>
         </div>
       </div>
 
-      <div className="flex items-center justify-end gap-3 mt-6">
-        {!canAnalyze && entries.length === 0 && (
-          <p className="text-[12px] text-[#9898AB] mr-2">Add at least one source file to continue.</p>
-        )}
-        {addingEntries.length > 0 && (
-          <p className="text-[12px] text-[#9898AB] mr-2">Processing files…</p>
-        )}
+      <div data-testid="sources-next-step" className="mt-6 flex flex-col gap-3 border-t border-[#E2DED7] pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <div role="status" aria-live="polite" className="min-w-0">
+          <p className={`text-[12px] font-semibold ${canAnalyze ? 'text-[#43845B]' : addingEntries.length ? 'text-[#6B6B7E]' : 'text-[#6B6B7E]'}`}>
+            {canAnalyze
+              ? 'Ready'
+              : addingEntries.length > 0 || (readyEntries.length > 0 && !evidenceFresh && !canRebuildEvidence)
+                ? 'In progress'
+                : readyEntries.length > 0 && !evidenceFresh
+                  ? 'Needs attention'
+                  : 'Blocked'}
+          </p>
+          {analyzeBlockReason && (
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <p className="text-[11px] text-[#6B6B7E]">{analyzeBlockReason}</p>
+              {!isDemoMode && readyEntries.length === 0 && addingEntries.length === 0 && (
+                <button type="button" onClick={openPicker} className="text-[11px] font-semibold text-[#5B5BD6] underline underline-offset-2">Choose files</button>
+              )}
+              {!isDemoMode && readyEntries.length > 0 && !evidenceFresh && canRebuildEvidence && (
+                <button type="button" onClick={onRebuildEvidence} className="text-[11px] font-semibold text-[#5B5BD6] underline underline-offset-2">Refresh Evidence Index</button>
+              )}
+            </div>
+          )}
+        </div>
         <button
           onClick={handleAnalyze}
           disabled={!canAnalyze}
           aria-disabled={!canAnalyze}
+          data-testid="analyze-sources"
           className={`flex items-center gap-2 text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors ${
             canAnalyze
-              ? 'bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white cursor-pointer'
-              : 'bg-[#E2DED7] text-[#9898AB] cursor-not-allowed'
+              ? 'w-full justify-center bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white cursor-pointer sm:w-auto'
+              : 'w-full justify-center bg-[#E2DED7] text-[#9898AB] cursor-not-allowed sm:w-auto'
           }`}
         >
           Analyze Sources
@@ -5896,14 +5954,14 @@ function EvidenceAnalysisScreen({
 
   return (
     <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in">
-      <div className="flex items-start justify-between gap-4 mb-6">
+      <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1.5">Source-backed Analysis</h1>
           <p className="text-[13px] text-[#6B6B7E]">
             Concepts, terminology, conflicts, and gaps derived only from the current Evidence Index.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 self-start">
           {analysis && (
             <span
               data-testid="concept-analysis-freshness"
@@ -5921,7 +5979,11 @@ function EvidenceAnalysisScreen({
             onClick={onRebuild}
             disabled={!canBuild}
             data-testid="rebuild-concept-analysis"
-            className="text-[11px] font-semibold text-white bg-[#5B5BD6] hover:bg-[#4A4AC4] px-3 py-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className={`text-[11px] font-semibold px-3 py-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
+              !analysis || !analysisFresh || !evidenceFresh
+                ? 'bg-[#5B5BD6] text-white hover:bg-[#4A4AC4]'
+                : 'border border-[#D8D5CF] bg-white text-[#4D4DC2] hover:bg-[#F8F7FF]'
+            }`}
           >
             {analysis ? 'Rebuild Analysis' : 'Build Analysis'}
           </button>
@@ -6216,20 +6278,23 @@ function EvidenceAnalysisScreen({
               <div className="divide-y divide-[#F4F2EE]">
                 {(analysis.gaps ?? []).map(gap => {
                   const open = expandedGap === gap.id
+                  const informational = gap.category === 'insufficient-coverage'
                   return (
-                    <div key={gap.id} data-testid="grounded-gap" data-gap-id={gap.id}>
+                    <div key={gap.id} data-testid="grounded-gap" data-gap-id={gap.id} data-severity={informational ? 'info' : 'warning'}>
                       <button
                         type="button"
                         onClick={() => setExpandedGap(open ? null : gap.id)}
                         className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-[#FAFAF8]"
                       >
-                        <span className="w-2 h-2 rounded-full bg-[#D97706] flex-shrink-0" />
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${informational ? 'bg-[#9898AB]' : 'bg-[#D97706]'}`} />
                         <span className="flex-1">
                           <span className="block text-[13px] font-semibold text-[#111218]">{gap.title}</span>
                           <span className="block text-[10px] text-[#9898AB] mt-0.5">{gap.category.replace(/-/g, ' ')}</span>
                         </span>
                         <span className={`text-[9px] font-semibold uppercase tracking-wide rounded-full px-2 py-1 ${
-                          gap.status === 'not-found-in-sources'
+                          informational
+                            ? 'bg-[#F4F2EE] text-[#6B6B7E]'
+                            : gap.status === 'not-found-in-sources'
                             ? 'bg-[#FFF7ED] text-[#9A3412]'
                             : 'bg-[#FEF3C7] text-[#92400E]'
                         }`}>
@@ -6237,8 +6302,8 @@ function EvidenceAnalysisScreen({
                         </span>
                       </button>
                       {open && (
-                        <div className="px-5 py-4 bg-[#FFF7ED] border-t border-[#FFEDD5]">
-                          <p className="text-[11px] text-[#7C2D12] mb-3">{gap.rationale}</p>
+                        <div className={`px-5 py-4 border-t ${informational ? 'bg-[#F9F8F6] border-[#E2DED7]' : 'bg-[#FFF7ED] border-[#FFEDD5]'}`}>
+                          <p className={`text-[11px] mb-3 ${informational ? 'text-[#575766]' : 'text-[#7C2D12]'}`}>{gap.rationale}</p>
                           {renderEvidenceReferences(gap.evidenceIds)}
                         </div>
                       )}
@@ -6289,12 +6354,70 @@ function EvidenceAnalysisScreen({
       )}
 
       <div className="flex flex-col items-end gap-2 border-t border-[#E2DED7] pt-5">
+        <div data-testid="analysis-next-step" role="status" aria-live="polite" className={`w-full rounded-xl border px-4 py-3 text-[12px] ${
+          !evidenceIndex
+            ? 'border-[#E2DED7] bg-[#F9F8F6] text-[#575766]'
+            : !evidenceFresh || (analysis && !analysisFresh)
+              ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
+              : summary?.severity === 'warning'
+                ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
+                : 'border-[#E2DED7] bg-[#F9F8F6] text-[#575766]'
+        }`}>
+          <span className="font-semibold">
+            {!evidenceIndex
+              ? 'Blocked'
+              : !evidenceFresh || (analysis && !analysisFresh)
+                ? 'Needs attention'
+                : unsupportedAnalysis && !unsupportedFresh
+                  ? 'Needs attention'
+                : !analysis
+                  ? 'In progress'
+                  : summary?.severity === 'warning'
+                    ? 'Review cited findings'
+                    : 'Ready for TOC'}
+          </span>
+          {' · '}
+          {!evidenceIndex
+            ? 'Build current source evidence before analysis can continue.'
+            : !evidenceFresh
+              ? 'The Evidence Index is stale; refresh it before relying on this analysis.'
+              : !analysis
+                ? 'Grounded analysis is being prepared from the current Evidence Index.'
+                : !analysisFresh
+                  ? 'Rebuild analysis from the latest evidence before continuing.'
+                  : unsupportedAnalysis && !unsupportedFresh
+                    ? 'The claim check is stale after content changes. Rebuild it before running Review.'
+                  : summary?.severity === 'warning'
+                    ? `${summary.message} These findings do not prevent you from reviewing the TOC proposal.`
+                    : summary?.severity === 'info'
+                      ? `${summary.message} Coverage notes are informational; continue when ready.`
+                      : 'Current analysis is ready. Review or generate the grounded TOC proposal.'}
+          {(!evidenceIndex || !evidenceFresh) && (
+            <button type="button" onClick={() => onNav('sources')} className="ml-2 font-semibold text-[#4D4DC2] underline underline-offset-2">
+              Open Sources
+            </button>
+          )}
+          {evidenceFresh && analysis && (!analysisFresh || (unsupportedAnalysis && !unsupportedFresh)) && (
+            <button type="button" onClick={analysisFresh ? onRebuildUnsupported : onRebuild} disabled={analysisFresh ? !canBuildUnsupported : !canBuild} className="ml-2 font-semibold text-[#4D4DC2] underline underline-offset-2 disabled:opacity-50">
+              {analysisFresh ? 'Rebuild Claim Check' : 'Rebuild Analysis'}
+            </button>
+          )}
+        </div>
         <button type="button" data-testid="analysis-generate-toc"
           onClick={onGenerateToc} disabled={!!tocUnavailableReason}
           className="rounded-lg bg-[#5B5BD6] px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-40">
           {hasCurrentProposal ? 'Review proposed TOC →' : 'Generate TOC →'}
         </button>
-        {tocUnavailableReason && <p data-testid="analysis-toc-unavailable" className="text-[11px] text-[#92400E]">{tocUnavailableReason}</p>}
+        {tocUnavailableReason && (
+          <div data-testid="analysis-toc-unavailable" className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-[#6B6B7E]">
+            <span>{tocUnavailableReason}</span>
+            {(!evidenceIndex || !evidenceFresh) ? (
+              <button type="button" onClick={() => onNav('sources')} className="font-semibold text-[#5B5BD6] underline underline-offset-2">Open Sources</button>
+            ) : (
+              <button type="button" onClick={onRebuild} disabled={!canBuild} className="font-semibold text-[#5B5BD6] underline underline-offset-2 disabled:opacity-50">Rebuild Analysis</button>
+            )}
+          </div>
+        )}
       </div>
 
       {selectedEvidence && (
@@ -6448,7 +6571,6 @@ function AnalysisScreen({ onNav, files, isDemoMode, analysisStale, onAnalysisDon
   const [editedValues, setEditedValues] = useState<Record<string, string>>({})
   const [gapStates, setGapStates] = useState<Record<number, GapResolution>>({})
   const [expandedGap, setExpandedGap] = useState<number | null>(null)
-  const [showContinueWarning, setShowContinueWarning] = useState(false)
   const [viewSourceModal, setViewSourceModal] = useState<{ file: string; snippet: string; section: string } | null>(null)
   const [evidenceModal, setEvidenceModal] = useState<{ gapId: number; text: string } | null>(null)
   const [askAiModal, setAskAiModal] = useState<{ gapId: number; text: string } | null>(null)
@@ -6543,11 +6665,7 @@ function AnalysisScreen({ onNav, files, isDemoMode, analysisStale, onAnalysisDon
     setGapStates(prev => { const n = { ...prev }; delete n[id]; return n })
 
   const handleContinue = () => {
-    if (unresolvedGaps > 0 && !showContinueWarning) {
-      setShowContinueWarning(true)
-    } else {
-      onNav('structure')
-    }
+    onNav('structure')
   }
 
   return (
@@ -6937,29 +7055,15 @@ function AnalysisScreen({ onNav, files, isDemoMode, analysisStale, onAnalysisDon
       </div>
 
       {/* ── Continue action ── */}
-      <div className="flex items-center justify-end gap-3 mt-6">
-        {showContinueWarning && (
-          <div className="flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-lg px-4 py-2.5 fade-in">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M7 1.5L12.5 12H1.5L7 1.5z" stroke="#D97706" strokeWidth="1.3" strokeLinejoin="round"/>
-              <path d="M7 5.5v3M7 10v.5" stroke="#D97706" strokeWidth="1.3" strokeLinecap="round"/>
-            </svg>
-            <p className="text-[12px] text-[#92400E]">
-              {unresolvedGaps} unresolved {unresolvedGaps === 1 ? 'gap' : 'gaps'} — you can continue and address them during authoring.
-            </p>
-            <button onClick={() => onNav('structure')} className="text-[12px] font-semibold text-[#92400E] hover:text-[#78350F] transition-colors whitespace-nowrap">
-              Continue anyway
-            </button>
-            <button onClick={() => setShowContinueWarning(false)} className="text-[#D97706] hover:text-[#92400E] flex-shrink-0 transition-colors">
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-              </svg>
-            </button>
-          </div>
-        )}
+      <div className="mt-6 flex flex-col gap-3 border-t border-[#E2DED7] pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <p role="status" className="text-[11px] text-[#6B6B7E]">
+          <span className="font-semibold text-[#43845B]">Ready</span>
+          {unresolvedGaps > 0 && ` · ${unresolvedGaps} coverage ${unresolvedGaps === 1 ? 'note' : 'notes'} can be addressed during authoring.`}
+        </p>
         <button
           onClick={handleContinue}
-          className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors"
+          data-testid="analysis-next-step"
+          className="flex w-full items-center justify-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors sm:w-auto"
         >
           Review AI-Proposed TOC
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -7436,17 +7540,21 @@ function RealTocProposalScreen({
     setManualTitle('')
   }
 
-  const commit = () => {
+  const commit = async () => {
     if (!proposal || !proposalFresh) return
     const merged = mergeCommittedToc(toc, proposal.items)
     onCommit(merged, proposal, toc.length > 0)
     setConfirmCommit(false)
+    await onNav('studio')
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>('[data-testid="author-stage-heading"]')?.focus()
+    }))
   }
 
   if (!proposal) {
     return (
       <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in" data-testid="real-toc-screen">
-        <div className="flex items-start justify-between gap-4 mb-6">
+        <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Proposed TOC</h1>
             <p className="text-[13px] text-[#6B6B7E]">Build a reviewable structure from current evidence and grounded analysis.</p>
@@ -7456,20 +7564,36 @@ function RealTocProposalScreen({
             onClick={onGenerate}
             disabled={!canGenerate}
             data-testid="generate-grounded-toc"
-            className="bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-semibold px-4 py-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-semibold px-4 py-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed sm:w-auto"
           >
             Generate grounded proposal
           </button>
         </div>
+        <div data-testid="real-toc-next-step" role="status" aria-live="polite" className={`mb-5 rounded-xl border px-4 py-3 text-[12px] ${
+          committedTocStale
+            ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
+            : canGenerate
+              ? 'border-[#E2DED7] bg-[#F9F8F6] text-[#575766]'
+              : 'border-[#FECACA] bg-[#FEF2F2] text-[#991B1B]'
+        }`}>
+          <span className="font-semibold">
+            {committedTocStale || !canGenerate ? 'Needs attention' : 'Ready to propose'}
+          </span>
+          {' · '}
+          {committedTocStale
+            ? 'The accepted structure is preserved. Review fresh analysis before replacing it.'
+            : canGenerate
+              ? 'Generate a grounded proposal, review its evidence, then accept it to start Authoring.'
+              : 'A current Evidence Index and grounded analysis are needed before a proposal can be generated.'}
+          {!canGenerate && (
+            <button type="button" onClick={() => onNav('analysis')} className="ml-2 font-semibold text-[#4D4DC2] underline underline-offset-2">
+              Open Analysis
+            </button>
+          )}
+        </div>
         {committedTocStale && (
           <div data-testid="committed-toc-stale" className="mb-5 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3 text-[12px] text-[#92400E]">
             The committed TOC is stale because its supporting evidence or grounded analysis changed. Existing topics remain unchanged.
-          </div>
-        )}
-        {!canGenerate && (
-          <div className="mb-5 bg-[#FFF7ED] border border-[#FED7AA] rounded-xl px-4 py-3 flex items-center justify-between gap-3">
-            <p className="text-[12px] text-[#9A3412]">A current Evidence Index and grounded analysis are required before generating a proposal.</p>
-            <button type="button" onClick={() => onNav('analysis')} className="text-[11px] font-semibold text-[#9A3412] underline">Open Analysis</button>
           </div>
         )}
         {toc.length > 0 ? (
@@ -7507,7 +7631,7 @@ function RealTocProposalScreen({
   const selectedEvidence = selectedEvidenceId ? evidenceById.get(selectedEvidenceId) : null
   return (
     <div className="flex-1 overflow-auto p-8 max-w-6xl mx-auto w-full fade-in" data-testid="toc-proposal-review">
-      <div className="flex items-start justify-between gap-4 mb-5">
+      <div className="flex flex-col gap-3 mb-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Review TOC proposal</h1>
@@ -7519,23 +7643,47 @@ function RealTocProposalScreen({
             Evidence-backed topics and optional structural sections are labeled separately. The current TOC remains unchanged until commit.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <button type="button" onClick={onDiscardProposal} data-testid="discard-toc-proposal" className="text-[12px] text-[#6B6B7E] border border-[#E2DED7] px-3 py-2 rounded-lg hover:bg-[#F9F8F6]">Discard proposal</button>
           <button type="button" onClick={onGenerate} disabled={!canGenerate} data-testid="regenerate-grounded-toc" className="text-[12px] text-[#5B5BD6] border border-[#B9B9EA] px-3 py-2 rounded-lg disabled:opacity-40">Regenerate</button>
-          <button type="button" onClick={() => toc.length > 0 ? setConfirmCommit(true) : commit()} disabled={!proposalFresh || proposal.items.length === 0} data-testid="commit-toc-proposal" className="text-[12px] font-semibold text-white bg-[#5B5BD6] px-4 py-2 rounded-lg disabled:opacity-40">
-            {toc.length > 0 ? 'Review merge' : 'Commit TOC'}
+          <button type="button" onClick={() => toc.length > 0 ? setConfirmCommit(true) : commit()} disabled={!proposalFresh || proposal.items.length === 0} aria-describedby={!proposalFresh ? 'toc-proposal-stale-reason' : proposal.items.length === 0 ? 'toc-commit-reason' : undefined} data-testid="commit-toc-proposal" className="text-[12px] font-semibold text-white bg-[#5B5BD6] px-4 py-2 rounded-lg disabled:opacity-40">
+            Accept TOC &amp; Start Authoring
           </button>
         </div>
       </div>
 
-      {!proposalFresh && (
-        <div className="mb-5 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3 text-[12px] text-[#92400E]">
-          Evidence, grounded analysis, or the selected content type changed. Regenerate before committing.
-        </div>
-      )}
+      <div id={!proposalFresh ? 'toc-proposal-stale-reason' : proposal.items.length === 0 ? 'toc-commit-reason' : undefined} data-testid="real-toc-next-step" role="status" aria-live="polite" className={`mb-5 flex flex-col gap-2 rounded-xl border px-4 py-3 text-[12px] sm:flex-row sm:items-center sm:justify-between ${
+        !proposalFresh
+          ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
+          : proposal.items.length === 0
+            ? 'border-[#E2DED7] bg-[#F9F8F6] text-[#575766]'
+            : 'border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]'
+      }`}>
+        <p>
+          <span className="font-semibold">
+            {!proposalFresh ? 'Needs attention' : proposal.items.length === 0 ? 'In progress' : 'Ready to accept'}
+          </span>
+          {' · '}
+          {!proposalFresh
+            ? 'This proposal is stale. Regenerate it before acceptance; the committed structure remains unchanged.'
+            : proposal.items.length === 0
+              ? 'Keep or add at least one topic before accepting the TOC.'
+              : `Review ${proposal.items.length} proposed ${proposal.items.length === 1 ? 'topic' : 'topics'} and accept to continue into Authoring.`}
+        </p>
+        {!proposalFresh && !canGenerate && (
+          <button type="button" onClick={() => onNav('analysis')} className="shrink-0 self-start font-semibold text-[#4D4DC2] underline underline-offset-2 sm:self-auto">
+            Open Analysis
+          </button>
+        )}
+        {proposalFresh && proposal.items.length === 0 && (
+          <button type="button" onClick={() => document.querySelector<HTMLInputElement>('[data-testid="manual-topic-title"]')?.focus()} className="shrink-0 self-start font-semibold text-[#4D4DC2] underline underline-offset-2 sm:self-auto">
+            Add a topic
+          </button>
+        )}
+      </div>
 
-      <div className="grid grid-cols-5 gap-5">
-        <section className="col-span-3 bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
+      <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-5">
+        <section className="min-w-0 bg-white border border-[#E2DED7] rounded-xl overflow-hidden lg:col-span-3">
           <div className="px-4 py-3 border-b border-[#E2DED7] flex items-center justify-between">
             <span className="text-[13px] font-semibold text-[#111218]">Proposed topics</span>
             <span className="text-[10px] text-[#9898AB]">{proposal.items.length} topics</span>
@@ -7589,7 +7737,7 @@ function RealTocProposalScreen({
           </div>
         </section>
 
-        <aside className="col-span-2 bg-white border border-[#E2DED7] rounded-xl p-5 h-fit" data-testid="toc-topic-details">
+        <aside className="min-w-0 bg-white border border-[#E2DED7] rounded-xl p-5 h-fit lg:col-span-2" data-testid="toc-topic-details">
           {selectedTopic ? (
             <>
               <div className="flex items-start justify-between gap-3 mb-3">
@@ -7655,7 +7803,7 @@ function RealTocProposalScreen({
             </p>
             <div className="flex gap-2">
               <button type="button" onClick={() => setConfirmCommit(false)} className="flex-1 text-[12px] border border-[#E2DED7] rounded-lg py-2">Cancel</button>
-              <button type="button" onClick={commit} data-testid="confirm-toc-merge" className="flex-1 text-[12px] font-semibold text-white bg-[#5B5BD6] rounded-lg py-2">Merge and commit</button>
+              <button type="button" onClick={commit} data-testid="confirm-toc-merge" className="flex-1 text-[12px] font-semibold text-white bg-[#5B5BD6] rounded-lg py-2">Merge and start Authoring</button>
             </div>
           </div>
         </div>
@@ -7783,7 +7931,6 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
   const [openOption, setOpenOption] = useState<string | null>(null)
 
   // Approve confirm
-  const [approveModal, setApproveModal] = useState(false)
 
   const totalWords = toc.reduce((s, x) => s + x.words, 0)
   const topLevelItems = toc.filter(t => t.level === 1)
@@ -7979,11 +8126,7 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
   const handleApprove = () => {
     // Mark TOC as human-accepted
     onTocAccepted?.(toc, analysisRevision ?? 0)
-    if (hasGaps) {
-      setApproveModal(true)
-    } else {
-      onNav('studio')
-    }
+    onNav('studio')
   }
 
   const supportInfo = supportModal !== null ? SECTION_SUPPORT[supportModal] : null
@@ -8018,7 +8161,7 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
         {!noAnalysis && !analysisIsStale && (
           <div className="bg-white border border-[#E2DED7] rounded-2xl p-10 text-center">
             <div className="w-12 h-12 rounded-full bg-[#EEEEFF] flex items-center justify-center mx-auto mb-4">
-              <span className="text-[#5B5BD6] text-[20px]">✦</span>
+                <span className="text-[10px] font-bold uppercase tracking-wide text-[#5B5BD6]">AI</span>
             </div>
             <p className="text-[15px] font-semibold text-[#111218] mb-1.5">No TOC has been generated yet</p>
             <p className="text-[13px] text-[#6B6B7E] mb-1">Use the latest Source Analysis to propose a structure.</p>
@@ -8033,7 +8176,7 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
               {generating ? (
                 <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating…</>
               ) : (
-                <><span>✦</span> Generate Proposed TOC</>
+                <>Generate Proposed TOC</>
               )}
             </button>
           </div>
@@ -8044,12 +8187,16 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
 
   // ── PROPOSED TOC review (before acceptance) ───────────────────────────────
   if (proposedToc && !hasToc) {
-    const acceptProposal = () => {
+    const acceptProposal = async () => {
       const resolved = proposedToc
       if (onTocChange) onTocChange(resolved)
       else setLocalToc(resolved)
       onTocAccepted?.(resolved, analysisRevision ?? 0)
       setProposedToc(null)
+      await onNav('studio')
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>('[data-testid="author-stage-heading"]')?.focus()
+      }))
     }
     return (
       <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
@@ -8083,7 +8230,7 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
           <button onClick={() => setProposedToc(null)} className="text-[13px] text-[#6B6B7E] hover:text-[#111218] transition-colors">← Discard</button>
           <div className="flex items-center gap-2">
             <button onClick={acceptProposal} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-semibold px-5 py-2 rounded-lg transition-colors">
-              Accept & Continue →
+              Accept TOC & Start Authoring
             </button>
           </div>
         </div>
@@ -8127,8 +8274,7 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
           </p>
         </div>
         <div className="flex items-center gap-2 bg-[#F3F0FF] text-[#7C3AED] text-[12px] font-medium px-3 py-1.5 rounded-full flex-shrink-0">
-          <span className="text-[#8B5CF6]">✦</span>
-          AI Proposed
+              AI Proposed
         </div>
       </div>
 
@@ -8353,6 +8499,7 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
             {/* Add section */}
             <button
               onClick={e => { e.stopPropagation(); setAddModalOpen(true) }}
+              data-testid="structure-add-section"
               className="w-full mt-1 flex items-center gap-2 px-3 py-2 text-[12px] text-[#9898AB] hover:text-[#5B5BD6] hover:bg-[#F4F2EE] rounded-lg transition-colors"
             >
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
@@ -8429,12 +8576,28 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
 
           {/* CTA Buttons */}
           <div className="space-y-2">
+            <div data-testid="demo-toc-next-step" role="status" aria-live="polite" className="rounded-xl border border-[#E2DED7] bg-[#F9F8F6] px-3 py-2.5 text-[11px] text-[#575766]">
+              <span className="font-semibold">{toc.length ? 'Ready to continue' : 'Needs attention'}</span>
+              {' · '}
+              {toc.length
+                ? hasGaps
+                  ? 'Coverage notes are informational. Accept this structure to start Authoring.'
+                  : 'Review the structure, then accept to start Authoring.'
+                : 'Add a section before accepting the structure.'}
+              {!toc.length && (
+                <button type="button" onClick={() => document.querySelector<HTMLButtonElement>('[data-testid="structure-add-section"]')?.click()} className="ml-1 font-semibold text-[#4D4DC2] underline underline-offset-2">
+                  Add section
+                </button>
+              )}
+            </div>
             <button
+              type="button"
+              data-testid="demo-accept-toc"
               onClick={handleApprove}
               disabled={toc.length === 0}
               className={`w-full flex items-center justify-center gap-2 text-[13px] font-medium py-2.5 rounded-lg transition-colors ${toc.length > 0 ? 'bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white' : 'bg-[#E2DED7] text-[#9898AB] cursor-not-allowed'}`}
             >
-              Approve TOC &amp; Generate
+              Accept TOC &amp; Start Authoring
             </button>
             <button
               onClick={startRegen}
@@ -8658,21 +8821,6 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
         </div>
       )}
 
-      {/* ── Approve Confirm Modal ── */}
-      {approveModal && (
-        <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center p-4 fade-in" onClick={() => setApproveModal(false)}>
-          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
-            <h3 className="text-[14px] font-semibold text-[#111218] mb-2">Incomplete source coverage</h3>
-            <p className="text-[13px] text-[#6B6B7E] leading-relaxed mb-5">
-              Some topics still have incomplete source coverage. You can continue and review them during authoring.
-            </p>
-            <div className="flex gap-2">
-              <button onClick={() => setApproveModal(false)} className="flex-1 py-2.5 text-[12px] font-medium text-[#6B6B7E] border border-[#E2DED7] rounded-lg hover:bg-[#F9F8F6] transition-colors">Return to TOC</button>
-              <button onClick={() => { setApproveModal(false); onNav('studio') }} className="flex-1 py-2.5 text-[12px] font-medium bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white rounded-lg transition-colors">Continue &amp; Generate</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -9092,8 +9240,9 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const [mode, setMode] = useState<StudioMode>('author')
+  const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
   const [tocWidth, setTocWidth] = useState(260)
   const [activeSection, setActiveSection] = useState(1)
@@ -9639,6 +9788,37 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   ]
 
   const studioToc = toc ?? []
+  const reviewInputFix = getReviewInputFix(reviewInputSnapshot)
+  const reviewReady = !!isDemoMode || reviewInputSnapshot?.readiness === 'ready'
+  const handleReviewInputFix = () => {
+    const issue = reviewInputSnapshot?.issues[0]
+    if (issue?.code === 'author-grounding-stale' && issue.topicId) {
+      const topic = studioToc.find(candidate => stableAuthorTopicId(candidate) === issue.topicId)
+      if (topic) {
+        openTopic(topic.id, topic.title)
+        setGroundingOpen(true)
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          document.querySelector<HTMLButtonElement>('[data-testid="refresh-author-grounding"]')?.focus()
+        }))
+        return
+      }
+    }
+    onNav(reviewInputFix.screen)
+  }
+  const handleAuthorRunReview = () => {
+    setReviewActionError(null)
+    if (isDemoMode) {
+      onNav('quality')
+      return
+    }
+    if (reviewInputSnapshot?.readiness !== 'ready') return
+    const error = onRunGroundedReview()
+    if (error) {
+      setReviewActionError(error)
+      return
+    }
+    onNav('quality')
+  }
   const setStudioToc = (updater: TocItem[] | ((prev: TocItem[]) => TocItem[])) => {
     const next = typeof updater === 'function' ? updater(studioToc) : updater
     onTocChange?.(next)
@@ -10241,17 +10421,64 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               <div className="w-3 h-3 rounded-sm border border-current" />
               Sources
             </button>
-            <button onClick={() => onNav('quality')} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium text-[#9898AB] hover:text-[#6B6B7E] transition-colors">
-              Quality
-            </button>
-            <button onClick={() => onNav('preview')} className="flex items-center gap-1.5 bg-white border border-[#E2DED7] px-2.5 py-1 rounded text-[11px] font-medium text-[#111218] hover:bg-[#F9F8F6] transition-colors">
-              Preview
-            </button>
-            <button onClick={() => { onNav('publish') }} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[12px] font-medium px-3 py-1 rounded transition-colors">
-              Publish
-            </button>
           </div>
           </div>
+          {mode === 'author' && (
+            <div data-testid="author-review-next-step" className="flex flex-col gap-3 border-t border-[#F0EDE8] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <h2 data-testid="author-stage-heading" tabIndex={-1} className="text-[12px] font-semibold text-[#111218] outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
+                  Author workspace
+                </h2>
+                <p id="author-review-readiness" role="status" aria-live="polite" className={`mt-0.5 text-[11px] ${
+                  isDemoMode || reviewInputSnapshot?.readiness === 'ready'
+                    ? 'text-[#43845B]'
+                    : reviewInputSnapshot?.readiness === 'stale-inputs'
+                      ? 'text-[#A85C08]'
+                      : reviewInputSnapshot?.readiness === 'missing-inputs'
+                        ? 'text-[#A23B3B]'
+                        : 'text-[#6B6B7E]'
+                }`}>
+                  {isDemoMode
+                    ? 'Demo project · open the sample Review; grounded Review runs are not created from demo data.'
+                    : reviewInputSnapshot?.readiness === 'ready'
+                      ? 'Ready · Run a grounded Review against the current saved project inputs.'
+                      : reviewInputSnapshot
+                        ? `${reviewInputSnapshot.readiness === 'stale-inputs' ? 'Needs attention' : 'Blocked'} · ${reviewInputFix.reason}`
+                        : 'In progress · Preparing the current Review input snapshot.'}
+                  {!isDemoMode && reviewInputSnapshot?.readiness !== 'ready' && (
+                    <>
+                      {reviewInputSnapshot?.issues[0]?.code === 'author-grounding-stale' && (
+                        <span> Refresh grounding, regenerate, and apply the reviewed changes to update provenance.</span>
+                      )}
+                      <button type="button" onClick={handleReviewInputFix} className="ml-2 font-semibold text-[#4D4DC2] underline underline-offset-2">
+                        {reviewInputFix.label}
+                      </button>
+                    </>
+                  )}
+                </p>
+                {reviewActionError && <p role="alert" className="mt-1 text-[11px] text-[#991B1B]">{reviewActionError}</p>}
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={() => onNav('preview')}
+                  className="min-h-9 w-full rounded-md border border-[#E2DED7] bg-white px-3 text-[11px] font-medium text-[#5B5BD6] transition-colors hover:bg-[#F9F8F6] sm:w-auto"
+                >
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  data-testid="author-run-review"
+                  disabled={!reviewReady}
+                  aria-describedby={!reviewReady ? 'author-review-readiness' : undefined}
+                  onClick={handleAuthorRunReview}
+                  className="min-h-9 w-full rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:bg-[#E2DED7] disabled:text-[#777786] sm:w-auto"
+                >
+                  {isDemoMode ? 'Open Review (Demo)' : 'Run Grounded Review'}
+                </button>
+              </div>
+            </div>
+          )}
           {/* Row 2: formatting toolbar — Author mode only */}
           {mode === 'author' && (
             <div className="flex items-center flex-wrap gap-0.5 px-4 py-1.5"><>
@@ -11854,7 +12081,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               </div>
               <p className="text-[10px] text-[#9898AB] mt-1 truncate">{activeTopic?.title ?? 'No topic selected'}</p>
             </div>
-            <button type="button" onClick={() => { setDraftOpen(false); setConfirmDraftApply(false) }} className="text-[#9898AB]">×</button>
+            <button type="button" aria-label="Close draft inspector" onClick={() => { setDraftOpen(false); setConfirmDraftApply(false) }} className="text-[#9898AB]">×</button>
           </div>
           <div className="flex-1 overflow-y-auto p-4">
             {!activeStableTopicId ? (
@@ -12070,7 +12297,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               </div>
               <p className="text-[10px] text-[#9898AB] mt-1 truncate">{activeTopic?.title ?? 'No topic selected'}</p>
             </div>
-            <button type="button" onClick={() => setGroundingOpen(false)} className="text-[#9898AB]">×</button>
+            <button type="button" aria-label="Close grounding inspector" onClick={() => setGroundingOpen(false)} className="text-[#9898AB]">×</button>
           </div>
           <div className="flex-1 overflow-y-auto p-4">
             {!activeGroundingContext ? (
@@ -12821,6 +13048,7 @@ function KnowledgeMapScreen({ onNav, onBack }: { onNav: (s: Screen) => void; onB
 const DISMISS_REASONS = ['Intentional', 'Not applicable', 'False positive', 'Approved exception', 'Other']
 
 function RealReviewFindingsPanel({
+  onNav,
   reviewModel,
   snapshot,
   topics,
@@ -12830,6 +13058,7 @@ function RealReviewFindingsPanel({
   onApplyFinding,
   onOpenFinding,
 }: {
+  onNav: (s: Screen) => void
   reviewModel: ReviewModel
   snapshot: ReviewInputSnapshot | null
   topics: TocItem[]
@@ -12877,6 +13106,16 @@ function RealReviewFindingsPanel({
     'Formatting / Standards': 'bg-[#FCE7F3] text-[#9D174D]',
   }
   const canRun = snapshot?.readiness === 'ready'
+  const hasCurrentRun = !!run
+    && canRun
+    && run.reviewRunId === reviewModel.activeReviewRunId
+    && run.inputSnapshotId === snapshot?.snapshotId
+  const requiredReviewBlockers = hasCurrentRun
+    ? runFindings.filter(finding =>
+        finding.required && (finding.status === 'open' || finding.status === 'in-review')).length
+    : 0
+  const canPreviewPublish = hasCurrentRun && requiredReviewBlockers === 0
+  const inputFix = getReviewInputFix(snapshot)
   const handleRun = () => {
     const error = onRun()
     setRunError(error)
@@ -12884,7 +13123,7 @@ function RealReviewFindingsPanel({
 
   return (
     <div data-testid="real-review-findings">
-      <div className="mb-5 flex items-start justify-between gap-4">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-[#111218]">Grounded Review</h2>
           <p className="mt-1 text-[13px] text-[#6B6B7E]">
@@ -12896,15 +13135,22 @@ function RealReviewFindingsPanel({
           type="button"
           disabled={!canRun}
           onClick={handleRun}
-          className="shrink-0 rounded-lg bg-[#5B5BD6] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-40"
+          className={`shrink-0 rounded-lg px-4 py-2 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            hasCurrentRun
+              ? 'border border-[#D8D5CF] bg-white text-[#4D4DC2] hover:bg-[#F8F7FF]'
+              : 'bg-[#5B5BD6] text-white hover:bg-[#4A4AC4]'
+          }`}
         >
           {reviewModel.activeReviewRunId ? 'Run Review Again' : 'Run Grounded Review'}
         </button>
       </div>
 
       {!canRun && (
-        <div data-testid="review-run-blocked" className="mb-5 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-4 text-[12px] text-[#92400E]">
-          A new current Review run is blocked because project inputs are missing or stale. Resolve the input diagnostics above; no findings will be fabricated.
+        <div data-testid="review-run-blocked" className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-[#E2DED7] bg-[#F9F8F6] p-4 text-[12px] text-[#575766]">
+          <p className="min-w-0 flex-1"><span className="font-semibold">Blocked.</span> {snapshot ? inputFix.reason : 'The current Review input snapshot is still being prepared.'}</p>
+          <button type="button" onClick={() => onNav(inputFix.screen)} className="shrink-0 rounded-md border border-[#D8D5CF] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#4D4DC2] hover:bg-[#EEEEFF]">
+            {inputFix.label}
+          </button>
         </div>
       )}
       {runError && (
@@ -12989,7 +13235,7 @@ function RealReviewFindingsPanel({
               const navigation = resolveReviewAuthorTarget(finding, reviewModel, snapshot, topics, topicContent)
               const actionDisabled = !eligibility.ok
               return (
-              <article data-testid="grounded-review-finding" key={finding.findingId} className="rounded-xl border border-[#E2DED7] bg-white p-4">
+              <article id={`review-finding-${finding.findingId}`} tabIndex={-1} data-testid="grounded-review-finding" key={finding.findingId} className="rounded-xl border border-[#E2DED7] bg-white p-4 outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -13134,6 +13380,67 @@ function RealReviewFindingsPanel({
           </div>
         </>
       )}
+      <div data-testid="review-next-step" className="mt-6 flex flex-col gap-3 border-t border-[#E2DED7] pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <p role="status" className="text-[11px] text-[#6B6B7E]">
+          <span className={`font-semibold ${canPreviewPublish ? 'text-[#43845B]' : requiredReviewBlockers > 0 ? 'text-[#A85C08]' : 'text-[#6B6B7E]'}`}>
+            {canPreviewPublish ? 'Complete' : requiredReviewBlockers > 0 ? 'Needs attention' : 'In progress'}
+          </span>
+          {' · '}
+          {canPreviewPublish
+            ? 'Current review results are ready to preview.'
+            : requiredReviewBlockers > 0
+              ? `${requiredReviewBlockers} required ${requiredReviewBlockers === 1 ? 'finding remains' : 'findings remain'} open. Resolve or dismiss them to continue.`
+              : !canRun
+                ? `Review needs ready inputs. ${inputFix.reason}`
+                : 'Run a current grounded review to continue to publish.'}
+          {!canPreviewPublish && (
+            <button
+              type="button"
+              onClick={() => {
+                if (requiredReviewBlockers > 0) {
+                  const first = runFindings.find(finding => finding.required && (finding.status === 'open' || finding.status === 'in-review'))
+                  if (!first) return
+                  setViewRunId(run?.reviewRunId ?? reviewModel.activeReviewRunId)
+                  setCategoryFilter('All')
+                  setStatusFilter('active')
+                  setSelectedFindingId(first.findingId)
+                  requestAnimationFrame(() => requestAnimationFrame(() => {
+                    const findingElement = document.getElementById(`review-finding-${first.findingId}`)
+                    findingElement?.focus()
+                    findingElement?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  }))
+                } else if (!canRun) {
+                  onNav(inputFix.screen)
+                } else {
+                  document.querySelector<HTMLButtonElement>('[data-testid="run-grounded-review"]')?.focus()
+                }
+              }}
+              className="ml-1 font-semibold text-[#4D4DC2] underline underline-offset-2"
+            >
+              {requiredReviewBlockers > 0 ? 'Open a required finding' : !canRun ? inputFix.label : 'Run Grounded Review'}
+            </button>
+          )}
+        </p>
+        <button
+          type="button"
+          data-testid="review-preview-publish"
+          disabled={!canPreviewPublish}
+          aria-describedby={!canPreviewPublish ? 'review-preview-publish-reason' : undefined}
+          onClick={() => onNav('preview')}
+          className="w-full rounded-lg bg-[#5B5BD6] px-5 py-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:bg-[#E2DED7] disabled:text-[#777786] sm:w-auto"
+        >
+          Preview &amp; Publish
+        </button>
+        {!canPreviewPublish && (
+          <span id="review-preview-publish-reason" className="sr-only">
+            {!canRun
+              ? `Review inputs are not ready. ${inputFix.reason}`
+              : requiredReviewBlockers > 0
+                ? `${requiredReviewBlockers} required findings must be resolved or dismissed.`
+                : 'Run a current grounded Review first.'}
+          </span>
+        )}
+      </div>
     </div>
   )
 }
@@ -13650,6 +13957,7 @@ function QualityScreen({
 
   const renderStage1 = () => !isDemoMode ? (
     <RealReviewFindingsPanel
+      onNav={onNav}
       reviewModel={reviewModel}
       snapshot={reviewInputSnapshot ?? null}
       topics={topics}
@@ -13836,8 +14144,8 @@ function QualityScreen({
         <button onClick={() => setStage(1)} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-5 py-2.5 rounded-lg hover:bg-[#F9F8F6] transition-colors">
           ← Back to Review
         </button>
-        <button onClick={() => onNav('publish')} className="bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-6 py-2.5 rounded-lg transition-colors">
-          Publish →
+        <button data-testid="demo-review-preview-publish" onClick={() => onNav('preview')} className="bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-6 py-2.5 rounded-lg transition-colors">
+          Preview &amp; Publish
         </button>
       </div>
     </div>
@@ -14106,6 +14414,10 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     && generatedFor.snapshot === JSON.stringify(projection)
   const visibleBlobs = outputsCurrent ? blobs : {}
   const visibleErrors = outputsCurrent ? errors : {}
+  const missingFormats = selectedFormats.filter(format => !visibleBlobs[format] && !visibleErrors[format])
+  const failedFormats = selectedFormats.filter(format => !!visibleErrors[format])
+  const outputsComplete = selectedFormats.length > 0 && outputsCurrent
+    && selectedFormats.every(format => !!visibleBlobs[format])
   const [activePreviewFormat, setActivePreviewFormat] = useState<'pdf' | 'word' | 'html'>('pdf')
 
   const [showVariantMenu, setShowVariantMenu] = useState(false)
@@ -14291,7 +14603,32 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
             <p className="text-[14px] text-[#6B6B7E]">Generate outputs using the configured theme, master pages, and page layouts.</p>
           </div>
           <button onClick={() => onNav('studio')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
-            ← Back to Editor
+            Back to Author
+          </button>
+        </div>
+        <div data-testid="publish-stage-status" role="status" aria-live="polite" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E2DED7] bg-white px-4 py-3">
+          <div>
+            <p className={`text-[11px] font-semibold uppercase tracking-wide ${
+              generating ? 'text-[#5B5BD6]' : selectedFormats.length === 0 || failedFormats.length > 0 ? 'text-[#A85C08]' : 'text-[#43845B]'
+            }`}>
+              {generating ? 'In progress' : selectedFormats.length === 0 || failedFormats.length > 0 ? 'Needs attention' : outputsComplete ? 'Complete' : 'Ready'}
+            </p>
+            <p className="mt-0.5 text-[11px] text-[#6B6B7E]">
+              {generating
+                ? genStep
+                : selectedFormats.length === 0
+                  ? 'Choose at least one output format before generating.'
+                  : failedFormats.length > 0
+                    ? `${failedFormats.map(format => format.toUpperCase()).join(', ')} generation failed. Review the error below and retry.`
+                  : outputsComplete
+                    ? 'Current files match this project snapshot.'
+                    : missingFormats.length > 0 && selectedFormats.length > missingFormats.length
+                      ? `Generate outputs to create the selected ${missingFormats.map(format => format.toUpperCase()).join(', ')} file${missingFormats.length === 1 ? '' : 's'}.`
+                    : `${selectedFormats.length} output ${selectedFormats.length === 1 ? 'format' : 'formats'} selected.`}
+            </p>
+          </div>
+          <button type="button" data-testid="publish-preview-document" onClick={() => onNav('preview')} className="rounded-lg border border-[#D8D5CF] px-3 py-2 text-[11px] font-semibold text-[#4D4DC2] hover:bg-[#F8F7FF]">
+            Preview document
           </button>
         </div>
 
@@ -14323,7 +14660,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
             <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[13px] font-semibold text-[#111218]">Output Variant</p>
-                <button className="text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium transition-colors">+ New</button>
               </div>
               <div className="relative">
                 <button
@@ -14341,9 +14677,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
                         {v.label}
                       </button>
                     ))}
-                    <div className="border-t border-[#F4F2EE] px-3 py-2">
-                      <button className="text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium">Duplicate · Rename</button>
-                    </div>
                   </div>
                 )}
               </div>
@@ -14452,6 +14785,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
             <button
               disabled={selectedFormats.length === 0 || generating}
               onClick={handleGenerate}
+              data-testid="publish-generate-outputs"
               className="w-full flex items-center justify-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-50 text-white text-[14px] font-semibold py-3.5 rounded-xl transition-colors"
             >
               {generating ? (
@@ -14460,6 +14794,11 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
                 <><svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 1v10M4 8l3.5 3.5L11 8M1.5 13h12" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg> Generate Outputs</>
               )}
             </button>
+            {selectedFormats.length === 0 && (
+              <p data-testid="publish-format-required" className="text-center text-[11px] text-[#6B6B7E]">
+                Select at least one output format above to generate files.
+              </p>
+            )}
 
             {/* Per-format download cards */}
             {(Object.keys(visibleBlobs).length > 0 || Object.keys(visibleErrors).length > 0) && (
@@ -14520,7 +14859,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
                 {FORMAT_META[activePreviewFormat].label} settings from the committed project snapshot
               </p>
               <button onClick={() => onNav('preview')} className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors">
-                Full Preview →
+                Open full preview →
               </button>
             </div>
           </div>
@@ -16197,7 +16536,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-      case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} />
+       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {

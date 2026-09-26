@@ -249,7 +249,8 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Operator checklist" })).toBeVisible()
 
   await page.getByTestId("commit-toc-proposal").click()
-  await expect(page.getByTestId("real-toc-screen")).toBeVisible()
+  await expect(page.locator("header").getByRole("button", { name: /^Author,/ })).toHaveAttribute("aria-current", "step")
+  await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toContainText("Understand Flight Operations")
 
   await expect.poll(async () => (await readProject(page, projectName)).tocProposal).toBeNull()
@@ -275,6 +276,7 @@ test("requires confirmation and preserves committed topics when merging a later 
   const beforeDrafts = Object.fromEntries(Object.entries(before.authorTopicMetadata)
     .map(([id, metadata]) => [id, metadata.draft?.draftId]))
 
+  await openTableOfContents(page)
   await page.getByTestId("generate-grounded-toc").click()
   await page.getByTestId("manual-topic-title").fill("Release validation")
   await page.getByTestId("add-manual-topic").click()
@@ -283,6 +285,8 @@ test("requires confirmation and preserves committed topics when merging a later 
   await expect(page.getByTestId("committed-toc-panel")).toHaveCount(0)
   await page.getByTestId("confirm-toc-merge").click()
 
+  await expect(page.locator("header").getByRole("button", { name: /^Author,/ })).toHaveAttribute("aria-current", "step")
+  await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toContainText("Release validation")
   await expect.poll(async () => (await readProject(page, projectName)).appToc.some(item => item.title === "Release validation")).toBe(true)
   const after = await readProject(page, projectName)
@@ -398,7 +402,7 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await openTableOfContents(page)
 
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
-  await expect(page.getByText("Regenerate before committing.", { exact: false })).toBeVisible()
+  await expect(page.getByTestId("real-toc-next-step")).toContainText("Regenerate it before acceptance")
   await expect(page.getByTestId("commit-toc-proposal")).toBeDisabled()
   await expect(page.getByTestId("regenerate-grounded-toc")).toBeDisabled()
   await openAnalysis(page)
@@ -416,6 +420,8 @@ test("marks a committed TOC stale after the project content type changes without
   await createGroundedProject(page, projectName)
   await page.getByTestId("generate-grounded-toc").click()
   await page.getByTestId("commit-toc-proposal").click()
+  await expect(page.locator("header").getByRole("button", { name: /^Author,/ })).toHaveAttribute("aria-current", "step")
+  await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toBeVisible()
   await expect.poll(async () => (await readProject(page, projectName)).tocGeneratedFromContentType).toBe("user-guide")
 
