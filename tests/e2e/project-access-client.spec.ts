@@ -95,6 +95,7 @@ test('the app adapter rejects browser identity claims and fails closed without t
 
 test('existing local projects are enrolled in development only, without changing ownership', async ({ page }) => {
   await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
   const result = await page.evaluate(async () => {
     const { indexedDbProjectRepository: local } = await import('/src/projectService.ts' as string)
     const { authorizedProjectRepository: repo } = await import('/src/authorizedProjectService.ts' as string)

@@ -662,8 +662,13 @@ test("page layouts inherit the applied profile while preserving and resetting lo
   await expectLayoutPreview(profiles[0], profiles[1].primaryColor)
   await expect.poll(async () => {
     const stored = await readOnlyProject(page)
-    return stored.pageLayouts.find(layout => layout.layoutType === "cover")?.brandOverrides
-  }).toEqual({ bgColor: profiles[1].primaryColor })
+    const active = stored.themes.flatMap(theme => theme.styleProfiles)
+      .find(profile => profile.id === stored.activeStyleProfileId)
+    return {
+      overrides: stored.pageLayouts.find(layout => layout.layoutType === "cover")?.brandOverrides,
+      activeName: active?.name,
+    }
+  }).toEqual({ overrides: { bgColor: profiles[1].primaryColor }, activeName: profiles[0].name })
 
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()

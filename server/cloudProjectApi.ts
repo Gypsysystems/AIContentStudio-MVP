@@ -155,13 +155,23 @@ class SupabaseCloudClient {
   async readiness(role: string): Promise<boolean> {
     // These checks are intentionally per authenticated request. A missing table,
     // migration marker, or bucket means the cloud API remains unavailable.
+    const settle = <T>(promise: Promise<T>) => promise.then(
+      value => ({ ok: true as const, value }),
+      error => ({ ok: false as const, error }),
+    )
     const markerQuery = new URLSearchParams({ select: 'component,version', component: 'eq.project-storage', version: 'eq.1', limit: '1' })
-    const marker = await this.call(`/rest/v1/cloud_schema_versions?${markerQuery}`)
+    const markerCheck = settle(this.call(`/rest/v1/cloud_schema_versions?${markerQuery}`))
+    const permissionsQuery = new URLSearchParams({ select: 'permission', role: `eq.${role}` })
+    const permissionCheck = settle(this.call(`/rest/v1/workspace_role_permissions?${permissionsQuery}`))
+    const markerResult = await markerCheck
+    if (!markerResult.ok) throw markerResult.error
+    const marker = markerResult.value
     if (!marker.ok) return false
     const markerBody = await marker.json().catch(() => null) as unknown
     if (!Array.isArray(markerBody) || markerBody.length !== 1) return false
-    const permissionsQuery = new URLSearchParams({ select: 'permission', role: `eq.${role}` })
-    const permissions = await this.call(`/rest/v1/workspace_role_permissions?${permissionsQuery}`)
+    const permissionResult = await permissionCheck
+    if (!permissionResult.ok) throw permissionResult.error
+    const permissions = permissionResult.value
     if (!permissions.ok) return false
     const permissionRows = await permissions.json().catch(() => null) as unknown
     const expected = PERMISSIONS[role]
@@ -172,10 +182,19 @@ class SupabaseCloudClient {
       .filter((permission): permission is string => typeof permission === 'string')
       .sort()
     if (JSON.stringify(actual) !== JSON.stringify([...expected].sort())) return false
-    const projects = await this.call('/rest/v1/cloud_projects?select=project_id&limit=0')
-    const files = await this.call('/rest/v1/cloud_project_files?select=file_id&limit=0')
+    const projectsCheck = settle(this.call('/rest/v1/cloud_projects?select=project_id&limit=0'))
+    const filesCheck = settle(this.call('/rest/v1/cloud_project_files?select=file_id&limit=0'))
+    const bucketCheck = settle(this.call('/storage/v1/bucket/project-files'))
+    const projectsResult = await projectsCheck
+    if (!projectsResult.ok) throw projectsResult.error
+    const projects = projectsResult.value
+    const filesResult = await filesCheck
+    if (!filesResult.ok) throw filesResult.error
+    const files = filesResult.value
     if (!projects.ok || !files.ok) return false
-    const bucket = await this.call('/storage/v1/bucket/project-files')
+    const bucketResult = await bucketCheck
+    if (!bucketResult.ok) throw bucketResult.error
+    const bucket = bucketResult.value
     if (!bucket.ok) return false
     const bucketBody = await bucket.json().catch(() => null) as unknown
     return isObject(bucketBody) && bucketBody.id === 'project-files' && bucketBody.public === false

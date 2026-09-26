@@ -40,6 +40,7 @@ import {
   isConceptAnalysisFresh,
   type ConceptAnalysis,
 } from './conceptAnalysis'
+import { analysisSummary } from './analysisPresentation'
 import {
   UNSUPPORTED_ANALYSIS_METHOD,
   buildUnsupportedAnalysis,
@@ -226,6 +227,12 @@ type BrandSuggestion = {
   role?: string
   sourceSnippet?: string
   confidence?: 'high' | 'medium' | 'low'
+}
+type PendingProjectSave = {
+  record: ProjectRecord
+  version: number
+  epoch: number
+  promise: Promise<boolean>
 }
 
 const FONT_OPTIONS = ['Arial','Arial Narrow','Calibri','Aptos','Aptos Display','Cambria','Georgia','Segoe UI','Tahoma','Times New Roman','Trebuchet MS','Verdana','Courier New','Inter','Open Sans','Roboto','Lato']
@@ -5626,6 +5633,9 @@ function EvidenceAnalysisScreen({
   unsupportedFresh,
   canBuildUnsupported,
   onRebuildUnsupported,
+  onGenerateToc,
+  tocUnavailableReason,
+  hasCurrentProposal,
 }: {
   onNav: (s: Screen) => void
   evidenceIndex: EvidenceIndex | null
@@ -5637,6 +5647,9 @@ function EvidenceAnalysisScreen({
   unsupportedFresh: boolean
   canBuildUnsupported: boolean
   onRebuildUnsupported: () => void
+  onGenerateToc: () => void
+  tocUnavailableReason: string | null
+  hasCurrentProposal: boolean
 }) {
   const [expandedConcept, setExpandedConcept] = useState<string | null>(null)
   const [expandedTerm, setExpandedTerm] = useState<string | null>(null)
@@ -5646,6 +5659,9 @@ function EvidenceAnalysisScreen({
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceItem | null>(null)
   const evidenceById = new Map((evidenceIndex?.items ?? []).map(item => [item.id, item]))
   const canBuild = !!evidenceIndex && evidenceFresh
+  const summary = analysis
+    ? analysisSummary(analysis, evidenceFresh, analysisFresh, unsupportedAnalysis, unsupportedFresh)
+    : null
 
   useEffect(() => {
     if (!analysis && canBuild) onRebuild()
@@ -5726,6 +5742,18 @@ function EvidenceAnalysisScreen({
           Conservative deterministic evidence heuristics ({CONCEPT_ANALYSIS_METHOD}). Conflicts require concrete opposing source statements; gaps report only source-signaled absence or insufficient coverage. No AI, external expectations, or simulated findings are used.
         </p>
       </div>
+
+      {summary && (
+        <div data-testid="analysis-summary" data-severity={summary.severity} role="status"
+          className={`mb-5 rounded-xl border px-4 py-3 text-[12px] ${
+            summary.severity === 'warning' ? 'border-[#FDE68A] bg-[#FEF3C7] text-[#92400E]'
+              : summary.severity === 'info' ? 'border-[#D6D3D1] bg-[#F5F5F4] text-[#57534E]'
+                : 'border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]'
+          }`}>
+          <span className="font-semibold">{summary.severity === 'warning' ? 'Caution' : summary.severity === 'info' ? 'Coverage notes' : 'Ready'}: </span>
+          {summary.message}
+        </div>
+      )}
 
       {!evidenceIndex ? (
         <div className="bg-[#FFF7ED] border border-[#FED7AA] rounded-xl p-5">
@@ -6066,6 +6094,15 @@ function EvidenceAnalysisScreen({
           </section>
         </div>
       )}
+
+      <div className="flex flex-col items-end gap-2 border-t border-[#E2DED7] pt-5">
+        <button type="button" data-testid="analysis-generate-toc"
+          onClick={onGenerateToc} disabled={!!tocUnavailableReason}
+          className="rounded-lg bg-[#5B5BD6] px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-40">
+          {hasCurrentProposal ? 'Review proposed TOC →' : 'Generate TOC →'}
+        </button>
+        {tocUnavailableReason && <p data-testid="analysis-toc-unavailable" className="text-[11px] text-[#92400E]">{tocUnavailableReason}</p>}
+      </div>
 
       {selectedEvidence && (
         <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-6" onClick={() => setSelectedEvidence(null)}>
@@ -14332,6 +14369,9 @@ export default function App() {
   })
   const saveEpochRef = useRef(0)
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const pendingSaveRef = useRef<PendingProjectSave | null>(null)
+  const saveVersionRef = useRef(0)
+  const savedVersionRef = useRef(0)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [projectName, setProjectName] = useState('')
@@ -14361,19 +14401,34 @@ export default function App() {
 
   const [prevScreen, setPrevScreen] = useState<Screen | null>(null)
 
-  const queueProjectSave = (record: ProjectRecord): Promise<boolean> => {
+  const queueProjectSave = (record: ProjectRecord, version: number): Promise<boolean> => {
+    if (version <= savedVersionRef.current) return Promise.resolve(true)
     const epoch = saveEpochRef.current
+    const queued = pendingSaveRef.current
+    if (queued && queued.epoch === epoch) {
+      if (version >= queued.version) {
+        queued.record = record
+        queued.version = version
+      }
+      return queued.promise
+    }
+    const pending = { record, version, epoch } as PendingProjectSave
     const operation = saveQueueRef.current.then(async () => {
       if (epoch !== saveEpochRef.current) return false
+      pendingSaveRef.current = null
+      if (pending.version <= savedVersionRef.current) return true
       const expectedRevision = projectRevisionRef.current
       const saved = await saveProjectIfCurrent(
-        { ...record, createdAt: projectCreatedAtRef.current, recordRevision: expectedRevision },
+        { ...pending.record, createdAt: projectCreatedAtRef.current, recordRevision: expectedRevision },
         expectedRevision,
       )
       if (epoch !== saveEpochRef.current) return false
       projectRevisionRef.current = saved.recordRevision
+      savedVersionRef.current = pending.version
       return true
     })
+    pending.promise = operation
+    pendingSaveRef.current = pending
     // Keep the queue live after a conflict; the failed save still reaches its caller.
     saveQueueRef.current = operation.then(() => {}, () => {})
     return operation
@@ -14382,12 +14437,12 @@ export default function App() {
   const persistCurrentProject = async (): Promise<boolean> => {
     if (!projectId) return true
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null }
+    if (saveVersionRef.current <= savedVersionRef.current) return true
     const record = latestBuildRef.current()
     if (!record) return true
     try {
-      if (!await queueProjectSave(record)) return false
-      setSaveStatus('saved')
-      setTimeout(() => setSaveStatus('idle'), 2000)
+      if (!await queueProjectSave(record, saveVersionRef.current)) return false
+      if (savedVersionRef.current >= saveVersionRef.current) setSaveStatus('saved')
       return true
     } catch {
       setSaveStatus('error')
@@ -14403,7 +14458,10 @@ export default function App() {
     window.scrollTo(0, 0)
   }
   const navigate = async (s: Screen) => {
-    if (projectId) {
+    // Leaving a project and Review-to-Author targets still use a save barrier.
+    // Ordinary section changes update the UI immediately; autosave retains
+    // the revision-guarded cloud write and reports failures in the top bar.
+    if (projectId && (s === 'dashboard' || !isCloudProjectMode())) {
       const ok = await persistCurrentProject()
       if (!ok) {
         setNavError('Your latest changes could not be saved.')
@@ -14496,7 +14554,6 @@ export default function App() {
         workspaceId: created.workspaceId,
       }
       setSaveStatus('saved')
-      setTimeout(() => setSaveStatus('idle'), 2000)
     } catch (error) {
       setSaveStatus('error')
       throw error
@@ -14800,17 +14857,17 @@ export default function App() {
   // ── Autosave ───────────────────────────────────────────────────────────────
   const triggerAutosave = useCallback((immediate = false) => {
     if (!projectId) return
+    const version = ++saveVersionRef.current
+    setSaveStatus('saving')
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
     const delay = immediate ? 0 : 800
     autosaveTimer.current = setTimeout(async () => {
       // Always call latestBuildRef.current — never a stale closure snapshot
       const record = latestBuildRef.current()
       if (!record) return
-      setSaveStatus('saving')
       try {
-        if (!await queueProjectSave(record)) return
-        setSaveStatus('saved')
-        setTimeout(() => setSaveStatus('idle'), 2000)
+        if (!await queueProjectSave(record, version)) return
+        if (savedVersionRef.current >= saveVersionRef.current) setSaveStatus('saved')
       } catch {
         setSaveStatus('error')
       }
@@ -15495,6 +15552,35 @@ export default function App() {
     triggerAutosave()
   }, [conceptAnalysis, conceptAnalysisFresh, evidenceFresh, evidenceIndex, isDemoMode, projectMeta.contentType, triggerAutosave])
 
+  const tocUnavailableReason = !evidenceIndex
+    ? 'Build the Evidence Index from extracted sources first.'
+    : !evidenceFresh
+      ? 'Source extraction changed. Rebuild the Evidence Index first.'
+      : !conceptAnalysis
+        ? 'Build Analysis first.'
+        : !conceptAnalysisFresh
+          ? 'Analysis is stale. Rebuild Analysis first.'
+          : null
+
+  const handleGenerateTocFromAnalysis = () => {
+    if (isDemoMode || tocUnavailableReason || !evidenceIndex || !conceptAnalysis) return
+    if (tocProposal && tocProposalFresh) {
+      completeNavigation('structure')
+      return
+    }
+    if (tocProposal && !window.confirm('Refresh the proposed TOC? Changes to the previous proposal will be replaced.')) return
+    const proposal = buildTocProposal(evidenceIndex, conceptAnalysis, projectMeta.contentType)
+    if (!proposal.items.length) {
+      setNavError('No source-backed topics are available for a proposed TOC.')
+      return
+    }
+    setTocProposal(proposal)
+    triggerAutosave()
+    // Navigating via navigate() here would persist the prior render's proposal.
+    // React publishes this state before the debounced, revision-guarded save.
+    completeNavigation('structure')
+  }
+
   const handleTocProposalChange = useCallback((proposal: TocProposal) => {
     setTocProposal(proposal)
     triggerAutosave()
@@ -15760,6 +15846,10 @@ export default function App() {
   const resetProjectState = () => {
     setAppLoadError(null)
     saveEpochRef.current++
+    pendingSaveRef.current = null
+    saveVersionRef.current = 0
+    savedVersionRef.current = 0
+    setSaveStatus('idle')
     projectRevisionRef.current = 0
     projectCreatedAtRef.current = 0
     setProjectId(null)
@@ -15876,10 +15966,10 @@ export default function App() {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
-      case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={setIsDemoMode} />
+      case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
       case 'analysis':  return isDemoMode
         ? <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
-        : <EvidenceAnalysisScreen onNav={navigate} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} analysis={conceptAnalysis} analysisFresh={conceptAnalysisFresh} onRebuild={handleRebuildConceptAnalysis} unsupportedAnalysis={unsupportedAnalysis} unsupportedFresh={unsupportedAnalysisFresh} canBuildUnsupported={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onRebuildUnsupported={handleRebuildUnsupportedAnalysis} />
+        : <EvidenceAnalysisScreen onNav={navigate} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} analysis={conceptAnalysis} analysisFresh={conceptAnalysisFresh} onRebuild={handleRebuildConceptAnalysis} unsupportedAnalysis={unsupportedAnalysis} unsupportedFresh={unsupportedAnalysisFresh} canBuildUnsupported={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onRebuildUnsupported={handleRebuildUnsupportedAnalysis} onGenerateToc={handleGenerateTocFromAnalysis} tocUnavailableReason={tocUnavailableReason} hasCurrentProposal={!!tocProposal && tocProposalFresh} />
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />

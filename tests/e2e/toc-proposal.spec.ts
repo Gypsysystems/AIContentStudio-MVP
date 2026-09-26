@@ -78,7 +78,7 @@ async function createGroundedProject(page: Page, projectName: string) {
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current", { timeout: 15_000 })
   await page.getByRole("button", { name: "Analyze Sources" }).click()
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
-  await page.getByRole("button", { name: "TOC" }).click()
+  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
   await expect(page.getByTestId("real-toc-screen")).toBeVisible()
 }
 
@@ -234,7 +234,7 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
 
   await expect.poll(async () => (await readProject(page, projectName)).tocProposal?.items.some(item => item.title === "Operator checklist")).toBe(true)
   await page.reload()
-  await page.getByRole("button", { name: "TOC" }).click()
+  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
   await expect(page.getByTestId("toc-proposal-review")).toBeVisible()
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Operator checklist" })).toBeVisible()
 
@@ -382,7 +382,7 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Stale", { timeout: 15_000 })
   await page.getByTestId("rebuild-evidence-index").click()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
-  await page.getByRole("button", { name: "TOC" }).click()
+  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
 
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
   await expect(page.getByText("Regenerate before committing.", { exact: false })).toBeVisible()
@@ -391,7 +391,7 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await page.getByRole("button", { name: "Analysis" }).click()
   await page.getByTestId("rebuild-concept-analysis").click()
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
-  await page.getByRole("button", { name: "TOC" }).click()
+  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
   await page.getByTestId("regenerate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Release Validation" }).first()).toBeVisible()
@@ -414,7 +414,7 @@ test("marks a committed TOC stale after the project content type changes without
   await expect.poll(async () => (await readProject(page, projectName)).projectMeta.contentType).toBe("admin-guide")
   await page.getByRole("button", { name: /Content Studio/ }).click()
   await page.getByText(projectName, { exact: true }).click()
-  await page.getByRole("button", { name: "TOC" }).click()
+  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
 
   await expect(page.getByTestId("committed-toc-stale")).toBeVisible()
   await expect(page.getByTestId("committed-toc-panel")).toContainText("Understand Flight Operations")
@@ -440,7 +440,7 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Stale", { timeout: 15_000 })
   await page.getByTestId("rebuild-evidence-index").click()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
-  await page.getByRole("button", { name: "TOC" }).click()
+  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
 
   const original = await readProject(page, projectName)
@@ -468,7 +468,7 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
   expect(duplicate.tocProposal.items.map(item => item.topicId)).toEqual(originalTopicIds)
 
   await page.getByText(duplicateName, { exact: true }).click()
-  await page.getByRole("button", { name: "TOC" }).click()
+  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("commit-toc-proposal")).toBeDisabled()
 })

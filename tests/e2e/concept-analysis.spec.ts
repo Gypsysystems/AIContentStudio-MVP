@@ -138,6 +138,12 @@ async function readProjects(page: Page): Promise<StoredProject[]> {
 
 async function waitForCurrentEvidence(page: Page) {
   await expect(page.getByTestId("evidence-index-panel")).toBeVisible()
+  await expect.poll(async () => {
+    const sources = await page.getByTestId("source-file-row").count()
+    const extracted = await page.getByTestId("extraction-status")
+      .filter({ hasText: /^(✓ Extracted|⚠ Partial)/ }).count()
+    return sources > 0 && sources === extracted
+  }, { timeout: 15_000 }).toBe(true)
   if (await page.getByTestId("evidence-freshness").textContent() === "Stale") {
     await page.getByTestId("rebuild-evidence-index").click()
   }

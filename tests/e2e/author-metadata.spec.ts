@@ -455,6 +455,7 @@ test("does not create Author grounding metadata from demo-only document content"
   await expect.poll(async () =>
     Object.keys((await readProject(page, projectName)).authorTopicMetadata ?? {}),
   ).toEqual([])
+  await expect.poll(async () => (await readProject(page, projectName)).isDemoMode).toBe(true)
   const project = await readProject(page, projectName)
   expect(project.topicContent).toEqual({})
   expect(project.isDemoMode).toBe(true)

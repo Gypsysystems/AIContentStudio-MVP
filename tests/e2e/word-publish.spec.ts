@@ -206,6 +206,7 @@ test('Word UI downloads persisted topics after reload, not the stale active Auth
   await page.getByRole('button', { name: /New Project/ }).first().click()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill('Word persistence')
   await page.getByRole('button', { name: 'Continue — Theme & Styles' }).click()
+  await expect(page.getByRole('button', { name: 'Output Templates' })).toBeVisible()
   await page.evaluate(async () => {
     const { getActiveProjectId, loadProject, saveProject } = await import('/src/projectRepository.ts' as string)
     const record = await loadProject(getActiveProjectId())

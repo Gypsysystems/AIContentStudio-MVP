@@ -86,6 +86,63 @@ test.describe('workspace cloud project API', () => {
     }
   })
 
+  test('readiness checks independent authenticated provider endpoints concurrently', async () => {
+    const initialChecks = new Set<string>()
+    const resourceChecks = new Set<string>()
+    let releaseInitial!: () => void
+    let releaseResources!: () => void
+    const initialReady = new Promise<void>(resolve => { releaseInitial = resolve })
+    const resourcesReady = new Promise<void>(resolve => { releaseResources = resolve })
+    const restore = (() => {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input))
+        if (url.pathname === '/auth/v1/user') return reply({ id: 'user-1' })
+        if (url.pathname === '/rest/v1/workspace_memberships')
+          return reply([{ workspace_id: 'workspace-1', role: 'editor' }])
+
+        expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer user-jwt')
+        if (url.pathname === '/rest/v1/cloud_schema_versions'
+          || url.pathname === '/rest/v1/workspace_role_permissions') {
+          initialChecks.add(url.pathname)
+          if (initialChecks.size === 2) releaseInitial()
+          await initialReady
+          if (url.pathname === '/rest/v1/cloud_schema_versions')
+            return reply([{ component: 'project-storage', version: 1 }])
+          return reply(['create', 'read', 'write', 'duplicate', 'backup', 'restore-new']
+            .map(permission => ({ permission })))
+        }
+
+        if (url.pathname === '/rest/v1/cloud_projects'
+          || url.pathname === '/rest/v1/cloud_project_files'
+          || url.pathname === '/storage/v1/bucket/project-files') {
+          resourceChecks.add(url.pathname)
+          if (resourceChecks.size === 3) releaseResources()
+          await resourcesReady
+          if (url.pathname === '/storage/v1/bucket/project-files')
+            return reply({ id: 'project-files', public: false })
+          return reply([])
+        }
+        throw new Error(`Unexpected provider call: ${url.pathname}`)
+      }) as typeof fetch
+      return () => { globalThis.fetch = ORIGINAL_FETCH }
+    })()
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      expect(await api.execute({ action: 'ready' })).toEqual({ ready: true })
+      expect([...initialChecks].sort()).toEqual([
+        '/rest/v1/cloud_schema_versions',
+        '/rest/v1/workspace_role_permissions',
+      ])
+      expect([...resourceChecks].sort()).toEqual([
+        '/rest/v1/cloud_project_files',
+        '/rest/v1/cloud_projects',
+        '/storage/v1/bucket/project-files',
+      ])
+    } finally {
+      restore()
+    }
+  })
+
   test('create preserves the full record but replaces client ownership with server identity', async () => {
     const original = {
       projectId: 'client-id',
