@@ -4,6 +4,7 @@ import {
   type CheckpointVerification, type ProjectCheckpoint, type ProjectCheckpointSummary,
 } from './projectCheckpoint'
 import { buildCheckpointDetail } from './checkpointDetail'
+import { buildCheckpointChangeSummary, unknownCheckpointChanges, type CheckpointChangeSummary } from './checkpointChanges'
 import { readValidatedCheckpointRecord } from './checkpointRecordRead'
 import { CURRENT_PROJECT_SCHEMA_VERSION } from './projectMigrations'
 import { buildTopicHistory, type TopicHistoryTopic } from './topicHistory'
@@ -28,6 +29,11 @@ export type ProjectHistoryPanelProps = {
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp)
   return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleString()
+}
+
+function parentCheckpointLabel(parentId: unknown, ambiguousRoot = false): string {
+  if (parentId === null) return ambiguousRoot ? 'None (ambiguous parent link)' : 'None (first checkpoint)'
+  return typeof parentId === 'string' && parentId.trim() ? parentId : 'Unknown (missing or malformed link)'
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -172,9 +178,52 @@ function TopicHistoryView({ topic }: { topic: TopicHistoryTopic }) {
   </div>
 }
 
-function CheckpointDetailView({ checkpoint, fullVerification }: {
+function CheckpointChangesView({ parentId, summary, loading }: {
+  parentId: string | null
+  summary: CheckpointChangeSummary | null
+  loading: boolean
+}) {
+  return <section className="mt-5 border-t border-[#E3E0DA] pt-4" data-testid="checkpoint-changes" aria-label="Changes from direct parent">
+    <h4 className="text-[12px] font-semibold text-[#292936]">Changes from direct parent</h4>
+    <p className="mt-1 text-[11px] leading-5 text-[#686879]">Read-only summary of validated checkpoint records and saved manifest IDs and hashes. Archived file bytes are not downloaded or verified here; this is not a full content comparison.</p>
+    {parentId && <p className="mt-1 break-all text-[10px] text-[#777786]">Direct parent: {parentId}</p>}
+    {loading && <p className="mt-3 text-[11px] text-[#686879]" role="status">Checking direct parent checkpoint metadata…</p>}
+    {!loading && summary?.status === 'baseline' && <p className="mt-3 text-[11px] text-[#686879]">First checkpoint: no direct parent to summarize.</p>}
+    {!loading && summary?.status === 'unknown' && <p className="mt-3 rounded-md bg-[#FFF7E8] p-3 text-[11px] text-[#8A5A13]" role="status">Changes unknown. {summary.reason}</p>}
+    {!loading && summary?.status === 'ready' && <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div>
+        <h5 className="text-[11px] font-semibold text-[#353543]">Saved topics</h5>
+        {summary.topics.status === 'unknown'
+          ? <p className="mt-2 text-[11px] text-[#8A5A13]">Topic changes unknown. {summary.topics.reason}</p>
+          : summary.topics.changes.length === 0
+            ? <p className="mt-2 text-[11px] text-[#686879]">No topic additions, removals, or renames in these saved outlines.</p>
+            : <ul className="mt-2 space-y-2" data-testid="topic-changes">{summary.topics.changes.map(change => <li key={`${change.kind}-${change.topicId}`} className="rounded-md border border-[#E7E4DF] bg-white p-2.5 text-[11px] text-[#353543]">
+              <span className="font-semibold">{change.kind[0].toUpperCase() + change.kind.slice(1)}</span>: {change.kind === 'renamed' ? `${change.before} → ${change.after}` : change.kind === 'added' ? change.after : change.before}
+              <span className="ml-1 break-all text-[10px] text-[#777786]">(topic ID {change.topicId})</span>
+            </li>)}</ul>}
+      </div>
+      <div>
+        <h5 className="text-[11px] font-semibold text-[#353543]">Saved file manifest</h5>
+        {summary.files.status === 'unknown'
+          ? <p className="mt-2 text-[11px] text-[#8A5A13]">File changes unknown. {summary.files.reason}</p>
+          : summary.files.changes.length === 0
+            ? <p className="mt-2 text-[11px] text-[#686879]">No file ID or saved-hash changes in these manifests.</p>
+            : <ul className="mt-2 space-y-2" data-testid="file-changes">{summary.files.changes.map(change => <li key={`${change.kind}-${change.fileId}`} className="rounded-md border border-[#E7E4DF] bg-white p-2.5 text-[11px] text-[#353543]">
+              <p><span className="font-semibold">{change.kind[0].toUpperCase() + change.kind.slice(1)}</span>: {change.afterName || change.beforeName || 'Name unavailable'} <span className="break-all text-[10px] text-[#777786]">(file ID {change.fileId})</span></p>
+              {change.beforeHash && <p className="mt-1 break-all text-[10px] text-[#686879]">Parent SHA-256: {change.beforeHash}</p>}
+              {change.afterHash && <p className="mt-1 break-all text-[10px] text-[#686879]">Selected SHA-256: {change.afterHash}</p>}
+            </li>)}</ul>}
+      </div>
+    </div>}
+  </section>
+}
+
+function CheckpointDetailView({ checkpoint, fullVerification, changes, changesLoading, ambiguousRoot }: {
   checkpoint: ProjectCheckpoint
   fullVerification: CheckpointVerification | null
+  changes: CheckpointChangeSummary | null
+  changesLoading: boolean
+  ambiguousRoot: boolean
 }) {
   const detail = buildCheckpointDetail(checkpoint)
   return <section id="checkpoint-detail" data-testid="checkpoint-detail" className="mt-4 rounded-lg border border-[#E3E0DA] bg-[#FAF9F7] p-4 sm:p-5" aria-labelledby="checkpoint-detail-title">
@@ -192,7 +241,7 @@ function CheckpointDetailView({ checkpoint, fullVerification }: {
         ['Actor', checkpoint.actorUserId || 'Unknown'],
         ['Originating record revision', `Revision ${checkpoint.originatingRecordRevision}`],
         ['Saved record schema', String(checkpoint.recordSchemaVersion)],
-        ['Parent checkpoint', checkpoint.parentCheckpointId || 'None (first checkpoint)'],
+        ['Parent checkpoint', parentCheckpointLabel(checkpoint.parentCheckpointId, ambiguousRoot)],
         ['Saved file count', String(checkpoint.files.length)],
         ['Saved record digest', checkpoint.recordDigest],
         ['Saved checkpoint digest', checkpoint.integrityDigest],
@@ -229,6 +278,7 @@ function CheckpointDetailView({ checkpoint, fullVerification }: {
         </li>)}
       </ul>}
     </div>
+    <CheckpointChangesView parentId={checkpoint.parentCheckpointId} summary={changes} loading={changesLoading} />
   </section>
 }
 
@@ -249,6 +299,10 @@ export function ProjectHistoryPanel({
   const [detailError, setDetailError] = useState('')
   const [detailRetry, setDetailRetry] = useState(0)
   const detailRequestId = React.useRef(0)
+  const [changeResult, setChangeResult] = useState<{
+    checkpointId: string; integrityDigest: string; summary: CheckpointChangeSummary
+  } | null>(null)
+  const [changesLoading, setChangesLoading] = useState(false)
   const [topicOpen, setTopicOpen] = useState(false)
   const [topicLoading, setTopicLoading] = useState(false)
   const [topicLoaded, setTopicLoaded] = useState(false)
@@ -274,6 +328,8 @@ export function ProjectHistoryPanel({
     setDetailCheckpoint(null)
     setDetailLoading(false)
     setDetailError('')
+    setChangeResult(null)
+    setChangesLoading(false)
     setTopicLoading(false)
     setTopicLoaded(false)
     setTopics([])
@@ -315,6 +371,51 @@ export function ProjectHistoryPanel({
       })
     return () => { detailRequestId.current += 1 }
   }, [selectedCheckpointId, checkpoints, loading, loadError, projectId, detailRetry])
+
+  useEffect(() => {
+    if (!detailCheckpoint || detailCheckpoint.checkpointId !== selectedCheckpointId
+      || detailCheckpoint.projectId !== projectId || loading || loadError) return
+    const child = detailCheckpoint
+    const wrap = (summary: CheckpointChangeSummary) => ({
+      checkpointId: child.checkpointId, integrityDigest: child.integrityDigest, summary,
+    })
+    setChangeResult(null)
+    if (child.parentCheckpointId === null) {
+      setChangesLoading(false)
+      const ambiguousRoot = checkpoints.some(item => item.checkpointId !== child.checkpointId && item.parentCheckpointId === null)
+      setChangeResult(wrap(ambiguousRoot
+        ? unknownCheckpointChanges('More than one checkpoint has no parent; the first checkpoint is ambiguous.')
+        : buildCheckpointChangeSummary(child, null)))
+      return
+    }
+    if (typeof child.parentCheckpointId !== 'string' || !child.parentCheckpointId.trim()) {
+      setChangesLoading(false)
+      setChangeResult(wrap(unknownCheckpointChanges('The saved direct-parent link is missing or malformed.')))
+      return
+    }
+    if (child.parentCheckpointId === child.checkpointId) {
+      setChangesLoading(false)
+      setChangeResult(wrap(unknownCheckpointChanges('The checkpoint links to itself as its parent.')))
+      return
+    }
+    const parentSummary = checkpoints.find(item => item.checkpointId === child.parentCheckpointId)
+    if (!parentSummary) {
+      setChangesLoading(false)
+      setChangeResult(wrap(unknownCheckpointChanges('The direct parent is absent from the authorized checkpoint list.')))
+      return
+    }
+    let active = true
+    setChangesLoading(true)
+    void readValidatedCheckpointRecord(projectId, parentSummary, getCheckpointRecordRef.current)
+      .then(parent => {
+        if (active) setChangeResult(wrap(buildCheckpointChangeSummary(child, parent)))
+      })
+      .catch(error => {
+        if (active) setChangeResult(wrap(unknownCheckpointChanges(`The direct parent could not be read or validated: ${(error as Error).message}`)))
+      })
+      .finally(() => { if (active) setChangesLoading(false) })
+    return () => { active = false }
+  }, [detailCheckpoint, selectedCheckpointId, checkpoints, projectId, loading, loadError])
 
   const loadTopicHistory = async () => {
     const requestId = ++topicRequestId.current
@@ -400,6 +501,7 @@ export function ProjectHistoryPanel({
   }
 
   const selectedTopic = topics.find(topic => topic.topicId === selectedTopicId)
+  const ambiguousRoot = checkpoints.filter(item => item.parentCheckpointId === null).length > 1
 
   return (
     <section className="min-h-0 w-full flex-1 overflow-y-auto px-4 py-7 sm:px-7 sm:py-10" data-testid="project-history" aria-labelledby="project-history-title">
@@ -492,7 +594,7 @@ export function ProjectHistoryPanel({
               <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-[11px] sm:grid-cols-2 lg:grid-cols-4">
                 <div><dt className="text-[#858391]">Actor</dt><dd className="mt-0.5 break-all text-[#444351]">{checkpoint.actorUserId || 'Unknown'}</dd></div>
                 <div><dt className="text-[#858391]">Originating revision</dt><dd className="mt-0.5 text-[#444351]">Revision {checkpoint.originatingRecordRevision}</dd></div>
-                <div><dt className="text-[#858391]">Parent checkpoint</dt><dd className="mt-0.5 break-all text-[#444351]">{checkpoint.parentCheckpointId || 'None (first checkpoint)'}</dd></div>
+                <div><dt className="text-[#858391]">Parent checkpoint</dt><dd className="mt-0.5 break-all text-[#444351]">{parentCheckpointLabel(checkpoint.parentCheckpointId, ambiguousRoot)}</dd></div>
                 <div><dt className="text-[#858391]">Restore</dt><dd className="mt-0.5 text-[#444351]">Not yet available</dd></div>
               </dl>
               {checked?.status === 'error' && <p className="mt-3 text-[11px] text-[#A52A2A]" role="alert">Verification could not be completed: {checked.message}</p>}
@@ -504,7 +606,12 @@ export function ProjectHistoryPanel({
                {selectedCheckpointId === checkpoint.checkpointId && !loading && !loadError && <>
                  {detailLoading && <p className="mt-4 text-[11px] text-[#686879]" role="status">Checking saved record and manifest metadata…</p>}
                  {detailError && <p className="mt-4 rounded-md bg-[#FEF2F2] p-3 text-[11px] text-[#B42318]" role="alert">{detailError} <button type="button" onClick={() => setDetailRetry(current => current + 1)} className="underline">Retry saved detail</button></p>}
-                 {!detailLoading && detailCheckpoint?.checkpointId === checkpoint.checkpointId && detailCheckpoint.projectId === projectId && <CheckpointDetailView checkpoint={detailCheckpoint} fullVerification={result} />}
+                 {!detailLoading && detailCheckpoint?.checkpointId === checkpoint.checkpointId && detailCheckpoint.projectId === projectId && <CheckpointDetailView
+                   checkpoint={detailCheckpoint} fullVerification={result}
+                   ambiguousRoot={ambiguousRoot}
+                   changes={changeResult?.checkpointId === checkpoint.checkpointId && changeResult.integrityDigest === detailCheckpoint.integrityDigest ? changeResult.summary : null}
+                   changesLoading={changesLoading}
+                 />}
                </>}
             </li>
           })}
