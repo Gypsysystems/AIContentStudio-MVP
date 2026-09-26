@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import {
+  aiDefinitionsEqual,
   canTransitionAiVersion,
   validateAiAssetInput,
   validateAiInitialAsset,
@@ -87,12 +88,24 @@ class SupabaseClient {
     const body = await response.json().catch(() => null) as unknown
     if (!response.ok) {
       const code = isObject(body) && typeof body.code === 'string' ? body.code : ''
+      const details = isObject(body) ? `${String(body.message ?? '')} ${String(body.details ?? '')}` : ''
+      if (['PGRST202', 'PGRST203', 'PGRST205', '42P01', '42883'].includes(code)
+        || (response.status === 404 && (path.includes('/rpc/') || path.includes('/workspace_memberships')))) {
+        throw new AiCatalogApiError(503, 'AI_CATALOG_SCHEMA_UNAVAILABLE', 'AI catalog storage schema is unavailable')
+      }
       if (response.status === 401) throw new AiCatalogApiError(401, 'UNAUTHENTICATED', 'A valid authenticated session is required')
+      if (code === '42501' && /membership/i.test(details))
+        throw new AiCatalogApiError(403, 'MEMBERSHIP_INACTIVE', 'An active workspace membership is required')
       if (response.status === 403 || code === '42501') throw new AiCatalogApiError(403, 'FORBIDDEN', 'The current workspace role does not allow this action')
       if (code === '40001' || code === '23505')
         throw new AiCatalogApiError(409, 'VERSION_CONFLICT', 'The asset changed; reload its latest version before retrying')
+      if (code === '22023') {
+        if (/workflow references/i.test(details))
+          throw new AiCatalogApiError(400, 'WORKFLOW_REFERENCE_INVALID', 'Workflow references must resolve to exact asset versions in this workspace')
+        throw new AiCatalogApiError(400, 'INVALID_CATALOG_COMMAND', 'AI catalog command is invalid for the current asset version')
+      }
       if (code === 'P0002' || response.status === 404) throw new AiCatalogApiError(404, 'ASSET_NOT_FOUND', 'AI catalog asset was not found in the active workspace')
-      throw new AiCatalogApiError(503, 'AI_CATALOG_STORAGE_ERROR', 'AI catalog storage could not complete the request')
+      throw new AiCatalogApiError(503, 'AI_CATALOG_UNAVAILABLE', 'AI catalog storage could not complete the request')
     }
     return body
   }
@@ -116,7 +129,8 @@ class SupabaseClient {
     if (!Array.isArray(rows) || !rows.length)
       throw new AiCatalogApiError(403, 'MEMBERSHIP_INACTIVE', 'An active workspace membership is required')
     const membership = rows[0]
-    if (!isObject(membership) || typeof membership.workspace_id !== 'string' || typeof membership.role !== 'string')
+    if (!isObject(membership) || typeof membership.workspace_id !== 'string'
+      || !membership.workspace_id || !['owner', 'admin', 'editor', 'viewer'].includes(String(membership.role)))
       throw new AiCatalogApiError(503, 'MEMBERSHIP_LOOKUP_FAILED', 'Could not verify current workspace membership')
     return { userId: user.id, membership: membership as Membership }
   }
@@ -219,14 +233,45 @@ function assertVersion(value: unknown): asserts value is number {
     throw new AiCatalogApiError(400, 'INVALID_VERSION', 'expectedVersion must be a positive integer')
 }
 
-function asAsset(value: unknown): AiAssetVersion {
-  if (!isObject(value) || typeof value.workspaceId !== 'string' || typeof value.id !== 'string'
-    || typeof value.kind !== 'string' || typeof value.version !== 'number'
-    || typeof value.state !== 'string' || typeof value.name !== 'string'
-    || typeof value.description !== 'string' || !isObject(value.definition)
-    || typeof value.createdAt !== 'string' || typeof value.createdBy !== 'string')
+function asAsset(value: unknown, workspaceId: string): AiAssetVersion {
+  if (!isObject(value)
+    || Object.keys(value).some(key => ![
+      'workspaceId', 'id', 'kind', 'version', 'state', 'name', 'description',
+      'definition', 'createdAt', 'createdBy',
+    ].includes(key))
+    || value.workspaceId !== workspaceId
+    || !stableId(value.id)
+    || !['workflow', 'prompt-pack', 'reference-set', 'blueprint'].includes(String(value.kind))
+    || !Number.isSafeInteger(value.version) || (value.version as number) < 1
+    || !['draft', 'test', 'published', 'archived'].includes(String(value.state))
+    || typeof value.name !== 'string' || typeof value.description !== 'string'
+    || typeof value.createdAt !== 'string' || Number.isNaN(Date.parse(value.createdAt))
+    || typeof value.createdBy !== 'string' || !value.createdBy)
+    throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage returned an invalid asset')
+  const input = {
+    kind: value.kind,
+    name: value.name,
+    description: value.description,
+    definition: value.definition,
+  }
+  if (!validateAiAssetInput(input))
     throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage returned an invalid asset')
   return value as unknown as AiAssetVersion
+}
+
+function validateHistory(values: unknown[], workspaceId: string, expectedId?: string): AiAssetVersion[] {
+  const items = values.map(value => asAsset(value, workspaceId))
+  if ((expectedId && items.some(item => item.id !== expectedId))
+    || new Set(items.map(item => item.id)).size > (expectedId ? 1 : items.length)
+    || new Set(items.map(item => `${item.id}:${item.version}`)).size !== items.length) {
+    throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage returned an invalid asset scope')
+  }
+  const versions = items.map(item => item.version)
+  if (versions.some((version, index) => index > 0 && version <= versions[index - 1])
+    || (expectedId && versions.some((version, index) => version !== index + 1))) {
+    throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage returned invalid version history')
+  }
+  return items
 }
 
 export async function executeAiCatalog(value: unknown, client: SupabaseClient, workspaceId: string): Promise<Json> {
@@ -236,7 +281,8 @@ export async function executeAiCatalog(value: unknown, client: SupabaseClient, w
     const historyResult = await client.command({ action: 'history', id: input.id }, workspaceId)
     const history = isObject(historyResult) && Array.isArray(historyResult.versions) ? historyResult.versions : null
     if (!history || history.length === 0) throw new AiCatalogApiError(404, 'ASSET_NOT_FOUND', 'AI catalog asset was not found in the active workspace')
-    const historyAssets = history.map(asAsset)
+    const historyAssets = validateHistory(history, workspaceId, input.id)
+    if (!historyAssets.length) throw new AiCatalogApiError(404, 'ASSET_NOT_FOUND', 'AI catalog asset was not found in the active workspace')
     const latest = historyAssets[historyAssets.length - 1]
     if (latest.version !== input.expectedVersion)
       throw new AiCatalogApiError(409, 'VERSION_CONFLICT', `Asset changed; expected version ${input.expectedVersion}, found ${latest.version}`)
@@ -255,12 +301,36 @@ export async function executeAiCatalog(value: unknown, client: SupabaseClient, w
     const responseField = input.action === 'history' ? 'versions' : 'assets'
     if (!isObject(result) || !Array.isArray(result[responseField]))
       throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage returned an invalid asset list')
-    const items = (result[responseField] as unknown[]).map(asAsset)
+    const items = input.action === 'history'
+      ? validateHistory(result[responseField] as unknown[], workspaceId, input.id)
+      : (result[responseField] as unknown[]).map(item => asAsset(item, workspaceId))
+    if (input.action === 'list' && (new Set(items.map(item => item.id)).size !== items.length
+      || items.some(item => item.state === 'archived')))
+      throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage returned an invalid asset list')
     return input.action === 'history' ? { versions: items } : { assets: items }
   }
   if (!isObject(result) || !result.asset)
     throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage did not confirm the mutation')
-  return { asset: asAsset(result.asset) }
+  const asset = asAsset(result.asset, workspaceId)
+  if (input.action === 'create') {
+    if (asset.version !== 1 || asset.state !== 'draft' || !validateAiInitialAsset(input.asset)
+      || asset.kind !== input.asset.kind || asset.name !== input.asset.name
+      || asset.description !== input.asset.description
+      || !aiDefinitionsEqual(asset.definition, input.asset.definition))
+      throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage did not confirm the requested asset')
+  } else {
+    const expectedVersion = input.expectedVersion + 1
+    if (asset.id !== input.id || asset.version !== expectedVersion
+      || (input.action === 'revise' && (asset.state !== 'draft'
+        || asset.kind !== input.asset.kind || asset.name !== input.asset.name
+        || asset.description !== input.asset.description
+        || !aiDefinitionsEqual(asset.definition, input.asset.definition)))
+      || (input.action === 'transition' && asset.state !== input.state)
+      || (input.action === 'delete' && asset.state !== 'archived')) {
+      throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage did not confirm the requested asset version')
+    }
+  }
+  return { asset }
 }
 
 export async function handleAiCatalog(request: IncomingMessage, response: ServerResponse): Promise<void> {

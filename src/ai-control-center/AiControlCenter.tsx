@@ -1,9 +1,10 @@
-import { cloneElement, isValidElement, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactElement, type ReactNode } from 'react'
+import { cloneElement, isValidElement, useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactElement, type ReactNode } from 'react'
 import {
   BLUEPRINT_CONTENT_TYPES,
   canTransitionAiVersion,
   validateAiTransition,
   validateAiAssetInput,
+  aiDefinitionsEqual,
   type AiAssetInput,
   type AiAssetKind,
   type AiAssetVersion,
@@ -16,13 +17,70 @@ import {
   type ReferenceSetDefinition,
   type WorkflowDefinition,
 } from '../aiCatalogModel'
-import { executeAiCatalog, historyAiAsset, listAiAssets } from '../aiCatalogRepository'
+import { AiCatalogApiError, executeAiCatalog, historyAiAsset, listAiAssets } from '../aiCatalogRepository'
 import type { ProjectAccessContext } from '../ownership'
 
 type Props = { mode: 'local-dev' | 'cloud'; context: ProjectAccessContext }
 type Area = 'connections' | AiAssetKind
 type EditorDraft = { kind: AiAssetKind; name: string; description: string; definition: AiDefinition }
 type Notice = { type: 'success' | 'error' | 'info'; text: string }
+
+function catalogErrorMessage(error: unknown, fallback: string) {
+  const code = (error instanceof AiCatalogApiError ? error.code
+    : error && typeof error === 'object' && 'code' in error ? String(error.code) : '').toUpperCase()
+  const status = error instanceof AiCatalogApiError ? error.status
+    : error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0
+  if (/SCHEMA|MIGRATION/.test(code)) return 'The AI catalog is not available yet because its storage schema has not been installed.'
+  if (/UNAUTHENTICATED|AUTH_REQUIRED/.test(code) || status === 401)
+    return 'Sign in again to access this workspace catalog.'
+  if (/MEMBERSHIP_LOOKUP_FAILED|MEMBERSHIP_CHECK_FAILED/.test(code))
+    return 'We could not verify your workspace membership. Try again later or contact your workspace administrator.'
+  if (/MEMBERSHIP_INACTIVE/.test(code))
+    return 'Your workspace membership is inactive. Ask a workspace administrator to restore access.'
+  if (/FORBIDDEN|NOT_AUTHORIZED/.test(code) || status === 403)
+    return 'Your workspace role does not allow this catalog action.'
+  if (/CONFLICT|VERSION_MISMATCH/.test(code) || status === 409)
+    return 'This definition changed elsewhere. Your draft is still here; refresh the catalog and reopen the latest version before revising.'
+  if (/INVALID_REFERENCE|REFERENCE_INVALID|WORKFLOW_REFERENCE_INVALID/.test(code)) return 'A linked definition is unavailable in this workspace. Review the references and try again.'
+  if (/FOREIGN_WORKSPACE|WORKSPACE_SCOPE_INVALID/.test(code))
+    return 'The catalog response included records outside this workspace. No records are displayed.'
+  if (/BAD_CONFIRMATION|CONFIRMATION_MISMATCH/.test(code))
+    return 'The server could not confirm this catalog change. Refresh to verify the current saved state.'
+  if (/ASSET_NOT_FOUND|DEFINITION_NOT_FOUND/.test(code))
+    return 'This definition is no longer available in the current workspace. Refresh the catalog and select an available version.'
+  if (/INVALID_ASSET|ASSET_INVALID/.test(code))
+    return 'This definition does not meet the catalog requirements. Review its fields and try again.'
+  if (/INVALID_REVISION|REVISION_INVALID/.test(code))
+    return 'This revision is not valid for the current definition. Review its versioned fields and try again.'
+  if (/INVALID_TRANSITION|TRANSITION_INVALID/.test(code))
+    return 'This lifecycle change is not allowed for the current version.'
+  if (/API_UNAVAILABLE|CATALOG_UNAVAILABLE/.test(code))
+    return 'The AI catalog service is currently unavailable. No local fallback was used; retry when the service is available.'
+  if (/INVALID_RESPONSE|RESPONSE_INVALID|STORAGE_RESPONSE_INVALID/.test(code))
+    return 'The catalog response could not be verified, so it is not being displayed as confirmed. Refresh to check the current saved state.'
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+function isConfirmedAsset(value: unknown, workspaceId: string, command: AiAssetInput, expected?: AiAssetVersion, transitionState?: AiVersionState): value is AiAssetVersion {
+  if (!value || typeof value !== 'object') return false
+  const asset = value as Partial<AiAssetVersion>
+  return asset.workspaceId === workspaceId
+    && typeof asset.id === 'string' && asset.id.length > 0
+    && asset.kind === command.kind
+    && Number.isSafeInteger(asset.version) && (asset.version as number) > 0
+    && ['draft', 'test', 'published', 'archived'].includes(String(asset.state))
+    && typeof asset.name === 'string' && typeof asset.description === 'string'
+    && typeof asset.createdAt === 'string' && !Number.isNaN(Date.parse(asset.createdAt))
+    && typeof asset.createdBy === 'string' && asset.createdBy.length > 0
+    && validateAiAssetInput({ kind: asset.kind, name: asset.name, description: asset.description, definition: asset.definition })
+    && (expected
+      ? asset.id === expected.id && asset.version === expected.version + 1
+        && (transitionState ? asset.state === transitionState
+          : asset.state === 'draft' && asset.name === command.name && asset.description === command.description
+            && aiDefinitionsEqual(asset.definition, command.definition))
+      : asset.version === 1 && asset.state === 'draft' && asset.name === command.name
+        && asset.description === command.description && aiDefinitionsEqual(asset.definition, command.definition))
+}
 
 const areas: { id: Area; label: string; number: string }[] = [
   { id: 'connections', label: 'Connections', number: '01' },
@@ -281,22 +339,48 @@ export default function AiControlCenter({ mode, context }: Props) {
   const [selected, setSelected] = useState<AiAssetVersion | null>(null)
   const [history, setHistory] = useState<AiAssetVersion[] | null>(null)
   const [historyBusy, setHistoryBusy] = useState(false)
+  const [historyError, setHistoryError] = useState('')
   const [draft, setDraft] = useState<EditorDraft | null>(null)
   const [isRevising, setIsRevising] = useState(false)
   const [confirmArchive, setConfirmArchive] = useState(false)
+  const requestSequence = useRef(0)
+  const historyRequestSequence = useRef(0)
+  const selectedAssetKey = useRef<string | null>(null)
   const kind = area === 'connections' ? null : area
 
-  const refresh = useCallback(async (quiet = false) => {
-    if (!quiet) setLoading(true)
+  function assetKey(asset: AiAssetVersion | null) {
+    return asset ? `${asset.id}:${asset.version}` : null
+  }
+  function invalidateHistory() {
+    historyRequestSequence.current += 1
+    setHistory(null)
+    setHistoryBusy(false)
+    setHistoryError('')
+  }
+  function selectAsset(asset: AiAssetVersion | null) {
+    selectedAssetKey.current = assetKey(asset)
+    setSelected(asset)
+  }
+
+  const refresh = useCallback(async () => {
+    const requestId = ++requestSequence.current
+    setLoading(true)
     setLoadError('')
     try {
       const result = await listAiAssets()
       if (!Array.isArray(result)) throw new Error('Catalog returned an invalid asset list.')
-      setAssets(result.filter(asset => asset.workspaceId === context.workspace.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
+      if (result.some(asset => !asset || asset.workspaceId !== context.workspace.id))
+        throw new Error('The catalog response included records outside this workspace. No definitions are shown.')
+      if (requestId !== requestSequence.current) return
+      setAssets(result.sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Definitions could not be loaded.')
+      if (requestId !== requestSequence.current) return
+      setAssets([])
+      selectAsset(null)
+      invalidateHistory()
+      setLoadError(catalogErrorMessage(error, 'Definitions could not be loaded.'))
     } finally {
-      setLoading(false)
+      if (requestId === requestSequence.current) setLoading(false)
     }
   }, [context.workspace.id])
 
@@ -315,13 +399,15 @@ export default function AiControlCenter({ mode, context }: Props) {
   function openCreate() {
     if (!kind || !canManage) return
     setDraft(initialDraft(kind))
-    setSelected(null)
+    selectAsset(null)
+    invalidateHistory()
     setIsRevising(false)
     setNotice(null)
   }
   function openRevise(asset: AiAssetVersion) {
     setDraft({ kind: asset.kind, name: asset.name, description: asset.description, definition: structuredClone(asset.definition) })
-    setSelected(asset)
+    selectAsset(asset)
+    invalidateHistory()
     setIsRevising(true)
     setNotice(null)
   }
@@ -331,8 +417,8 @@ export default function AiControlCenter({ mode, context }: Props) {
   }
   function selectArea(next: Area) {
     setArea(next)
-    setSelected(null)
-    setHistory(null)
+    selectAsset(null)
+    invalidateHistory()
     setNotice(null)
     setDraft(null)
   }
@@ -358,50 +444,69 @@ export default function AiControlCenter({ mode, context }: Props) {
       const saved = isRevising && selected
         ? await executeAiCatalog({ action: 'revise', id: selected.id, expectedVersion: selected.version, asset: clean })
         : await executeAiCatalog({ action: 'create', asset: clean })
+      if (!isConfirmedAsset(saved, context.workspace.id, clean, isRevising ? selected ?? undefined : undefined))
+        throw new AiCatalogApiError(0, 'INVALID_RESPONSE', 'The catalog did not confirm the requested definition.')
       setNotice({ type: 'success', text: `${kindTitles[saved.kind]} ${isRevising ? 'revision' : 'definition'} saved as v${saved.version}.` })
-      setSelected(saved)
+      selectAsset(saved)
+      invalidateHistory()
       closeEditor()
-      await refresh(true)
+      await refresh()
     } catch (error) {
-      const conflict = error instanceof Error && /conflict|version|409/i.test(error.message)
+      const conflict = (error instanceof AiCatalogApiError && (error.code === 'VERSION_CONFLICT' || error.status === 409))
+        || (error instanceof Error && /conflict|version|409/i.test(error.message))
       setNotice({ type: 'error', text: conflict
-        ? 'This definition changed elsewhere. Your draft is still here; refresh the catalog and reopen the latest version before revising.'
-        : error instanceof Error ? error.message : 'The definition could not be saved.' })
+        ? catalogErrorMessage(error, 'This definition changed elsewhere. Your draft is still here.')
+        : catalogErrorMessage(error, 'The definition could not be saved.') })
     } finally {
       setBusy(false)
     }
   }
   async function transition(asset: AiAssetVersion, state: AiVersionState) {
-    if (!canManage || busy) return
+    if (!canManage || busy || loading || loadError) return
     setBusy(true)
     setNotice(null)
     setConfirmArchive(false)
     try {
       const result = await executeAiCatalog({ action: 'transition', id: asset.id, expectedVersion: asset.version, state })
-      setSelected(result)
+      const transitionInput: AiAssetInput = { kind: asset.kind, name: asset.name, description: asset.description, definition: asset.definition }
+      if (!isConfirmedAsset(result, context.workspace.id, transitionInput, asset, state))
+        throw new AiCatalogApiError(0, 'INVALID_RESPONSE', 'The catalog did not confirm the requested state change.')
+      selectAsset(result)
+      invalidateHistory()
       setNotice({ type: 'success', text: `${kindTitles[result.kind]} moved to ${stateLabels[result.state].toLowerCase()}.` })
-      await refresh(true)
+      await refresh()
     } catch (error) {
-      const conflict = error instanceof Error && /conflict|version|409/i.test(error.message)
+      const conflict = (error instanceof AiCatalogApiError && (error.code === 'VERSION_CONFLICT' || error.status === 409))
+        || (error instanceof Error && /conflict|version|409/i.test(error.message))
       setNotice({ type: 'error', text: conflict
-        ? 'A newer version exists. Refresh the catalog, then review the latest version before changing state.'
-        : error instanceof Error ? error.message : 'The state change could not be saved.' })
-      if (conflict) await refresh(true)
+        ? catalogErrorMessage(error, 'A newer version exists. Refresh the catalog, then review the latest version before changing state.')
+        : catalogErrorMessage(error, 'The state change could not be saved.') })
+      if (conflict) await refresh()
     } finally { setBusy(false) }
   }
   async function loadHistory(asset: AiAssetVersion) {
+    if (loading || loadError || historyBusy) return
+    const requestId = ++historyRequestSequence.current
+    const expectedAssetKey = assetKey(asset)
     setHistoryBusy(true)
     setHistory(null)
+    setHistoryError('')
+    const stillCurrent = () => requestId === historyRequestSequence.current
+      && selectedAssetKey.current === expectedAssetKey
     try {
       const items = await historyAiAsset(asset.id)
-      setHistory(items.filter(item => item.workspaceId === context.workspace.id).sort((a, b) => b.version - a.version))
+      if (!Array.isArray(items) || items.some(item => !item || item.workspaceId !== context.workspace.id || item.id !== asset.id))
+        throw new AiCatalogApiError(0, 'INVALID_RESPONSE', 'History included records outside this workspace.')
+      if (stillCurrent()) setHistory(items.sort((a, b) => b.version - a.version))
     } catch (error) {
-      setNotice({ type: 'error', text: error instanceof Error ? error.message : 'Version history could not be loaded.' })
-    } finally { setHistoryBusy(false) }
+      if (stillCurrent()) setHistoryError(catalogErrorMessage(error, 'Version history could not be loaded.'))
+    } finally {
+      if (stillCurrent()) setHistoryBusy(false)
+    }
   }
   function chooseHistoryVersion(version: AiAssetVersion) {
-    setSelected(version)
-    setHistory(null)
+    selectAsset(version)
+    invalidateHistory()
     setDraft(null)
     setConfirmArchive(false)
   }
@@ -444,7 +549,7 @@ export default function AiControlCenter({ mode, context }: Props) {
             className={`flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] ${active ? 'bg-[#F0EFFA] text-[#4F4DA4]' : 'text-[#62616D] hover:bg-[#F5F4F1] hover:text-[#33323E]'}`}>
             <span className={`font-mono text-[9px] ${active ? 'text-[#7775BC]' : 'text-[#AAA8B0]'}`}>{item.number}</span>
             <span className="text-[11px] font-semibold">{item.label}</span>
-            {item.id !== 'connections' && <span className="ml-auto text-[9px] text-[#9694A0]">{latestAssets.filter(asset => asset.kind === item.id && asset.state !== 'archived').length}</span>}
+            {item.id !== 'connections' && <span className="ml-auto text-[9px] text-[#9694A0]">{loading || loadError ? '—' : latestAssets.filter(asset => asset.kind === item.id && asset.state !== 'archived').length}</span>}
           </button></li>
         })}</ul>
         <div className="mx-2 mt-3 border-t border-[#ECEAE5] px-1 pt-3">
@@ -452,14 +557,17 @@ export default function AiControlCenter({ mode, context }: Props) {
         </div>
       </nav>
 
-      <main className="min-w-0">
+      <main className="min-w-0" aria-busy={loading || busy}>
         {area === 'connections' ? <Connections mode={mode} /> : <>
           <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
             <div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#74738A]">{kindTitles[kind!]}</p>
               <h3 className="mt-1 text-[19px] font-semibold tracking-[-0.03em] text-[#292834]">{areas.find(item => item.id === area)?.label}</h3>
               <p className="mt-1 max-w-2xl text-[11px] leading-5 text-[#777685]">{kindDescriptions[kind!]}</p>
             </div>
-            {canManage && <Button kind="primary" onClick={openCreate}>Create {kindTitles[kind!].toLowerCase()}</Button>}
+            {canManage && <Button kind="primary" onClick={openCreate} disabled={loading || !!loadError || busy}>Create {kindTitles[kind!].toLowerCase()}</Button>}
+          </div>
+          <div className="sr-only" role={busy || loading || historyBusy ? 'status' : undefined} aria-live="polite">
+            {loading ? 'Loading catalog definitions.' : busy ? 'Saving catalog changes.' : historyBusy ? 'Loading version history.' : ''}
           </div>
           {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
           {loadError ? <div role="alert" className="rounded-xl border border-[#E9C9C2] bg-[#FFF7F4] p-4 text-[11px] text-[#854F42]">
@@ -467,21 +575,22 @@ export default function AiControlCenter({ mode, context }: Props) {
             <Button onClick={() => { void refresh() }} disabled={loading} >Retry loading</Button>
           </div> : loading ? <CatalogSkeleton /> : visibleAssets.length === 0 ? <EmptyInset title={`No ${areas.find(item => item.id === area)?.label.toLowerCase()} yet`} text={canManage ? 'Create a definition when the team is ready to establish a versioned baseline.' : 'Persisted definitions for this area will appear here when available.'} /> : <div className="grid gap-3">
             {visibleAssets.map(asset => <AssetRow key={asset.id} asset={asset} active={selected?.id === asset.id && selected.version === asset.version}
-              onSelect={() => { setSelected(asset); setHistory(null); setDraft(null); setNotice(null) }} />)}
+              onSelect={() => { if (!loading && !loadError) { selectAsset(asset); invalidateHistory(); setDraft(null); setNotice(null) } }} />)}
           </div>}
-          {selected && selected.kind === kind && <AssetDetail asset={selected}
-            canManage={canManage && latestAssets.some(item => item.id === selected.id && item.version === selected.version)}
-            isCurrentVersion={latestAssets.some(item => item.id === selected.id && item.version === selected.version)} busy={busy}
+          {!loading && !loadError && selected && selected.kind === kind && <AssetDetail asset={selected}
+             canManage={canManage && !loading && !loadError && latestAssets.some(item => item.id === selected.id && item.version === selected.version)}
+             isCurrentVersion={latestAssets.some(item => item.id === selected.id && item.version === selected.version)} busy={busy || loading || !!loadError}
             onRevise={() => openRevise(selected)} onTransition={state => { if (state === 'archived') setConfirmArchive(true); else void transition(selected, state) }}
-            onHistory={() => { void loadHistory(selected) }} history={history} historyBusy={historyBusy}
+             onHistory={() => { void loadHistory(selected) }} history={history} historyBusy={historyBusy} historyError={historyError}
             onSelectVersion={chooseHistoryVersion} allowedTransitions={allowedTransitions} />}
-          {confirmArchive && selected && <div className="mt-3 rounded-xl border border-[#E8C9C0] bg-[#FFF8F5] p-4" role="alertdialog" aria-labelledby="archive-title" aria-describedby="archive-description">
+          {!loading && !loadError && confirmArchive && selected && <div className="mt-3 rounded-xl border border-[#E8C9C0] bg-[#FFF8F5] p-4" role="alertdialog" aria-labelledby="archive-title" aria-describedby="archive-description">
             <p id="archive-title" className="text-[12px] font-semibold text-[#75483C]">Archive this version?</p>
             <p id="archive-description" className="mt-1 text-[11px] leading-5 text-[#8A6258]">The definition remains in version history and will no longer appear among active definitions.</p>
             <div className="mt-3 flex flex-wrap gap-2"><Button kind="danger" disabled={busy} onClick={() => { void transition(selected, 'archived') }}>Archive definition</Button><Button disabled={busy} onClick={() => setConfirmArchive(false)}>Keep active</Button></div>
           </div>}
           {draft && <EditorDialog draft={draft} isRevising={isRevising} baseVersion={selected?.version} busy={busy}
             assets={latestAssets} originalAsset={isRevising ? selected : null}
+            notice={notice?.type === 'error' ? notice : null} onDismissNotice={() => setNotice(null)}
             onChange={setDraft} onSubmit={saveDraft} onClose={closeEditor} />}
         </>}
       </main>
@@ -537,7 +646,7 @@ function AssetRow({ asset, active, onSelect }: { asset: AiAssetVersion; active: 
   </button>
 }
 
-function AssetDetail({ asset, canManage, isCurrentVersion, busy, onRevise, onTransition, onHistory, history, historyBusy, onSelectVersion, allowedTransitions }: {
+function AssetDetail({ asset, canManage, isCurrentVersion, busy, onRevise, onTransition, onHistory, history, historyBusy, historyError, onSelectVersion, allowedTransitions }: {
   asset: AiAssetVersion
   canManage: boolean
   isCurrentVersion: boolean
@@ -547,6 +656,7 @@ function AssetDetail({ asset, canManage, isCurrentVersion, busy, onRevise, onTra
   onHistory: () => void
   history: AiAssetVersion[] | null
   historyBusy: boolean
+  historyError: string
   onSelectVersion: (asset: AiAssetVersion) => void
   allowedTransitions: AiVersionState[]
 }) {
@@ -578,9 +688,12 @@ function AssetDetail({ asset, canManage, isCurrentVersion, busy, onRevise, onTra
     <div className="border-t border-[#ECEAE5] pt-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><p className="text-[11px] font-semibold text-[#4A4955]">Version history</p><p className="text-[10px] text-[#92909A]">Review prior snapshots without changing them.</p></div>
-        <Button onClick={onHistory} disabled={historyBusy}>{historyBusy ? 'Loading history…' : history ? 'Reload history' : 'Load history'}</Button>
+        <Button onClick={onHistory} disabled={busy || historyBusy}>{historyBusy ? 'Loading history…' : history ? 'Reload history' : 'Load history'}</Button>
       </div>
       {historyBusy && <div role="status" className="mt-3 h-12 animate-pulse rounded-lg bg-[#F2F1EE]" />}
+      {historyError && <div role="alert" className="mt-3 rounded-lg border border-[#E9C9C2] bg-[#FFF7F4] p-3 text-[10px] leading-5 text-[#854F42]">
+        <p>{historyError}</p><Button onClick={onHistory} disabled={historyBusy || busy}>Retry history</Button>
+      </div>}
       {history && <div className="mt-3 divide-y divide-[#ECEAE5] rounded-xl border border-[#E8E6E0]">
         {history.length === 0 ? <p className="px-3 py-4 text-[10px] text-[#898793]">No history is available for this definition.</p> : history.map(version => <button key={`${version.id}:${version.version}`} type="button" onClick={() => onSelectVersion(version)}
           className="flex min-h-11 w-full flex-wrap items-center justify-between gap-2 px-3 text-left hover:bg-[#F8F7F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#5B5BD6]">
@@ -650,13 +763,15 @@ function CatalogSkeleton() {
   </div>
 }
 
-function EditorDialog({ draft, isRevising, baseVersion, busy, assets, originalAsset, onChange, onSubmit, onClose }: {
+function EditorDialog({ draft, isRevising, baseVersion, busy, assets, originalAsset, notice, onDismissNotice, onChange, onSubmit, onClose }: {
   draft: EditorDraft
   isRevising: boolean
   baseVersion?: number
   busy: boolean
   assets: AiAssetVersion[]
   originalAsset: AiAssetVersion | null
+  notice: Notice | null
+  onDismissNotice: () => void
   onChange: (draft: EditorDraft) => void
   onSubmit: (event: FormEvent) => void
   onClose: () => void
@@ -672,6 +787,7 @@ function EditorDialog({ draft, isRevising, baseVersion, busy, assets, originalAs
           <button type="button" aria-label="Close editor" onClick={onClose} disabled={busy} className="flex h-9 w-9 flex-none items-center justify-center rounded-lg text-[20px] text-[#858391] hover:bg-[#F1F0ED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] disabled:opacity-50">×</button>
         </header>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4 sm:px-6">
+          {notice && <NoticeBanner notice={notice} onDismiss={onDismissNotice} />}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name"><input autoFocus required className={inputClass} value={draft.name} maxLength={120} onChange={event => onChange({ ...draft, name: event.target.value })} placeholder={`Untitled ${kindTitles[draft.kind].toLowerCase()}`} /></Field>
             <Field label="Description" hint={`${draft.description.length}/1000`}><input className={inputClass} value={draft.description} maxLength={1000} onChange={event => onChange({ ...draft, description: event.target.value })} placeholder="Purpose and scope" /></Field>
