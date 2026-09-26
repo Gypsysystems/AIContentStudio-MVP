@@ -14,6 +14,10 @@ const connectionMigration = await readFile(
   new URL('../../supabase/migrations/20260926000400_ai_connections.sql', import.meta.url),
   'utf8',
 )
+const connectionVersionMigration = await readFile(
+  new URL('../../supabase/migrations/20260926000500_ai_connections_schema_version.sql', import.meta.url),
+  'utf8',
+)
 const api = await readFile(new URL('../../server/aiCatalogApi.ts', import.meta.url), 'utf8')
 const plugin = await readFile(new URL('../../server/projectAccessPlugin.ts', import.meta.url), 'utf8')
 const sql = migration.replace(/--.*$/gm, '').replace(/\s+/g, ' ').toLowerCase()
@@ -46,6 +50,13 @@ test('connections migration denies browser table reads and grants only a scoped 
   expect(text).toContain('pg_catalog.pg_advisory_xact_lock')
   expect(text).toContain('revoke all on public.ai_connection_audit from public, anon, authenticated, ai_connection_reader')
   expect(text).not.toContain('service_role')
+})
+
+test('AI Connections registers its deployed schema using the existing version pattern', () => {
+  const sql = connectionVersionMigration.replace(/--.*$/gm, '').replace(/\s+/g, ' ').trim().toLowerCase()
+  expect(sql).toBe(
+    "insert into public.cloud_schema_versions(component, version) values ('ai-connections', 1) on conflict (component) do update set version = excluded.version;",
+  )
 })
 
 test('AI catalog RPC creates immutable versions and guards transitions and tombstones', () => {

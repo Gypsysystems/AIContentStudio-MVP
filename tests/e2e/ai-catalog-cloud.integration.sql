@@ -294,6 +294,18 @@ reset role;
 
 -- Secure connections share only the workspace/auth fixture, not catalog storage.
 \i supabase/migrations/20260926000400_ai_connections.sql
+\i supabase/migrations/20260926000500_ai_connections_schema_version.sql
+\i supabase/migrations/20260926000500_ai_connections_schema_version.sql
+
+do $registry$
+begin
+  if (select version from public.cloud_schema_versions where component = 'ai-connections') is distinct from 1
+    or (select count(*) from public.cloud_schema_versions where component = 'ai-connections') <> 1
+    or (select version from public.cloud_schema_versions where component = 'ai-catalog') is distinct from 1 then
+    raise exception 'AI Connections registry correction is not idempotent or changed the AI catalog marker';
+  end if;
+end;
+$registry$;
 
 set role authenticated;
 set request.jwt.claim.sub = '20000000-0000-0000-0000-000000000002';
