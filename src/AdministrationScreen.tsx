@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { getAdministrationAccess } from './administrationAccess'
+import MySettings from './MySettings'
 import type { MembershipRole, ProjectAccessContext, ProjectOwnership } from './ownership'
 
 type AdministrationScreenProps = {
@@ -185,8 +186,9 @@ export default function AdministrationScreen({
           </section>
 
           <div className="flex flex-col gap-6">
+            <MySettings key={`${mode}:${context.user.id}`} mode={mode} userId={context.user.id} />
             <section aria-labelledby="workspace-settings-heading" className="rounded-2xl border border-[#E2E0DA] bg-[#FCFBF9] p-5 sm:p-6">
-               <SectionHeading id="workspace-settings-heading" index="02" eyebrow="Workspace" title="Workspace settings" description="Scope and configuration access for the current workspace." />
+               <SectionHeading id="workspace-settings-heading" index="03" eyebrow="Workspace" title="Workspace settings" description="Scope and configuration access for the current workspace." />
               <div className="divide-y divide-[#ECEAE5] rounded-xl border border-[#E8E6E0]">
                 <div className="flex items-start justify-between gap-4 px-4 py-3.5">
                   <div>
@@ -212,7 +214,7 @@ export default function AdministrationScreen({
             </section>
 
             <section aria-labelledby="project-settings-heading" className="rounded-2xl border border-[#E2E0DA] bg-[#FCFBF9] p-5 sm:p-6">
-               <SectionHeading id="project-settings-heading" index="03" eyebrow="Project" title="Project settings" description="Project details are scoped by your effective project access." />
+               <SectionHeading id="project-settings-heading" index="04" eyebrow="Project" title="Project settings" description="Project details are scoped by your effective project access." />
               {!project ? (
                 <div className="rounded-xl border border-dashed border-[#DCDAD4] bg-[#F8F7F4] px-4 py-5">
                    <p className="text-[11px] font-semibold text-[#555460]">No project selected</p>

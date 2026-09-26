@@ -15,7 +15,7 @@ import {
 import { JsonFileProjectOwnershipDirectory } from './localDevProjectAccess'
 
 const AUTH_PREFIX = '/api/auth/'
-const AUTH_ROUTES = new Set(['login', 'logout', 'refresh', 'session'])
+const AUTH_ROUTES = new Set(['login', 'logout', 'refresh', 'session', 'profile'])
 const ACCESS_COOKIE = 'sb_access_token'
 const REFRESH_COOKIE = 'sb_refresh_token'
 const MAX_BODY_BYTES = 16 * 1024
@@ -501,6 +501,10 @@ function authError(response: ServerResponse, error: unknown): void {
 }
 
 async function handleLocalDevAuth(route: string, response: ServerResponse): Promise<void> {
+  if (route === 'profile') {
+    sendJson(response, 403, { error: 'Local development has no persisted cloud profile', code: 'PROFILE_CLOUD_ONLY' })
+    return
+  }
   const profile = {
     authenticated: route !== 'logout',
     mode: 'local-dev',
@@ -510,6 +514,74 @@ async function handleLocalDevAuth(route: string, response: ServerResponse): Prom
   sendJson(response, 200, profile)
 }
 
+async function handleProfileRoute(
+  input: unknown,
+  request: IncomingMessage,
+  response: ServerResponse,
+  client: SupabaseHttpClient,
+): Promise<void> {
+  if (!isRecord(input) || (input.action !== 'read' && input.action !== 'update')
+    || Object.keys(input).some(key => !['action', 'displayName', 'expectedUpdatedAt'].includes(key))
+    || (input.action === 'read' && Object.keys(input).length !== 1)
+    || (input.action === 'update' && (typeof input.displayName !== 'string'
+      || typeof input.expectedUpdatedAt !== 'string' || input.expectedUpdatedAt.length > 80
+      || !Number.isFinite(Date.parse(input.expectedUpdatedAt))))) {
+    sendJson(response, 400, { error: 'Invalid profile request', code: 'INVALID_PROFILE_REQUEST' })
+    return
+  }
+  const displayName = input.action === 'update' ? (input.displayName as string).trim() : null
+  if (input.action === 'update' && (!displayName || displayName.length > 100)) {
+    sendJson(response, 400, { error: 'Display name must contain 1 to 100 characters', code: 'INVALID_DISPLAY_NAME' })
+    return
+  }
+  const token = cookieToken(request, ACCESS_COOKIE)
+  const user = token ? await client.user(token) : null
+  if (!token || !user) {
+    sendJson(response, 401, { error: 'Sign in to manage your profile', code: 'UNAUTHENTICATED' })
+    return
+  }
+  // Reread membership on every request. No browser-supplied user or role is trusted.
+  if (!(await client.memberships(token, user.id)).length) {
+    sendJson(response, 403, { error: 'An active workspace membership is required', code: 'MEMBERSHIP_INACTIVE' })
+    return
+  }
+  const query = new URLSearchParams({
+    select: 'id,display_name,updated_at',
+    id: `eq.${user.id}`,
+    ...(input.action === 'update' ? { updated_at: `eq.${input.expectedUpdatedAt as string}` } : { limit: '1' }),
+  })
+  const result = await client.call(`/rest/v1/profiles?${query}`, {
+    method: input.action === 'update' ? 'PATCH' : 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(input.action === 'update' ? { 'Content-Type': 'application/json', Prefer: 'return=representation' } : {}),
+    },
+    ...(input.action === 'update' ? { body: JSON.stringify({ display_name: displayName }) } : {}),
+  })
+  if (result.status === 401 || result.status === 403) {
+    sendJson(response, result.status, { error: 'Profile access is not authorized', code: 'PROFILE_FORBIDDEN' })
+    return
+  }
+  if (!result.ok) {
+    sendJson(response, 503, { error: 'Profile settings could not be saved or loaded', code: 'PROFILE_UNAVAILABLE' })
+    return
+  }
+  const rows = await parseResponse(result)
+  if (!Array.isArray(rows) || rows.length !== 1 || !isRecord(rows[0])
+    || rows[0].id !== user.id
+    || (rows[0].display_name !== null && typeof rows[0].display_name !== 'string')
+    || typeof rows[0].updated_at !== 'string' || !rows[0].updated_at) {
+    sendJson(response, input.action === 'update' && Array.isArray(rows) && rows.length === 0 ? 409 : 503, {
+      error: input.action === 'update' && Array.isArray(rows) && rows.length === 0
+        ? 'Profile changed since it was loaded. Reload before saving.'
+        : 'Profile settings could not be confirmed',
+      code: input.action === 'update' && Array.isArray(rows) && rows.length === 0 ? 'PROFILE_CONFLICT' : 'PROFILE_UNAVAILABLE',
+    })
+    return
+  }
+  sendJson(response, 200, { displayName: rows[0].display_name, updatedAt: rows[0].updated_at })
+}
+
 async function handleSupabaseRoute(
   route: string,
   request: IncomingMessage,
@@ -517,6 +589,10 @@ async function handleSupabaseRoute(
   client: SupabaseHttpClient,
 ): Promise<void> {
   const input = await readJsonBody(request)
+  if (route === 'profile') {
+    await handleProfileRoute(input, request, response, client)
+    return
+  }
 
   if (route === 'logout') {
     const accessToken = cookieToken(request, ACCESS_COOKIE)
