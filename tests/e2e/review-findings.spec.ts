@@ -40,7 +40,7 @@ async function createProject(page: Page, projectName: string) {
 async function readProject(page: Page, projectName: string): Promise<StoredProject> {
   return page.evaluate(async name => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('docflow-db', 2)
+      const request = indexedDB.open('docflow-db', 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })
@@ -62,7 +62,7 @@ async function patchProject(
 ) {
   await page.evaluate(async ({ name, values }) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('docflow-db', 2)
+      const request = indexedDB.open('docflow-db', 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })

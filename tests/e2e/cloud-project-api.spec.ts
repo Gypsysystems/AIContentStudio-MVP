@@ -51,7 +51,10 @@ test.describe('workspace cloud project API', () => {
         return reply([{ workspace_id: 'workspace-1', role }])
       }
       if (url.pathname === '/rest/v1/cloud_schema_versions') {
-        return storageReady ? reply([{ component: 'project-storage', version: 2 }]) : reply([], 404)
+        const component = url.searchParams.get('component')?.slice(3)
+        return storageReady
+          ? reply([{ component, version: component === 'project-checkpoints' ? 3 : 2 }])
+          : reply([], 404)
       }
       if (url.pathname === '/rest/v1/workspace_role_permissions') {
         const permissions: Record<string, string[]> = {
@@ -64,8 +67,13 @@ test.describe('workspace cloud project API', () => {
       }
       if (url.pathname === '/rest/v1/cloud_projects' && url.searchParams.get('limit') === '0') return reply([])
       if (url.pathname === '/rest/v1/cloud_project_files' && url.searchParams.get('limit') === '0') return reply([])
+      if (url.pathname === '/rest/v1/cloud_project_checkpoints' && url.searchParams.get('limit') === '0') return reply([])
+      if (url.pathname === '/rest/v1/cloud_project_deletions' && url.searchParams.get('limit') === '0') return reply([])
       if (url.pathname === '/storage/v1/bucket/project-files') {
         return storageReady ? reply({ id: 'project-files', public: false }) : reply({}, 404)
+      }
+      if (url.pathname === '/storage/v1/bucket/project-checkpoints') {
+        return storageReady ? reply({ id: 'project-checkpoints', public: false }) : reply({}, 404)
       }
       if (projectPatch) return projectPatch(url, init)
       throw new Error(`Unexpected provider call: ${url.pathname}`)
@@ -104,23 +112,31 @@ test.describe('workspace cloud project API', () => {
         expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer user-jwt')
         if (url.pathname === '/rest/v1/cloud_schema_versions'
           || url.pathname === '/rest/v1/workspace_role_permissions') {
-          initialChecks.add(url.pathname)
-          if (initialChecks.size === 2) releaseInitial()
+          initialChecks.add(url.pathname === '/rest/v1/cloud_schema_versions'
+            ? `${url.pathname}:${url.searchParams.get('component')}`
+            : url.pathname)
+          if (initialChecks.size === 3) releaseInitial()
           await initialReady
           if (url.pathname === '/rest/v1/cloud_schema_versions')
-            return reply([{ component: 'project-storage', version: 2 }])
+            return reply([{
+              component: url.searchParams.get('component')?.slice(3),
+              version: url.searchParams.get('component')?.slice(3) === 'project-checkpoints' ? 3 : 2,
+            }])
           return reply(['create', 'read', 'write', 'duplicate', 'backup', 'restore-new']
             .map(permission => ({ permission })))
         }
 
         if (url.pathname === '/rest/v1/cloud_projects'
           || url.pathname === '/rest/v1/cloud_project_files'
-          || url.pathname === '/storage/v1/bucket/project-files') {
+          || url.pathname === '/rest/v1/cloud_project_checkpoints'
+          || url.pathname === '/rest/v1/cloud_project_deletions'
+          || url.pathname === '/storage/v1/bucket/project-files'
+          || url.pathname === '/storage/v1/bucket/project-checkpoints') {
           resourceChecks.add(url.pathname)
-          if (resourceChecks.size === 3) releaseResources()
+          if (resourceChecks.size === 6) releaseResources()
           await resourcesReady
-          if (url.pathname === '/storage/v1/bucket/project-files')
-            return reply({ id: 'project-files', public: false })
+          if (url.pathname.startsWith('/storage/v1/bucket/'))
+            return reply({ id: url.pathname.split('/').at(-1), public: false })
           return reply([])
         }
         throw new Error(`Unexpected provider call: ${url.pathname}`)
@@ -131,12 +147,16 @@ test.describe('workspace cloud project API', () => {
       const api = await CloudProjectApi.fromRequest(request())
       expect(await api.execute({ action: 'ready' })).toEqual({ ready: true })
       expect([...initialChecks].sort()).toEqual([
-        '/rest/v1/cloud_schema_versions',
+        '/rest/v1/cloud_schema_versions:eq.project-checkpoints',
+        '/rest/v1/cloud_schema_versions:eq.project-storage',
         '/rest/v1/workspace_role_permissions',
       ])
       expect([...resourceChecks].sort()).toEqual([
+        '/rest/v1/cloud_project_checkpoints',
+        '/rest/v1/cloud_project_deletions',
         '/rest/v1/cloud_project_files',
         '/rest/v1/cloud_projects',
+        '/storage/v1/bucket/project-checkpoints',
         '/storage/v1/bucket/project-files',
       ])
     } finally {

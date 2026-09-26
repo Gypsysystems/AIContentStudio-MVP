@@ -129,7 +129,7 @@ async function createProject(page: Page, projectName: string) {
 async function readProject(page: Page, projectName: string): Promise<Record<string, any>> {
   return page.evaluate(async name => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })
@@ -147,7 +147,7 @@ async function readProject(page: Page, projectName: string): Promise<Record<stri
 async function patchProject(page: Page, projectName: string, patch: Record<string, unknown>) {
   await page.evaluate(async ({ name, values }) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })

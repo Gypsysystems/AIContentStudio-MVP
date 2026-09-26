@@ -115,7 +115,7 @@ test("imports reviewed semantic palette into the existing profile tokens without
   await page.getByRole("button", { name: "Save as New Brand & Style Profile" }).click()
   const readSavedStyle = () => page.evaluate(async projectName => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })

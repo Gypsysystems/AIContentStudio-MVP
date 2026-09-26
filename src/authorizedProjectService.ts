@@ -232,6 +232,37 @@ const authorizedLocalProjectRepository: ProjectRepository = {
     await guard('write', file.projectId)
     return local.removeFile(fileId)
   },
+  async captureProjectCheckpoint(projectId, expectedRevision, expectedFileIds, reason, context) {
+    noClientClaims(context)
+    await guard('write', projectId)
+    return local.captureProjectCheckpoint(projectId, expectedRevision, expectedFileIds, reason)
+  },
+  async listProjectCheckpoints(projectId, context) {
+    noClientClaims(context)
+    await guard('read', projectId)
+    return local.listProjectCheckpoints(projectId)
+  },
+  async getProjectCheckpoint(projectId, checkpointId, context) {
+    noClientClaims(context)
+    try {
+      await guard('read', projectId)
+    } catch (error) {
+      if (error instanceof ProjectAccessApiError && error.status === 404) return null
+      throw error
+    }
+    return local.getProjectCheckpoint(projectId, checkpointId)
+  },
+  async verifyProjectCheckpoint(projectId, checkpointId, context) {
+    noClientClaims(context)
+    try {
+      await guard('read', projectId)
+    } catch (error) {
+      if (error instanceof ProjectAccessApiError && error.status === 404)
+        return { valid: false, issues: ['Checkpoint does not exist in this project.'] }
+      throw error
+    }
+    return local.verifyProjectCheckpoint(projectId, checkpointId)
+  },
   getActiveProjectId: local.getActiveProjectId,
   setActiveProjectId: local.setActiveProjectId,
 }
@@ -262,6 +293,10 @@ export const authorizedProjectRepository: ProjectRepository = {
   loadProjectFiles: (...args) => selected().loadProjectFiles(...args),
   loadFile: (...args) => selected().loadFile(...args),
   removeFile: (...args) => selected().removeFile(...args),
+  captureProjectCheckpoint: (...args) => selected().captureProjectCheckpoint(...args),
+  listProjectCheckpoints: (...args) => selected().listProjectCheckpoints(...args),
+  getProjectCheckpoint: (...args) => selected().getProjectCheckpoint(...args),
+  verifyProjectCheckpoint: (...args) => selected().verifyProjectCheckpoint(...args),
   getActiveProjectId: (...args) => selected().getActiveProjectId(...args),
   setActiveProjectId: (...args) => selected().setActiveProjectId(...args),
 }

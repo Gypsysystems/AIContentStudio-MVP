@@ -76,7 +76,7 @@ async function readStoredState(page: Page): Promise<{
 }> {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })

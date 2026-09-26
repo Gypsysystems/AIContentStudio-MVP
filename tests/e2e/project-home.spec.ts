@@ -180,7 +180,7 @@ async function createProject(page: Page, name: string) {
 async function readStoredProject(page: Page, name: string): Promise<HomeStoredProject> {
   return page.evaluate(async projectName => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })
@@ -198,7 +198,7 @@ async function readStoredProject(page: Page, name: string): Promise<HomeStoredPr
 async function patchStoredProject(page: Page, name: string, patch: Record<string, unknown>) {
   await page.evaluate(async ({ projectName, values }) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })
@@ -221,7 +221,7 @@ async function patchStoredProject(page: Page, name: string, patch: Record<string
 async function fillMissingAuthorTopics(page: Page, name: string) {
   return page.evaluate(async projectName => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })

@@ -124,7 +124,7 @@ async function createProjectAtSources(page: Page, name: string) {
 async function readProjects(page: Page): Promise<StoredProject[]> {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })
@@ -169,7 +169,7 @@ async function seedAnalyzableContent(
 ) {
   await page.evaluate(async ({ name, nextBlocks, shouldClear }) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("docflow-db", 2)
+      const request = indexedDB.open("docflow-db", 3)
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })

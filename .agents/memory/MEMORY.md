@@ -23,6 +23,7 @@
 - [Local ownership boundary](local-ownership-boundary.md) — only fully unowned legacy records get local ownership; current membership role gates project actions.
 - [Server-authorized local bridge](server-authorized-local-bridge.md) — server-owned identity and ownership metadata gate app actions, but browser IndexedDB is not a production security boundary.
 - [Cloud file cleanup boundary](cloud-file-cleanup-boundary.md) — PostgreSQL and private Storage cannot commit together; retain cleanup authority and retry until bytes are gone.
+- [Checkpoint capture guards](checkpoint-capture-guards.md) — async hashing requires a per-write file token guard at commit to prevent same-size byte races.
 - [Responsive cloud navigation](responsive-cloud-navigation.md) — cloud sections can change before queued writes settle; keep local barriers and explicit save failures.
 - [Project Home entry boundary](project-home-entry-boundary.md) — opening from Projects lands on Home, while active-project reload retains the earlier Sources destination.
 - [Cloud naming migration safety](cloud-naming-migration-safety.md) — normalize SQL and client names identically; backfills must advance revision guards on renamed records.

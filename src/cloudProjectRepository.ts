@@ -14,13 +14,26 @@ import { LOCAL_ACCESS_CONTEXT, authorizeWorkspace, type ProjectAccessContext, ty
 import { getAccessContext } from './authSession'
 import { validateRestorableProjectRecord } from './projectMigrations'
 import { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from './projectNames'
+import {
+  checkpointSha256, validateCheckpointReason,
+  verifyCheckpointRead, type CheckpointVerification, type ProjectCheckpoint,
+  type ProjectCheckpointRead, type ProjectCheckpointSummary,
+} from './projectCheckpoint'
 
 type CloudAction = 'ready' | 'list' | 'create' | 'read' | 'backup' | 'save' | 'delete'
   | 'duplicate' | 'load-files' | 'load-file' | 'remove-file'
   | 'restore-new' | 'restore-replace' | 'finalize-restore' | 'abandon-restore'
+  | 'capture-checkpoint' | 'list-checkpoints' | 'get-checkpoint' | 'cleanup-checkpoint-stage'
+  | 'cleanup-project-deletion'
 
 export class CloudProjectApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string, readonly suggestedName?: string) {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+    readonly suggestedName?: string,
+    readonly details?: Record<string, unknown>,
+  ) {
     super(message)
     this.name = 'CloudProjectApiError'
   }
@@ -100,7 +113,8 @@ async function cloudRequest(action: CloudAction, fields: Record<string, unknown>
     throw new CloudProjectApiError(response.status, String(body.code ?? 'CLOUD_REQUEST_FAILED'),
       String(body.code === 'PROJECT_NAME_CONFLICT' && typeof body.suggestedName === 'string'
         ? `${String(body.error ?? body.message ?? 'A project with this name already exists in the workspace.')} Try “${body.suggestedName}”.`
-        : body.error ?? body.message ?? 'Cloud project request failed.'))
+        : body.error ?? body.message ?? 'Cloud project request failed.'),
+      typeof body.suggestedName === 'string' ? body.suggestedName : undefined, body)
   return body
 }
 
@@ -128,6 +142,52 @@ async function binaryFile(fileId: string): Promise<Blob> {
   })
   if (!response.ok) throw new CloudProjectApiError(response.status, 'FILE_DOWNLOAD_FAILED', 'Could not download a cloud project file.')
   return response.blob()
+}
+
+async function checkpointBinaryFile(checkpointId: string, fileId: string): Promise<Blob> {
+  const response = await fetch(`/api/cloud-files?checkpointId=${encodeURIComponent(checkpointId)}&fileId=${encodeURIComponent(fileId)}`, {
+    credentials: 'same-origin', cache: 'no-store',
+  })
+  if (!response.ok) throw new CloudProjectApiError(response.status, 'CHECKPOINT_FILE_DOWNLOAD_FAILED', 'Could not download a checkpoint file.')
+  return response.blob()
+}
+
+function checkpointFromApi(value: unknown, summary = false): ProjectCheckpoint {
+  const raw = object(value)
+  if (!Array.isArray(raw.files) || (!summary && (!raw.record || typeof raw.record !== 'object' || Array.isArray(raw.record)))
+    || typeof raw.checkpointId !== 'string' || typeof raw.projectId !== 'string'
+    || typeof raw.workspaceId !== 'string' || typeof raw.actorUserId !== 'string'
+    || typeof raw.reason !== 'string' || !Number.isSafeInteger(raw.createdAt)
+    || !Number.isSafeInteger(raw.originatingRecordRevision) || !Number.isSafeInteger(raw.recordSchemaVersion)
+    || typeof raw.recordDigest !== 'string' || typeof raw.integrityDigest !== 'string'
+    || !(raw.parentCheckpointId === null || typeof raw.parentCheckpointId === 'string'))
+    throw new Error('Cloud checkpoint server returned invalid checkpoint metadata.')
+  const files = raw.files.map(value => {
+    const file = object(value)
+    if (typeof file.fileId !== 'string' || typeof file.name !== 'string' || typeof file.type !== 'string'
+      || !Number.isSafeInteger(file.size) || !Number.isSafeInteger(file.uploadedAt)
+      || typeof file.sha256 !== 'string' || typeof file.storageRef !== 'string')
+      throw new Error('Cloud checkpoint server returned invalid file metadata.')
+    return {
+      fileId: file.fileId, name: file.name, type: file.type, size: file.size as number,
+      uploadedAt: file.uploadedAt as number, sha256: file.sha256, storageRef: file.storageRef,
+    }
+  })
+  let checkpointRecord: ProjectRecord
+  if (summary) {
+    checkpointRecord = {} as ProjectRecord
+  } else {
+    // Keep the server record untouched so digest verification always hashes
+    // the exact immutable snapshot, including schemas this client cannot restore.
+    checkpointRecord = raw.record as ProjectRecord
+  }
+  return {
+    checkpointId: raw.checkpointId, projectId: raw.projectId, workspaceId: raw.workspaceId,
+    parentCheckpointId: raw.parentCheckpointId as string | null, reason: raw.reason, actorUserId: raw.actorUserId,
+    createdAt: raw.createdAt as number, originatingRecordRevision: raw.originatingRecordRevision as number,
+    recordSchemaVersion: raw.recordSchemaVersion as number, recordDigest: raw.recordDigest,
+    integrityDigest: raw.integrityDigest, record: checkpointRecord, files,
+  }
 }
 
 async function uploadFile(projectId: string, file: StoredFile, stageId?: string): Promise<StoredFile> {
@@ -344,6 +404,11 @@ export const cloudProjectRepository = {
     requireClientPermission('delete')
     await cloudRequest('delete', { projectId })
   },
+  async retryProjectDeletionCleanup(deletionId: string, context?: ProjectAccessContext): Promise<void> {
+    void context
+    requireClientPermission('delete')
+    await cloudRequest('cleanup-project-deletion', { deletionId })
+  },
   async duplicateProject(sourceId: string, newName: string, context?: ProjectAccessContext) {
     void context
     requireClientPermission('duplicate')
@@ -424,6 +489,71 @@ export const cloudProjectRepository = {
     void context
     requireClientPermission('write')
     await cloudRequest('remove-file', { fileId })
+  },
+  async captureProjectCheckpoint(
+    projectId: string,
+    expectedRevision: number,
+    expectedFileIds: string[],
+    reason: string,
+    context?: ProjectAccessContext,
+  ): Promise<ProjectCheckpoint> {
+    void context
+    requireClientPermission('write')
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+      throw new Error('Checkpoint expectedRevision must be a nonnegative integer.')
+    const reply = await cloudRequest('capture-checkpoint', {
+      projectId, expectedRevision, expectedFileIds, reason: validateCheckpointReason(reason),
+    })
+    return checkpointFromApi(reply.checkpoint)
+  },
+  async listProjectCheckpoints(projectId: string, context?: ProjectAccessContext): Promise<ProjectCheckpointSummary[]> {
+    void context
+    const reply = await cloudRequest('list-checkpoints', { projectId })
+    if (!Array.isArray(reply.checkpoints)) throw new Error('Cloud checkpoint server returned an invalid checkpoint list.')
+    return reply.checkpoints.map(value => {
+      const checkpoint = checkpointFromApi(value, true)
+      const { record: _record, ...summary } = checkpoint
+      return summary
+    })
+  },
+  async getProjectCheckpoint(projectId: string, checkpointId: string, context?: ProjectAccessContext): Promise<ProjectCheckpointRead | null> {
+    void context
+    let reply: Record<string, unknown>
+    try {
+      reply = await cloudRequest('get-checkpoint', { projectId, checkpointId })
+    } catch (error) {
+      if (error instanceof CloudProjectApiError && error.status === 404) return null
+      throw error
+    }
+    const checkpoint = checkpointFromApi(reply.checkpoint)
+    const files: StoredFile[] = []
+    for (const item of checkpoint.files) {
+      const blob = await checkpointBinaryFile(checkpointId, item.fileId)
+      if (blob.size !== item.size || await checkpointSha256(blob) !== item.sha256)
+        throw new Error(`Checkpoint file "${item.name}" failed its stored digest verification.`)
+      files.push({
+        fileId: item.fileId, projectId, name: item.name, type: item.type,
+        size: item.size, uploadedAt: item.uploadedAt, blob,
+      })
+    }
+    return { checkpoint, files }
+  },
+  async verifyProjectCheckpoint(projectId: string, checkpointId: string, context?: ProjectAccessContext): Promise<CheckpointVerification> {
+    try {
+      const read = await cloudProjectRepository.getProjectCheckpoint(projectId, checkpointId, context)
+      if (!read) return { valid: false, issues: ['Checkpoint was not found.'] }
+      return verifyCheckpointRead(read)
+    } catch (error) {
+      return {
+        valid: false,
+        issues: [error instanceof Error ? `Checkpoint could not be fully verified: ${error.message}` : 'Checkpoint could not be fully verified.'],
+      }
+    }
+  },
+  async cleanupProjectCheckpointStage(checkpointId: string, context?: ProjectAccessContext): Promise<void> {
+    void context
+    requireClientPermission('write')
+    await cloudRequest('cleanup-checkpoint-stage', { checkpointId })
   },
   getActiveProjectId() { return localStorage.getItem(activeKey()) },
   setActiveProjectId(projectId: string | null) {

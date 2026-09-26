@@ -18,6 +18,10 @@ export interface ProjectRepository {
   loadProjectFiles: typeof indexedDb.loadProjectFiles
   loadFile: typeof indexedDb.loadFile
   removeFile: typeof indexedDb.removeFile
+  captureProjectCheckpoint: typeof indexedDb.captureProjectCheckpoint
+  listProjectCheckpoints: typeof indexedDb.listProjectCheckpoints
+  getProjectCheckpoint: typeof indexedDb.getProjectCheckpoint
+  verifyProjectCheckpoint: typeof indexedDb.verifyProjectCheckpoint
   getActiveProjectId: typeof indexedDb.getActiveProjectId
   setActiveProjectId: typeof indexedDb.setActiveProjectId
 }
@@ -36,6 +40,10 @@ export const indexedDbProjectRepository: ProjectRepository = {
   loadProjectFiles: indexedDb.loadProjectFiles,
   loadFile: indexedDb.loadFile,
   removeFile: indexedDb.removeFile,
+  captureProjectCheckpoint: indexedDb.captureProjectCheckpoint,
+  listProjectCheckpoints: indexedDb.listProjectCheckpoints,
+  getProjectCheckpoint: indexedDb.getProjectCheckpoint,
+  verifyProjectCheckpoint: indexedDb.verifyProjectCheckpoint,
   getActiveProjectId: indexedDb.getActiveProjectId,
   setActiveProjectId: indexedDb.setActiveProjectId,
 }
@@ -51,3 +59,9 @@ export type {
   RestoreProjectSnapshotOptions,
   StoredFile,
 } from './projectRepository'
+export type {
+  CheckpointVerification,
+  ProjectCheckpoint,
+  ProjectCheckpointRead,
+  ProjectCheckpointSummary,
+} from './projectCheckpoint'

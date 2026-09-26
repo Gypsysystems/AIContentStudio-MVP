@@ -39,15 +39,22 @@ import {
 import {
   normalizeProjectName, projectNameKey, suggestUniqueProjectName,
 } from './projectNames'
+import {
+  checkpointIntegrityDigest, checkpointSha256, canonicalCheckpointJson, validateCheckpointReason,
+  verifyCheckpointRead, type CheckpointVerification, type ProjectCheckpoint,
+  type ProjectCheckpointRead, type ProjectCheckpointSummary,
+} from './projectCheckpoint'
 
 export { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from './projectNames'
 
 export const SCHEMA_VERSION = CURRENT_PROJECT_SCHEMA_VERSION
 export { migrateProjectRecord, UnsupportedProjectSchemaError } from './projectMigrations'
 const DB_NAME = 'docflow-db'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const STORE_PROJECTS = 'projects'
 const STORE_FILES = 'files'
+const STORE_CHECKPOINTS = 'projectCheckpoints'
+const STORE_CHECKPOINT_FILES = 'projectCheckpointFiles'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -59,6 +66,8 @@ export type StoredFile = {
   size: number
   uploadedAt: number
   blob: Blob
+  /** Changes on every local persistence write; absent only on pre-token legacy rows. */
+  writeToken?: string
 }
 
 export type ProjectSnapshot = {
@@ -160,6 +169,14 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_FILES)) {
         const fs = db.createObjectStore(STORE_FILES, { keyPath: 'fileId' })
         fs.createIndex('projectId', 'projectId', { unique: false })
+      }
+      if (!db.objectStoreNames.contains(STORE_CHECKPOINTS)) {
+        const checkpoints = db.createObjectStore(STORE_CHECKPOINTS, { keyPath: 'checkpointId' })
+        checkpoints.createIndex('projectId', 'projectId', { unique: false })
+      }
+      if (!db.objectStoreNames.contains(STORE_CHECKPOINT_FILES)) {
+        db.createObjectStore(STORE_CHECKPOINT_FILES, { keyPath: ['checkpointId', 'fileId'] })
+          .createIndex('checkpointId', 'checkpointId', { unique: false })
       }
     }
     req.onsuccess = (e) => {
@@ -489,13 +506,23 @@ export async function deleteProject(
 ): Promise<void> {
   authorizeWorkspace(context, 'read')
   const db = await openDB()
-  await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
+  await tx(db, [STORE_PROJECTS, STORE_FILES, STORE_CHECKPOINTS, STORE_CHECKPOINT_FILES],
+    'readwrite', async ([ps, fs, cs, cfs]) => {
     const raw = await getByKey<ProjectRecord>(ps, projectId)
     if (!raw) return
     authorizeProject(context, migrateProjectRecord(raw).record, 'delete')
     await deleteByKey(ps, projectId)
     const projectFiles = await getAllByIndex<StoredFile>(fs, 'projectId', projectId)
     for (const f of projectFiles) await deleteByKey(fs, f.fileId)
+    // A deliberate whole-project deletion also removes its retained history.
+    // File-level removal and replacement do not touch either history store.
+    const checkpoints = await getAllByIndex<ProjectCheckpoint>(cs, 'projectId', projectId)
+    for (const checkpoint of checkpoints) {
+      const checkpointFiles = await getAllByIndex<StoredCheckpointFile>(cfs, 'checkpointId', checkpoint.checkpointId)
+      for (const file of checkpointFiles)
+        await deleteByKey(cfs, [checkpoint.checkpointId, file.fileId])
+      await deleteByKey(cs, checkpoint.checkpointId)
+    }
   })
 }
 
@@ -682,6 +709,10 @@ function freshId(prefix: string): string {
   return `${prefix}-${randomId}`
 }
 
+function withFreshFileWriteToken(file: StoredFile): StoredFile {
+  return { ...file, writeToken: freshId('file-write') }
+}
+
 export async function restoreProjectSnapshot(
   input: ProjectSnapshot,
   options: RestoreProjectSnapshotOptions,
@@ -715,7 +746,7 @@ export async function restoreProjectSnapshot(
           throw new Error(`A file with generated ID "${file.fileId}" already exists.`)
       }
       await put(ps, restored.record)
-      for (const file of restored.files) await put(fs, file)
+      for (const file of restored.files) await put(fs, withFreshFileWriteToken(file))
     })
     return restored.record
   }
@@ -770,7 +801,8 @@ export async function restoreProjectSnapshot(
     }
     for (const fileId of existingFileIds) await deleteByKey(fs, fileId)
     await put(ps, restored)
-    for (const file of snapshot.files) await put(fs, { ...file, projectId: current.projectId })
+    for (const file of snapshot.files)
+      await put(fs, withFreshFileWriteToken({ ...file, projectId: current.projectId }))
   })
   return restored!
 }
@@ -824,7 +856,7 @@ export async function duplicateProject(
         throw new Error(`Duplicate file ID "${file.fileId}" already exists.`)
     }
     await put(ps, copy)
-    for (const f of newFiles) await put(fs, f)
+    for (const f of newFiles) await put(fs, withFreshFileWriteToken(f))
   })
   return copy
 }
@@ -836,7 +868,10 @@ export async function saveFile(
 ): Promise<StoredFile> {
   const db = await openDB()
   const fileId = `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const stored: StoredFile = { fileId, projectId, name: file.name, type: file.type, size: file.size, uploadedAt: Date.now(), blob: file }
+  const stored: StoredFile = withFreshFileWriteToken({
+    fileId, projectId, name: file.name, type: file.type, size: file.size,
+    uploadedAt: Date.now(), blob: file,
+  })
   await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
     const project = await getByKey<ProjectRecord>(ps, projectId)
     if (!project) throw new Error(`Project "${projectId}" does not exist.`)
@@ -893,6 +928,259 @@ export async function removeFile(
     authorizeProject(context, migrateProjectRecord(project).record, 'write')
     await deleteByKey(fs, fileId)
   })
+}
+
+type StoredCheckpointFile = {
+  checkpointId: string
+  fileId: string
+  projectId: string
+  name: string
+  type: string
+  size: number
+  uploadedAt: number
+  blob: Blob
+}
+
+function sortedIds(ids: string[]): string[] {
+  return [...ids].sort((a, b) => a.localeCompare(b))
+}
+
+function assertExpectedFileIds(ids: string[]): void {
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id)
+    || new Set(ids).size !== ids.length)
+    throw new Error('Checkpoint capture requires a valid snapshot of the project files.')
+}
+
+function validateCheckpointSourceSet(record: ProjectRecord, files: StoredFile[]): void {
+  const byId = new Map<string, StoredFile>()
+  for (const file of files) {
+    if (!file || typeof file.fileId !== 'string' || !file.fileId
+      || byId.has(file.fileId) || file.projectId !== record.projectId
+      || typeof file.name !== 'string' || typeof file.type !== 'string'
+      || !Number.isSafeInteger(file.size) || file.size < 0
+      || !Number.isSafeInteger(file.uploadedAt) || !file.blob
+      || file.blob.size !== file.size)
+      throw new Error('Project checkpoint contains an invalid or inconsistent live file.')
+    byId.set(file.fileId, file)
+  }
+  if (!Array.isArray(record.sourceFileIds)
+    || new Set(record.sourceFileIds).size !== record.sourceFileIds.length
+    || record.sourceFileIds.some(id => typeof id !== 'string' || !byId.has(id)))
+    throw new Error('Project checkpoint cannot be captured because a source reference is missing.')
+}
+
+function freshCheckpointId(): string {
+  const randomId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+  return `checkpoint-${randomId}`
+}
+
+async function readAuthorizedCheckpoint(
+  projectId: string,
+  checkpointId: string,
+  context: ProjectAccessContext,
+  requireCompleteFiles = true,
+): Promise<ProjectCheckpointRead | null> {
+  authorizeWorkspace(context, 'read')
+  const db = await openDB()
+  let result: ProjectCheckpointRead | null = null
+  await tx(db, [STORE_PROJECTS, STORE_CHECKPOINTS, STORE_CHECKPOINT_FILES], 'readonly',
+    async ([ps, cs, fs]) => {
+      const rawProject = await getByKey<ProjectRecord>(ps, projectId)
+      if (!rawProject) return
+      const project = migrateProjectRecord(rawProject).record
+      authorizeProject(context, project, 'read')
+      const checkpoint = await getByKey<ProjectCheckpoint>(cs, checkpointId)
+      if (!checkpoint || checkpoint.projectId !== projectId) return
+      if (checkpoint.workspaceId !== project.workspaceId)
+        throw new Error('Checkpoint workspace does not match its project.')
+      if (requireCompleteFiles && (checkpoint.record.projectId !== projectId
+        || checkpoint.record.workspaceId !== project.workspaceId))
+        throw new Error('Checkpoint record does not match its project scope.')
+      const storedFiles = await getAllByIndex<StoredCheckpointFile>(fs, 'checkpointId', checkpointId)
+      const scopedFiles = storedFiles.filter(file => file.projectId === projectId)
+      if (requireCompleteFiles && (scopedFiles.length !== storedFiles.length
+        || scopedFiles.length !== checkpoint.files.length
+        || new Set(scopedFiles.map(file => file.fileId)).size !== scopedFiles.length))
+        throw new Error('Checkpoint file store is incomplete or scoped to another project.')
+      const filesById = new Map(scopedFiles.map(file => [file.fileId, file]))
+      if (requireCompleteFiles && checkpoint.files.some(file => !filesById.has(file.fileId)))
+        throw new Error('Checkpoint manifest does not match its immutable file store.')
+      result = {
+        checkpoint,
+        files: scopedFiles.map(({ checkpointId: _checkpointId, ...file }) => file),
+      }
+    })
+  return result
+}
+
+/** Append an immutable point-in-time copy guarded by the live revision and file set. */
+export async function captureProjectCheckpoint(
+  projectId: string,
+  expectedRevision: number,
+  expectedFileIds: string[],
+  reason: string,
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectCheckpoint> {
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+    throw new Error('Expected project revision must be a nonnegative integer.')
+  assertExpectedFileIds(expectedFileIds)
+  const note = validateCheckpointReason(reason)
+  authorizeWorkspace(context, 'write')
+  const db = await openDB()
+
+  const prepared: {
+    record?: ProjectRecord
+    files: StoredFile[]
+    parentCheckpointId: string | null
+  } = { files: [], parentCheckpointId: null }
+  await tx(db, [STORE_PROJECTS, STORE_FILES, STORE_CHECKPOINTS], 'readonly', async ([ps, fs, cs]) => {
+    const raw = await getByKey<ProjectRecord>(ps, projectId)
+    if (!raw) throw new Error(`Project "${projectId}" does not exist.`)
+    const record = migrateProjectRecord(raw).record
+    authorizeProject(context, record, 'write')
+    if (record.recordRevision !== expectedRevision)
+      throw new ProjectConflictError(projectId, expectedRevision, record.recordRevision)
+    const files = await getAllByIndex<StoredFile>(fs, 'projectId', projectId)
+    if (sortedIds(files.map(file => file.fileId)).join('\0')
+      !== sortedIds(expectedFileIds).join('\0'))
+      throw new Error(`Project files changed before checkpoint capture for "${projectId}".`)
+    validateCheckpointSourceSet(record, files)
+    const history = await getAllByIndex<ProjectCheckpoint>(cs, 'projectId', projectId)
+    const parent = history
+      .filter(item => item.workspaceId === record.workspaceId)
+      .sort((a, b) => b.createdAt - a.createdAt || b.checkpointId.localeCompare(a.checkpointId))[0]
+    prepared.record = record
+    prepared.files = files
+    prepared.parentCheckpointId = parent?.checkpointId ?? null
+  })
+  if (!prepared.record) throw new Error(`Project "${projectId}" does not exist.`)
+
+  const record = prepared.record
+  const orderedFiles = [...prepared.files].sort((a, b) => a.fileId.localeCompare(b.fileId))
+  const checkpointId = freshCheckpointId()
+  // Hashing must finish before opening the committing transaction: WebCrypto can
+  // otherwise let IndexedDB auto-commit while the transaction is suspended.
+  const manifests = await Promise.all(orderedFiles.map(async file => ({
+    fileId: file.fileId,
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    uploadedAt: file.uploadedAt,
+    sha256: await checkpointSha256(file.blob),
+    storageRef: `${checkpointId}/${file.fileId}`,
+  })))
+  const createdAt = Date.now()
+  const baseCheckpoint: Omit<ProjectCheckpoint, 'integrityDigest'> = {
+    checkpointId,
+    workspaceId: record.workspaceId,
+    projectId,
+    parentCheckpointId: prepared.parentCheckpointId,
+    reason: note,
+    actorUserId: context.user.id,
+    createdAt,
+    originatingRecordRevision: record.recordRevision,
+    recordSchemaVersion: record.schemaVersion,
+    recordDigest: await checkpointSha256(canonicalCheckpointJson(record)),
+    record: structuredClone(record),
+    files: manifests,
+  }
+  const integrityDigest = await checkpointIntegrityDigest(baseCheckpoint)
+  const checkpoint: ProjectCheckpoint = { ...baseCheckpoint, integrityDigest }
+
+  await tx(db, [STORE_PROJECTS, STORE_FILES, STORE_CHECKPOINTS, STORE_CHECKPOINT_FILES],
+    'readwrite', async ([ps, liveFilesStore, checkpointStore, checkpointFilesStore]) => {
+      const raw = await getByKey<ProjectRecord>(ps, projectId)
+      if (!raw) throw new Error(`Project "${projectId}" was deleted during checkpoint capture.`)
+      const current = migrateProjectRecord(raw).record
+      authorizeProject(context, current, 'write')
+      if (current.recordRevision !== expectedRevision)
+        throw new ProjectConflictError(projectId, expectedRevision, current.recordRevision)
+      const liveFiles = await getAllByIndex<StoredFile>(liveFilesStore, 'projectId', projectId)
+      const liveIds = sortedIds(liveFiles.map(file => file.fileId))
+      if (liveIds.join('\0') !== sortedIds(expectedFileIds).join('\0')
+        || liveIds.join('\0') !== orderedFiles.map(file => file.fileId).join('\0'))
+        throw new Error(`Project files changed during checkpoint capture for "${projectId}".`)
+      validateCheckpointSourceSet(current, liveFiles)
+      const preparedById = new Map(orderedFiles.map(file => [file.fileId, file]))
+      if (liveFiles.some(file => {
+        const prepared = preparedById.get(file.fileId)
+        return !prepared || file.projectId !== prepared.projectId || file.name !== prepared.name
+          || file.type !== prepared.type || file.size !== prepared.size
+          || file.uploadedAt !== prepared.uploadedAt || file.blob.size !== prepared.blob.size
+          || file.writeToken !== prepared.writeToken
+      }))
+        throw new Error(`Project file metadata changed during checkpoint capture for "${projectId}".`)
+      if (await getByKey<ProjectCheckpoint>(checkpointStore, checkpointId))
+        throw new Error(`Checkpoint ID "${checkpointId}" already exists.`)
+      const history = await getAllByIndex<ProjectCheckpoint>(checkpointStore, 'projectId', projectId)
+      const parent = history
+        .filter(item => item.workspaceId === current.workspaceId)
+        .sort((a, b) => b.createdAt - a.createdAt || b.checkpointId.localeCompare(a.checkpointId))[0]
+      if ((parent?.checkpointId ?? null) !== prepared.parentCheckpointId)
+        throw new Error(`Checkpoint history changed during capture for project "${projectId}".`)
+      for (const file of orderedFiles) {
+        if (await getByKey<StoredCheckpointFile>(checkpointFilesStore, [checkpointId, file.fileId]))
+          throw new Error(`Checkpoint file collision for "${file.fileId}".`)
+      }
+      await put(checkpointStore, checkpoint)
+      // Copy precisely the blobs that were hashed before the transaction. The
+      // per-write token proves those bytes are still the live version.
+      for (const file of orderedFiles) {
+        await put(checkpointFilesStore, {
+          checkpointId,
+          fileId: file.fileId,
+          projectId,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          uploadedAt: file.uploadedAt,
+          blob: file.blob.slice(0, file.blob.size, file.blob.type),
+        } satisfies StoredCheckpointFile)
+      }
+    })
+  return checkpoint
+}
+
+export async function listProjectCheckpoints(
+  projectId: string,
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectCheckpointSummary[]> {
+  authorizeWorkspace(context, 'read')
+  const db = await openDB()
+  let checkpoints: ProjectCheckpoint[] = []
+  await tx(db, [STORE_PROJECTS, STORE_CHECKPOINTS], 'readonly', async ([ps, cs]) => {
+    const raw = await getByKey<ProjectRecord>(ps, projectId)
+    if (!raw) return
+    const project = migrateProjectRecord(raw).record
+    authorizeProject(context, project, 'read')
+    checkpoints = await getAllByIndex<ProjectCheckpoint>(cs, 'projectId', projectId)
+    if (checkpoints.some(checkpoint => checkpoint.projectId !== projectId
+      || checkpoint.workspaceId !== project.workspaceId))
+      throw new Error('Checkpoint history contains an invalid project scope.')
+  })
+  return checkpoints
+    .sort((a, b) => b.createdAt - a.createdAt || b.checkpointId.localeCompare(a.checkpointId))
+    .map(({ record: _record, ...summary }) => summary)
+}
+
+export async function getProjectCheckpoint(
+  projectId: string,
+  checkpointId: string,
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectCheckpointRead | null> {
+  return readAuthorizedCheckpoint(projectId, checkpointId, context)
+}
+
+export async function verifyProjectCheckpoint(
+  projectId: string,
+  checkpointId: string,
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<CheckpointVerification> {
+  const read = await readAuthorizedCheckpoint(projectId, checkpointId, context, false)
+  if (!read) return { valid: false, issues: ['Checkpoint does not exist in this project.'] }
+  return verifyCheckpointRead(read)
 }
 
 // ── Active project tracking (localStorage — tiny, fast) ───────────────────

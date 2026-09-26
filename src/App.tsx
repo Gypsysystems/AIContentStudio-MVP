@@ -112,11 +112,13 @@ import { generatePdfDocument } from './pdfPublisher'
 import { ProjectPreview } from './projectPreview'
 import { availableConditions, htmlConditionError } from './publishConditions'
 import { ProjectHomeScreen } from './ProjectHomeScreen'
+import { ProjectHistoryPanel } from './ProjectHistoryPanel'
+import { validateCheckpointReason, type ProjectCheckpointSummary } from './projectCheckpoint'
 import { summarizeProjectHome } from './projectHomeModel'
 import { useCloudAccount } from './AuthGate'
 
 // ── Types ────────────────────────────────────────────────────────────────────
-type Screen = 'dashboard' | 'project-home' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
+type Screen = 'dashboard' | 'project-home' | 'history' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
 type StudioMode = 'author' | 'knowledge'
 type FindingStatus = 'open' | 'in-review' | 'resolved' | 'dismissed'
 type ReviewContext = { findingId: number; section: string; category: string } | null
@@ -910,7 +912,7 @@ function WorkflowSteps({
 }
 
 // ── Top Bar ───────────────────────────────────────────────────────────────────
-function TopBar({ screen, onNav, projectName, contentType, isProject, settingsReturnTo, onSettingsReturn, onDiagnostics, saveStatus, onRetrySave, stageStatuses }: {
+function TopBar({ screen, onNav, projectName, contentType, isProject, settingsReturnTo, onSettingsReturn, onDiagnostics, onHistory, saveStatus, onRetrySave, stageStatuses }: {
   screen: Screen
   onNav: (s: Screen) => void
   projectName: string
@@ -919,6 +921,7 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
   settingsReturnTo: Screen
   onSettingsReturn: () => Promise<unknown>
   onDiagnostics?: () => void
+  onHistory?: () => void
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
   onRetrySave?: () => void
   stageStatuses?: Record<string, StageStatus>
@@ -955,11 +958,11 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
           </div>
         )}
         {inProject && (
-          <div className="order-3 w-full px-0 sm:order-none sm:w-auto sm:flex-1 sm:px-2">
+          <div className="order-3 min-w-0 w-full px-0 xl:order-none xl:w-auto xl:flex-1 xl:px-2">
             <WorkflowSteps current={screen} onNav={onNav} stageStatuses={stageStatuses ?? {}} />
           </div>
         )}
-        <div className="order-2 flex w-full flex-wrap items-center gap-1.5 sm:order-none sm:ml-auto sm:w-auto sm:flex-shrink-0 sm:gap-2">
+        <div className="order-2 flex w-full min-w-0 flex-wrap items-center gap-1.5 xl:order-none xl:ml-auto xl:w-auto xl:flex-1 xl:gap-2">
           {hasProject && (
             <>
               {screen !== 'project-home' && (
@@ -970,6 +973,16 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
                   className="min-h-8 rounded-md border border-[#C7C5F4] bg-[#F4F3FF] px-2.5 text-[10px] font-semibold text-[#4D4DC2] transition-colors hover:border-[#AAA7E8] hover:bg-[#EEEEFF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 sm:text-[11px]"
                 >
                   Project Home
+                </button>
+              )}
+              {screen !== 'history' && onHistory && (
+                <button
+                  type="button"
+                  onClick={onHistory}
+                  data-testid="topbar-project-history"
+                  className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]"
+                >
+                  History
                 </button>
               )}
               <button type="button" onClick={() => onNav('create')} className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
@@ -15248,6 +15261,7 @@ const DEFAULT_THEME_VARIABLES: Record<string, Variable[]> = {
 export default function App() {
   // v2.1 — stable ProjectSource model
   const [screen, setScreen] = useState<Screen>('dashboard')
+  const [historyReturnTo, setHistoryReturnTo] = useState<Screen>('project-home')
   const [appLoading, setAppLoading] = useState(true)
   const [appLoadError, setAppLoadError] = useState<string | null>(null)
   const startupInitializedRef = useRef(false)
@@ -15365,6 +15379,32 @@ export default function App() {
     }
     completeNavigation(s)
     return true
+  }
+  const openHistory = () => {
+    setHistoryReturnTo(screen === 'history' ? historyReturnTo : screen)
+    void navigate('history')
+  }
+  const createProjectCheckpoint = async (reason: string): Promise<ProjectCheckpointSummary> => {
+    const note = validateCheckpointReason(reason)
+    if (!projectId) throw new Error('Open a saved project before creating a checkpoint.')
+    const savesSettled = await persistCurrentProject()
+    if (!savesSettled) throw new Error('The latest project changes could not be saved. Check the save status and retry.')
+    await saveQueueRef.current
+
+    // Read the repository after the save barrier: in-memory state can lag the
+    // persisted revision or the actual set of stored files.
+    const [persistedProject, persistedFiles] = await Promise.all([
+      projectRepository.loadProject(projectId),
+      projectRepository.loadProjectFiles(projectId),
+    ])
+    if (!persistedProject) throw new Error('The project could not be found in persisted storage.')
+    const expectedFileIds = persistedFiles.map(file => file.fileId)
+    return projectRepository.captureProjectCheckpoint(
+      projectId,
+      persistedProject.recordRevision,
+      expectedFileIds,
+      note,
+    )
   }
 
   const jumpToSection = (ctx: ReviewContext) => {
@@ -16965,6 +17005,13 @@ export default function App() {
         onNavigate={destination => { void navigate(destination) }}
         onIssue={handleProjectHomeIssue}
       />
+      case 'history': return projectId ? <ProjectHistoryPanel
+        projectId={projectId}
+        onBack={() => { void navigate(historyReturnTo) }}
+        onCreateCheckpoint={createProjectCheckpoint}
+        listCheckpoints={projectRepository.listProjectCheckpoints}
+        verifyCheckpoint={projectRepository.verifyProjectCheckpoint}
+      /> : <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} settingsMode={!!projectId} returnTo={settingsReturnTo} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
@@ -17009,6 +17056,7 @@ export default function App() {
         projectName={displayName}
         contentType={projectMeta.contentType}
         isProject={!!projectId}
+        onHistory={openHistory}
         settingsReturnTo={settingsReturnTo}
         onSettingsReturn={handleReturnFromProjectSettings}
         onDiagnostics={() => setDiagOpen(true)}

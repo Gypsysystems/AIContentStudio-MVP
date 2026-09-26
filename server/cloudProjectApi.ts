@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from '../src/projectNames'
+import { canonicalCheckpointJson, validateCheckpointReason } from '../src/projectCheckpoint'
 
 const ACCESS_COOKIE = 'sb_access_token'
 const MAX_JSON_BYTES = 16 * 1024 * 1024
@@ -168,6 +169,8 @@ class SupabaseCloudClient {
     )
     const markerQuery = new URLSearchParams({ select: 'component,version', component: 'eq.project-storage', version: 'eq.2', limit: '1' })
     const markerCheck = settle(this.call(`/rest/v1/cloud_schema_versions?${markerQuery}`))
+    const checkpointMarkerQuery = new URLSearchParams({ select: 'component,version', component: 'eq.project-checkpoints', version: 'eq.3', limit: '1' })
+    const checkpointMarkerCheck = settle(this.call(`/rest/v1/cloud_schema_versions?${checkpointMarkerQuery}`))
     const permissionsQuery = new URLSearchParams({ select: 'permission', role: `eq.${role}` })
     const permissionCheck = settle(this.call(`/rest/v1/workspace_role_permissions?${permissionsQuery}`))
     const markerResult = await markerCheck
@@ -176,6 +179,12 @@ class SupabaseCloudClient {
     if (!marker.ok) return false
     const markerBody = await marker.json().catch(() => null) as unknown
     if (!Array.isArray(markerBody) || markerBody.length !== 1) return false
+    const checkpointMarkerResult = await checkpointMarkerCheck
+    if (!checkpointMarkerResult.ok) throw checkpointMarkerResult.error
+    const checkpointMarker = checkpointMarkerResult.value
+    if (!checkpointMarker.ok) return false
+    const checkpointMarkerBody = await checkpointMarker.json().catch(() => null) as unknown
+    if (!Array.isArray(checkpointMarkerBody) || checkpointMarkerBody.length !== 1) return false
     const permissionResult = await permissionCheck
     if (!permissionResult.ok) throw permissionResult.error
     const permissions = permissionResult.value
@@ -191,14 +200,30 @@ class SupabaseCloudClient {
     if (JSON.stringify(actual) !== JSON.stringify([...expected].sort())) return false
     const projectsCheck = settle(this.call('/rest/v1/cloud_projects?select=project_id&limit=0'))
     const filesCheck = settle(this.call('/rest/v1/cloud_project_files?select=file_id&limit=0'))
+    const checkpointCheck = settle(this.call('/rest/v1/cloud_project_checkpoints?select=checkpoint_id&limit=0'))
+    const deletionCheck = settle(this.call('/rest/v1/cloud_project_deletions?select=deletion_id&limit=0'))
     const bucketCheck = settle(this.call('/storage/v1/bucket/project-files'))
+    const checkpointBucketCheck = settle(this.call('/storage/v1/bucket/project-checkpoints'))
     const projectsResult = await projectsCheck
     if (!projectsResult.ok) throw projectsResult.error
     const projects = projectsResult.value
     const filesResult = await filesCheck
     if (!filesResult.ok) throw filesResult.error
     const files = filesResult.value
-    if (!projects.ok || !files.ok) return false
+    const checkpointResult = await checkpointCheck
+    if (!checkpointResult.ok) throw checkpointResult.error
+    const checkpointRows = checkpointResult.value
+    const deletionResult = await deletionCheck
+    if (!deletionResult.ok) throw deletionResult.error
+    const deletionRows = deletionResult.value
+    if (!projects.ok || !files.ok || !checkpointRows.ok || !deletionRows.ok) return false
+    const checkpointBucketResult = await checkpointBucketCheck
+    if (!checkpointBucketResult.ok) throw checkpointBucketResult.error
+    const checkpointBucket = checkpointBucketResult.value
+    if (!checkpointBucket.ok) return false
+    const checkpointBucketBody = await checkpointBucket.json().catch(() => null) as unknown
+    if (!isObject(checkpointBucketBody) || checkpointBucketBody.id !== 'project-checkpoints' || checkpointBucketBody.public !== false)
+      return false
     const bucketResult = await bucketCheck
     if (!bucketResult.ok) throw bucketResult.error
     const bucket = bucketResult.value
@@ -242,6 +267,22 @@ class SupabaseCloudClient {
     const rows = await this.json(`/rest/v1/cloud_project_files?${query}`)
     if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid file list')
     return rows as FileRow[]
+  }
+
+  async checkpoints(projectId: string, workspaceId: string): Promise<Json[]> {
+    const query = new URLSearchParams({
+      select: 'checkpoint_id,workspace_id,project_id,parent_checkpoint_id,reason,actor_user_id,created_at,originating_record_revision,record_schema_version,record_digest,integrity_digest,record,file_manifest',
+      project_id: `eq.${projectId}`, workspace_id: `eq.${workspaceId}`, order: 'created_at.desc,checkpoint_id.desc',
+    })
+    const rows = await this.json(`/rest/v1/cloud_project_checkpoints?${query}`)
+    if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid checkpoint list')
+    return rows.filter(isObject)
+  }
+
+  async checkpoint(projectId: string, checkpointId: string, workspaceId: string): Promise<Json | null> {
+    const rows = await this.checkpoints(projectId, workspaceId)
+    const row = rows.find(item => item.checkpoint_id === checkpointId)
+    return row ?? null
   }
 
   async cleanupRows(projectId: string, workspaceId: string): Promise<FileRow[]> {
@@ -311,6 +352,27 @@ function requireRecord(value: unknown): Json {
 function assertExactKeys(input: Json, keys: string[]): void {
   if (Object.keys(input).some(key => !keys.includes(key)))
     throw new CloudApiError(400, 'UNEXPECTED_FIELD', 'Unexpected request fields are not allowed')
+}
+
+function sha256(bytes: Buffer | string): string {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+function storageObjectUrl(path: string): string {
+  return `/storage/v1/object/${path.split('/').map(segment => encodeURIComponent(segment)).join('/')}`
+}
+
+function checkpointApiValue(row: Json): Json {
+  const manifest = Array.isArray(row.file_manifest) ? row.file_manifest : []
+  const created = typeof row.created_at === 'string' ? Date.parse(row.created_at) : Number(row.created_at)
+  return {
+    checkpointId: row.checkpoint_id, workspaceId: row.workspace_id, projectId: row.project_id,
+    parentCheckpointId: row.parent_checkpoint_id ?? null, reason: row.reason,
+    actorUserId: row.actor_user_id, createdAt: created,
+    originatingRecordRevision: row.originating_record_revision,
+    recordSchemaVersion: row.record_schema_version, recordDigest: row.record_digest,
+    integrityDigest: row.integrity_digest, record: row.record, files: manifest,
+  }
 }
 
 export class CloudProjectApi {
@@ -411,6 +473,52 @@ export class CloudProjectApi {
         if (!record) throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
         return { record }
       }
+      case 'capture-checkpoint': {
+        assertExactKeys(input, ['action', 'projectId', 'expectedRevision', 'expectedFileIds', 'reason'])
+        this.client.assertPermission(this.role, 'write')
+        const projectId = validateId(input.projectId, 'projectId')
+        if (!Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 0)
+          throw new CloudApiError(400, 'INVALID_REVISION', 'expectedRevision must be a nonnegative integer')
+        if (typeof input.reason !== 'string')
+          throw new CloudApiError(400, 'INVALID_REASON', 'reason must be a string')
+        let reason: string
+        try { reason = validateCheckpointReason(input.reason) } catch (error) {
+          throw new CloudApiError(400, 'INVALID_REASON', error instanceof Error ? error.message : 'Invalid checkpoint reason')
+        }
+        const expectedFileIds = validateFileIdList(input.expectedFileIds, 'expectedFileIds')
+        const checkpoint = await this.captureCheckpoint(projectId, input.expectedRevision as number, expectedFileIds, reason)
+        return { checkpoint }
+      }
+      case 'list-checkpoints': {
+        assertExactKeys(input, ['action', 'projectId'])
+        this.client.assertPermission(this.role, 'read')
+        const projectId = validateId(input.projectId, 'projectId')
+        if (!await this.client.getProject(projectId, this.workspaceId))
+          throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
+        const checkpoints = await this.client.checkpoints(projectId, this.workspaceId)
+        return { checkpoints: checkpoints.map(row => {
+          const { record: _record, ...summary } = checkpointApiValue(row)
+          return summary
+        }) }
+      }
+      case 'get-checkpoint': {
+        assertExactKeys(input, ['action', 'projectId', 'checkpointId'])
+        this.client.assertPermission(this.role, 'read')
+        const projectId = validateId(input.projectId, 'projectId')
+        const checkpointId = validateId(input.checkpointId, 'checkpointId')
+        const row = await this.client.checkpoint(projectId, checkpointId, this.workspaceId)
+        if (!row) throw new CloudApiError(404, 'CHECKPOINT_NOT_FOUND', 'Checkpoint was not found in the active workspace')
+        return { checkpoint: checkpointApiValue(row) }
+      }
+      case 'cleanup-checkpoint-stage': {
+        assertExactKeys(input, ['action', 'checkpointId'])
+        this.client.assertPermission(this.role, 'write')
+        const checkpointId = validateId(input.checkpointId, 'checkpointId')
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(checkpointId))
+          throw new CloudApiError(400, 'INVALID_CHECKPOINT_ID', 'checkpointId must be a UUID')
+        await this.cleanupCheckpointStage(checkpointId)
+        return { cleaned: true }
+      }
       case 'save': {
         assertExactKeys(input, ['action', 'projectId', 'expectedRevision', 'record'])
         this.client.assertPermission(this.role, 'write')
@@ -448,18 +556,18 @@ export class CloudProjectApi {
           }
         }
         if (removedStagingProject) return { projects: [] }
-        const files = [
-          ...await this.client.fileRows(projectId, this.workspaceId),
-          ...await this.client.uploadingRows(projectId, this.workspaceId),
-          ...await this.client.cleanupRows(projectId, this.workspaceId),
-        ]
-        for (const file of files) {
-          await this.client.removeStoredFile(file)
-        }
-        const query = new URLSearchParams({ project_id: `eq.${projectId}`, workspace_id: `eq.${this.workspaceId}` })
-        const rows = await this.client.json(`/rest/v1/cloud_projects?${query}`, { method: 'DELETE', headers: { Prefer: 'return=representation' } })
-        if (!Array.isArray(rows) || !rows.length) throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
+        const deletionId = await this.beginProjectDeletion(projectId)
+        await this.cleanupProjectDeletion(deletionId)
         return { projects: [] }
+      }
+      case 'cleanup-project-deletion': {
+        assertExactKeys(input, ['action', 'deletionId'])
+        this.client.assertPermission(this.role, 'delete')
+        const deletionId = validateId(input.deletionId, 'deletionId')
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deletionId))
+          throw new CloudApiError(400, 'INVALID_DELETION_ID', 'deletionId must be a UUID')
+        await this.cleanupProjectDeletion(deletionId)
+        return { deleted: true }
       }
       case 'abandon-restore': {
         assertExactKeys(input, ['action', 'stageId'])
@@ -717,6 +825,38 @@ export class CloudProjectApi {
   async binary(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (!await this.client.readiness(this.role)) throw new CloudApiError(503, 'STORAGE_NOT_READY', 'Apply the cloud project migrations and create the private project-files bucket before using cloud files')
     const url = new URL(request.url ?? '/api/cloud-files', 'http://localhost')
+    const checkpointIdValue = url.searchParams.get('checkpointId')
+    if (request.method === 'GET' && checkpointIdValue !== null) {
+      this.client.assertPermission(this.role, 'read')
+      const checkpointId = validateId(checkpointIdValue, 'checkpointId')
+      const fileId = validateId(url.searchParams.get('fileId'), 'fileId')
+      const query = new URLSearchParams({
+        select: 'file_manifest,project_id', checkpoint_id: `eq.${checkpointId}`,
+        workspace_id: `eq.${this.workspaceId}`, limit: '1',
+      })
+      const checkpoints = await this.client.json(`/rest/v1/cloud_project_checkpoints?${query}`)
+      if (!Array.isArray(checkpoints) || !isObject(checkpoints[0]))
+        throw new CloudApiError(404, 'CHECKPOINT_NOT_FOUND', 'Checkpoint was not found in the active workspace')
+      const row = checkpoints[0]
+      const projectId = validateId(row.project_id, 'projectId')
+      const project = await this.client.getProject(projectId, this.workspaceId)
+      if (!project) throw new CloudApiError(404, 'CHECKPOINT_NOT_FOUND', 'Checkpoint project was not found in the active workspace')
+      const manifest = Array.isArray(row.file_manifest) ? row.file_manifest : []
+      const item = manifest.find(value => isObject(value) && value.fileId === fileId)
+      if (!isObject(item) || typeof item.storageRef !== 'string')
+        throw new CloudApiError(404, 'CHECKPOINT_FILE_NOT_FOUND', 'Checkpoint file was not found')
+      const storagePath = item.storageRef
+      if (!storagePath.startsWith(`project-checkpoints/${this.workspaceId}/${projectId}/${checkpointId}/`))
+        throw new CloudApiError(503, 'CHECKPOINT_STORAGE_PATH_INVALID', 'Stored checkpoint path is invalid')
+      const download = await this.client.call(storageObjectUrl(storagePath))
+      if (!download.ok) throw new CloudApiError(503, 'CHECKPOINT_FILE_DOWNLOAD_FAILED', 'Could not download the checkpoint file')
+      response.statusCode = 200
+      response.setHeader('Content-Type', typeof item.type === 'string' ? item.type : 'application/octet-stream')
+      response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(String(item.name ?? fileId))}`)
+      response.setHeader('Cache-Control', 'no-store')
+      response.end(Buffer.from(await download.arrayBuffer()))
+      return
+    }
     const fileId = validateId(url.searchParams.get('fileId'), 'fileId')
     if (request.method === 'GET') {
       this.client.assertPermission(this.role, 'read')
@@ -824,6 +964,189 @@ export class CloudProjectApi {
     response.end(JSON.stringify({ file: stageId
       ? { fileId, projectId: targetProjectId, name, type, size: bytes.byteLength, uploadedAt }
       : fileResponse, ...(stageId ? { stageId, staged: true } : {}) }))
+  }
+
+  private async captureCheckpoint(
+    projectId: string,
+    expectedRevision: number,
+    expectedFileIds: string[],
+    reason: string,
+  ): Promise<Json> {
+    const record = await this.client.getProject(projectId, this.workspaceId)
+    if (!record) throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
+    if (record.recordRevision !== expectedRevision)
+      throw new CloudApiError(409, 'PROJECT_CONFLICT', `Project changed; expected revision ${expectedRevision}, found ${String(record.recordRevision)}`)
+    const sourceFiles = await this.client.fileRows(projectId, this.workspaceId)
+    const actualIds = sourceFiles.map(file => file.file_id).sort()
+    if (actualIds.join('\0') !== [...expectedFileIds].sort().join('\0'))
+      throw new CloudApiError(409, 'FILE_SET_CONFLICT', 'Project file set changed; checkpoint was not captured')
+    const previous = await this.client.checkpoints(projectId, this.workspaceId)
+    const parentCheckpointId = previous.length ? String(previous[0].checkpoint_id) : null
+    const checkpointId = randomUUID()
+    const timestamp = Date.now()
+    const archivePaths = sourceFiles.map(file =>
+      `project-checkpoints/${this.workspaceId}/${projectId}/${checkpointId}/${file.file_id}`)
+    let stageCreated = true
+    const fileManifest: Json[] = []
+    try {
+      await this.client.json('/rest/v1/cloud_project_checkpoint_stages', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          checkpoint_id: checkpointId, workspace_id: this.workspaceId, project_id: projectId,
+          actor_user_id: this.userId, parent_checkpoint_id: parentCheckpointId, reason,
+          expected_revision: expectedRevision, expected_file_ids: actualIds, record,
+          created_at: new Date(timestamp).toISOString(),
+        }),
+      })
+      for (let index = 0; index < sourceFiles.length; index++) {
+        const file = sourceFiles[index]
+        const source = await this.client.call(storageObjectUrl(file.storage_path))
+        if (!source.ok) throw new CloudApiError(503, 'CHECKPOINT_SOURCE_UNAVAILABLE', `Could not read source file "${file.file_id}"`)
+        const bytes = Buffer.from(await source.arrayBuffer())
+        if (bytes.byteLength !== file.size)
+          throw new CloudApiError(409, 'CHECKPOINT_SOURCE_CHANGED', `Source file "${file.file_id}" changed size during checkpoint capture`)
+        const digest = sha256(bytes)
+        const storageRef = archivePaths[index]
+        await this.client.json('/rest/v1/cloud_project_checkpoint_file_stages', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            checkpoint_id: checkpointId, workspace_id: this.workspaceId, project_id: projectId,
+            file_id: file.file_id, name: file.name, type: file.type, size: bytes.byteLength,
+            uploaded_at: file.uploaded_at, sha256: digest, storage_path: storageRef,
+          }),
+        })
+        const uploaded = await this.client.call(storageObjectUrl(storageRef), {
+          method: 'POST', headers: { 'Content-Type': file.type, 'x-upsert': 'false' }, body: bytes,
+        })
+        if (!uploaded.ok) throw new CloudApiError(503, 'CHECKPOINT_ARCHIVE_UPLOAD_FAILED', `Could not stage checkpoint file "${file.file_id}"`)
+        const verify = await this.client.call(storageObjectUrl(storageRef))
+        if (!verify.ok || sha256(Buffer.from(await verify.arrayBuffer())) !== digest)
+          throw new CloudApiError(503, 'CHECKPOINT_ARCHIVE_VERIFY_FAILED', `Staged checkpoint file "${file.file_id}" failed SHA-256 verification`)
+        fileManifest.push({
+          fileId: file.file_id, name: file.name, type: file.type, size: bytes.byteLength,
+          uploadedAt: file.uploaded_at, sha256: digest, storageRef,
+        })
+      }
+      fileManifest.sort((left, right) => String(left.fileId).localeCompare(String(right.fileId)))
+      if (!Number.isSafeInteger(record.schemaVersion))
+        throw new CloudApiError(503, 'CHECKPOINT_RECORD_INVALID', 'Project record schema version is invalid')
+      const checkpointContent: Json = {
+        checkpointId, workspaceId: this.workspaceId, projectId, parentCheckpointId,
+        reason, actorUserId: this.userId, createdAt: timestamp,
+        originatingRecordRevision: expectedRevision, recordSchemaVersion: Number(record.schemaVersion),
+        recordDigest: sha256(canonicalCheckpointJson(record)), record, files: fileManifest,
+      }
+      const integrityDigest = sha256(canonicalCheckpointJson(checkpointContent))
+      const finalized = await this.client.json('/rest/v1/rpc/finalize_cloud_project_checkpoint', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          p_checkpoint_id: checkpointId, p_expected_file_ids: actualIds,
+          p_expected_revision: expectedRevision, p_parent_checkpoint_id: parentCheckpointId,
+          p_record_digest: checkpointContent.recordDigest, p_integrity_digest: integrityDigest,
+          p_file_manifest: fileManifest, p_created_at: new Date(timestamp).toISOString(),
+        }),
+      })
+      if (!isObject(finalized)) throw new CloudApiError(503, 'CHECKPOINT_FINALIZE_INVALID', 'Cloud storage did not confirm checkpoint finalization')
+      return checkpointApiValue(finalized)
+    } catch (error) {
+      if (stageCreated) {
+        try {
+          const committed = await this.client.checkpoint(projectId, checkpointId, this.workspaceId)
+          if (committed) return checkpointApiValue(committed)
+        } catch {
+          // If commit state cannot be resolved, do not destroy any archive objects.
+          throw new CloudApiError(503, 'CHECKPOINT_COMMIT_STATE_UNKNOWN', 'Checkpoint finalization state is unknown; archive objects were preserved for safe recovery')
+        }
+        try {
+          await this.cleanupCheckpointStage(checkpointId)
+        } catch {
+          throw new CloudApiError(503, 'CHECKPOINT_CLEANUP_PENDING',
+            `Checkpoint capture failed; retry cleanup with checkpoint ID "${checkpointId}". No live project files were changed`,
+            { checkpointId })
+        }
+      }
+      throw error
+    }
+  }
+
+  private async cleanupCheckpointStage(checkpointId: string): Promise<void> {
+    const committed = await this.client.json(`/rest/v1/cloud_project_checkpoints?${new URLSearchParams({
+      select: 'checkpoint_id', checkpoint_id: `eq.${checkpointId}`, workspace_id: `eq.${this.workspaceId}`, limit: '1',
+    })}`)
+    if (Array.isArray(committed) && committed.length)
+      throw new CloudApiError(409, 'CHECKPOINT_ALREADY_COMMITTED', 'A committed checkpoint archive is immutable and cannot be cleaned up')
+    const stages = await this.client.json(`/rest/v1/cloud_project_checkpoint_file_stages?${new URLSearchParams({
+      select: 'storage_path', checkpoint_id: `eq.${checkpointId}`, workspace_id: `eq.${this.workspaceId}`,
+    })}`)
+    if (!Array.isArray(stages))
+      throw new CloudApiError(503, 'CHECKPOINT_CLEANUP_PENDING', 'Could not enumerate staged checkpoint objects')
+    for (const value of stages) {
+      if (!isObject(value) || typeof value.storage_path !== 'string')
+        throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid checkpoint stage metadata')
+      const removed = await this.client.call(storageObjectUrl(value.storage_path), { method: 'DELETE' })
+      if (!removed.ok && removed.status !== 404)
+        throw new CloudApiError(503, 'CHECKPOINT_CLEANUP_PENDING', 'A staged checkpoint object could not be removed')
+    }
+    await this.client.json('/rest/v1/rpc/abandon_cloud_project_checkpoint', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_checkpoint_id: checkpointId }),
+    })
+  }
+
+  private async beginProjectDeletion(projectId: string): Promise<string> {
+    const result = await this.client.json('/rest/v1/rpc/begin_cloud_project_deletion', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_project_id: projectId, p_workspace_id: this.workspaceId }),
+    })
+    if (typeof result !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(result))
+      throw new CloudApiError(503, 'PROJECT_DELETE_STAGE_INVALID', 'Cloud storage did not confirm project deletion staging')
+    return result
+  }
+
+  private async cleanupProjectDeletion(deletionId: string): Promise<void> {
+    try {
+      const deletionRows = await this.client.json(`/rest/v1/cloud_project_deletions?${new URLSearchParams({
+        select: 'project_id', deletion_id: `eq.${deletionId}`, workspace_id: `eq.${this.workspaceId}`, limit: '1',
+      })}`)
+      if (!Array.isArray(deletionRows) || !isObject(deletionRows[0])) return
+      const projectId = validateId(deletionRows[0].project_id, 'projectId')
+      const stages = await this.client.json(`/rest/v1/cloud_project_restore_stages?${new URLSearchParams({
+        select: 'stage_id', project_id: `eq.${projectId}`, workspace_id: `eq.${this.workspaceId}`,
+      })}`)
+      if (!Array.isArray(stages))
+        throw new CloudApiError(503, 'PROJECT_DELETE_CLEANUP_PENDING', 'Could not enumerate restore stages during project deletion')
+      for (const stage of stages) {
+        if (!isObject(stage) || typeof stage.stage_id !== 'string')
+          throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid restore stage metadata')
+        try {
+          await this.abandonRestoreStage(stage.stage_id)
+        } catch (error) {
+          if (!(error instanceof CloudApiError) || error.status !== 404) throw error
+        }
+      }
+      const entries = await this.client.json(`/rest/v1/cloud_project_deletion_objects?${new URLSearchParams({
+        select: 'object_ref', deletion_id: `eq.${deletionId}`,
+      })}`)
+      if (!Array.isArray(entries))
+        throw new CloudApiError(503, 'PROJECT_DELETE_CLEANUP_PENDING', 'Could not enumerate project deletion objects')
+      for (const entry of entries) {
+        if (!isObject(entry) || typeof entry.object_ref !== 'string'
+          || !/^(project-files|project-checkpoints)\/.+$/.test(entry.object_ref))
+          throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid project deletion object')
+        const removed = await this.client.call(storageObjectUrl(entry.object_ref), { method: 'DELETE' })
+        if (!removed.ok && removed.status !== 404)
+          throw new CloudApiError(503, 'PROJECT_DELETE_CLEANUP_PENDING', 'A project archive object could not be removed')
+      }
+      await this.client.json('/rest/v1/rpc/finish_cloud_project_deletion', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_deletion_id: deletionId }),
+      })
+    } catch (error) {
+      if (error instanceof CloudApiError && error.code === 'RESOURCE_NOT_FOUND') throw error
+      throw new CloudApiError(503, 'PROJECT_DELETE_CLEANUP_PENDING',
+        `Project deletion is staged and private-object cleanup must be retried with deletion ID "${deletionId}".`,
+        { deletionId })
+    }
   }
 }
 
