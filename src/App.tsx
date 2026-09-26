@@ -19,6 +19,8 @@ import { importLocalProjectToCloud } from './cloudProjectRepository'
 import { LOCAL_ACCESS_CONTEXT } from './ownership'
 import { getAccessContext } from './authSession'
 import type { ProjectOwnership } from './ownership'
+import { getAdministrationAccess } from './administrationAccess'
+import AdministrationScreen from './AdministrationScreen'
 import { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from './projectNames'
 const {
   createProject, loadProject, listProjects, deleteProject, duplicateProject,
@@ -118,7 +120,7 @@ import { summarizeProjectHome } from './projectHomeModel'
 import { useCloudAccount } from './AuthGate'
 
 // ── Types ────────────────────────────────────────────────────────────────────
-type Screen = 'dashboard' | 'project-home' | 'history' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
+type Screen = 'dashboard' | 'administration' | 'project-home' | 'history' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
 type StudioMode = 'author' | 'knowledge'
 type FindingStatus = 'open' | 'in-review' | 'resolved' | 'dismissed'
 type ReviewContext = { findingId: number; section: string; category: string } | null
@@ -912,12 +914,16 @@ function WorkflowSteps({
 }
 
 // ── Top Bar ───────────────────────────────────────────────────────────────────
-function TopBar({ screen, onNav, projectName, contentType, isProject, settingsReturnTo, onSettingsReturn, onDiagnostics, onHistory, saveStatus, onRetrySave, stageStatuses }: {
+function TopBar({ screen, onNav, onAdministration, onNewProject, projectName, contentType, isProject, canCreateProject, canEditProjectSettings, settingsReturnTo, onSettingsReturn, onDiagnostics, onHistory, saveStatus, onRetrySave, stageStatuses }: {
   screen: Screen
   onNav: (s: Screen) => void
+  onAdministration: () => void
+  onNewProject: () => void
   projectName: string
   contentType: string
   isProject: boolean
+  canCreateProject: boolean
+  canEditProjectSettings: boolean
   settingsReturnTo: Screen
   onSettingsReturn: () => Promise<unknown>
   onDiagnostics?: () => void
@@ -927,8 +933,8 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
   stageStatuses?: Record<string, StageStatus>
 }) {
   const cloudAccount = useCloudAccount()
-  const inProject = !['dashboard', 'create'].includes(screen)
-  const hasProject = screen !== 'dashboard' && isProject
+  const inProject = !['dashboard', 'create', 'administration'].includes(screen)
+  const hasProject = screen !== 'dashboard' && screen !== 'administration' && isProject
   const saveLabel = saveStatus === 'error' ? 'Save failed' : saveStatus === 'saving' ? 'Saving changes' : 'All changes saved'
   return (
     <header className="relative z-30 flex-shrink-0 border-b border-[#E2DED7] bg-white">
@@ -944,7 +950,12 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
           </span>
           <span className="text-[13px] font-semibold tracking-tight text-[#111218]">Content Studio</span>
         </button>
-        {screen === 'dashboard' ? (
+        {screen === 'administration' ? (
+          <div className="min-w-0 border-l border-[#E2DED7] pl-3">
+            <p className="truncate text-[12px] font-semibold text-[#22222F]">Administration</p>
+            <p className="text-[10px] text-[#858493]">Workspace access &amp; settings</p>
+          </div>
+        ) : screen === 'dashboard' ? (
           <span className="hidden text-[12px] text-[#777786] sm:block">Workspace</span>
         ) : screen === 'create' && !hasProject ? (
           <div className="min-w-0 border-l border-[#E2DED7] pl-3">
@@ -985,7 +996,9 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
                   History
                 </button>
               )}
-              <button type="button" onClick={() => onNav('create')} className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
+              <button type="button" onClick={() => onNav('create')} disabled={!canEditProjectSettings}
+                title={!canEditProjectSettings ? 'Project write access is required' : undefined}
+                className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] disabled:cursor-not-allowed disabled:opacity-50 sm:text-[11px]">
                 Project Settings
               </button>
               <button type="button" onClick={() => onNav('branding')} className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
@@ -993,7 +1006,12 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
               </button>
             </>
           )}
-          {inProject && saveStatus && saveStatus !== 'idle' && (
+          <button type="button" onClick={onAdministration} data-testid="topbar-administration"
+            aria-current={screen === 'administration' ? 'page' : undefined}
+            className={`min-h-8 rounded-md border px-2.5 text-[10px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px] ${screen === 'administration' ? 'border-[#C7C5F4] bg-[#F4F3FF] text-[#4D4DC2]' : 'border-[#E2DED7] text-[#585866] hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2]'}`}>
+            Administration
+          </button>
+          {(inProject || screen === 'administration' && isProject) && saveStatus && saveStatus !== 'idle' && (
             saveStatus === 'error'
               ? <button type="button" onClick={onRetrySave} aria-label="Save failed. Retry saving." className="min-h-8 rounded-md border border-[#F0B6B6] bg-[#FEF2F2] px-2.5 text-[10px] font-semibold text-[#B42323] transition-colors hover:bg-[#FEE2E2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42323] sm:text-[11px]">Save failed · Retry</button>
               : <span role="status" aria-live="polite" className={`whitespace-nowrap text-[10px] font-medium sm:text-[11px] ${saveStatus === 'saving' ? 'text-[#A85C08]' : 'text-[#43845B]'}`}>{saveLabel}</span>
@@ -1014,7 +1032,9 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
             </button>
           )}
           {screen === 'dashboard' && (
-            <button type="button" onClick={() => onNav('create')} className="min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">
+            <button type="button" onClick={onNewProject} disabled={!canCreateProject}
+              title={!canCreateProject ? 'Workspace create access is required' : undefined}
+              className="min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
               New project
             </button>
           )}
@@ -15259,9 +15279,13 @@ const DEFAULT_THEME_VARIABLES: Record<string, Variable[]> = {
 
 // ── App Root ──────────────────────────────────────────────────────────────────
 export default function App() {
+  // Subscribing to the account provider keeps role-dependent controls current
+  // when the verified cloud session refreshes without an App navigation.
+  const cloudAccount = useCloudAccount()
   // v2.1 — stable ProjectSource model
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [historyReturnTo, setHistoryReturnTo] = useState<Screen>('project-home')
+  const [administrationReturnTo, setAdministrationReturnTo] = useState<Screen>('dashboard')
   const [appLoading, setAppLoading] = useState(true)
   const [appLoadError, setAppLoadError] = useState<string | null>(null)
   const startupInitializedRef = useRef(false)
@@ -15367,6 +15391,13 @@ export default function App() {
     window.scrollTo(0, 0)
   }
   const navigate = async (s: Screen) => {
+    if (s === 'create') {
+      const access = getAdministrationAccess(getAccessContext(), projectId ? projectOwnershipRef.current : null)
+      if (projectId ? !access.project?.write : !access.workspace.create) {
+        setNavError(projectId ? 'Project Settings require project write access.' : 'Creating a project requires workspace create access.')
+        return false
+      }
+    }
     // Leaving a project and Review-to-Author targets still use a save barrier.
     // Ordinary section changes update the UI immediately; autosave retains
     // the revision-guarded cloud write and reports failures in the top bar.
@@ -15383,6 +15414,13 @@ export default function App() {
   const openHistory = () => {
     setHistoryReturnTo(screen === 'history' ? historyReturnTo : screen)
     void navigate('history')
+  }
+  const openAdministration = () => {
+    if (screen === 'administration') return
+    const returnTo = screen
+    void navigate('administration').then(opened => {
+      if (opened) setAdministrationReturnTo(returnTo)
+    })
   }
   const createProjectCheckpoint = async (reason: string): Promise<ProjectCheckpointSummary> => {
     const note = validateCheckpointReason(reason)
@@ -16869,7 +16907,15 @@ export default function App() {
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null }
   }
 
-  const startNewProject = () => {
+  const startNewProject = async () => {
+    if (!getAdministrationAccess(getAccessContext()).workspace.create) {
+      setNavError('Creating a project requires workspace create access.')
+      return
+    }
+    if (projectId && !await persistCurrentProject()) {
+      setNavError('Your latest project changes could not be saved. Retry before starting a new project.')
+      return
+    }
     resetProjectState()
     setScreen('create')
   }
@@ -16994,8 +17040,24 @@ export default function App() {
         pageLayouts, htmlMasters: htmlMasterPages,
       })
     }
+    const context = getAccessContext()
+    const access = getAdministrationAccess(context, projectId ? projectOwnershipRef.current : null)
+    const administration = () => <AdministrationScreen context={context} mode={cloudAccount ? 'cloud' : 'local-dev'}
+      organizationName={cloudAccount?.organizationName} workspaceName={cloudAccount?.workspaceName}
+      project={projectId ? { name: displayName, documentType: projectMeta.contentType,
+        version: projectMeta.version, ownership: projectOwnershipRef.current } : null}
+      saveStatus={saveStatus}
+      onBack={() => { void navigate(administrationReturnTo !== 'dashboard' && access.project?.read !== true && projectId ? 'dashboard' : administrationReturnTo) }}
+      onProjectSettings={() => { if (access.project?.write) void navigate('create') }}
+      onDiscardProject={() => {
+        resetProjectState()
+        setAdministrationReturnTo('dashboard')
+        setNavError(null)
+        setScreen('dashboard')
+      }} />
     switch (screen) {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
+      case 'administration': return administration()
       case 'project-home': return <ProjectHomeScreen
         projectName={displayName}
         contentType={projectMeta.contentType}
@@ -17014,7 +17076,13 @@ export default function App() {
         getCheckpointRecord={projectRepository.getProjectCheckpointRecord}
         verifyCheckpoint={projectRepository.verifyProjectCheckpoint}
       /> : <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
-      case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} settingsMode={!!projectId} returnTo={settingsReturnTo} />
+      case 'create':    return (projectId ? !access.project?.write : !access.workspace.create)
+        ? <div className="flex-1 overflow-auto p-6" role="alert">
+            <h1 className="text-lg font-semibold">{projectId ? 'Project Settings' : 'New project'} unavailable</h1>
+            <p className="mt-2 text-sm">{projectId ? 'Your current workspace access does not allow edits to this project.' : 'Your current workspace access does not allow creating projects.'}</p>
+            <button type="button" onClick={() => { void navigate('administration') }} className="mt-4 rounded-md border border-[#D8D5CF] px-3 py-2 text-sm">Open Administration</button>
+          </div>
+        : <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} settingsMode={!!projectId} returnTo={settingsReturnTo} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
       case 'analysis':  return isDemoMode
@@ -17055,9 +17123,13 @@ export default function App() {
       <TopBar
         screen={screen}
         onNav={navigate}
+        onAdministration={openAdministration}
+        onNewProject={startNewProject}
         projectName={displayName}
         contentType={projectMeta.contentType}
         isProject={!!projectId}
+        canCreateProject={getAdministrationAccess(getAccessContext()).workspace.create}
+        canEditProjectSettings={getAdministrationAccess(getAccessContext(), projectId ? projectOwnershipRef.current : null).project?.write === true}
         onHistory={openHistory}
         settingsReturnTo={settingsReturnTo}
         onSettingsReturn={handleReturnFromProjectSettings}

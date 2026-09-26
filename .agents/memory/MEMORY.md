@@ -28,3 +28,4 @@
 - [Project Home entry boundary](project-home-entry-boundary.md) — opening from Projects lands on Home, while active-project reload retains the earlier Sources destination.
 - [Cloud naming migration safety](cloud-naming-migration-safety.md) — normalize SQL and client names identically; backfills must advance revision guards on renamed records.
 - [Topic history from checkpoints](topic-history-checkpoints.md) — derive authored topic history only from committed checkpoints; missing records break change comparisons.
+- [Administration access display](administration-access-display.md) — client role capabilities are orientation, not cloud authority; unsupported settings stay read-only.
