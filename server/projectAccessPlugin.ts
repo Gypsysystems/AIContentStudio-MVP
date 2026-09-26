@@ -8,10 +8,12 @@ import {
 import { createLocalDevProjectAccessService } from './localDevProjectAccess'
 import { handleSupabaseAuthRequest, isLocalDevAllowed } from './supabaseProjectAccess'
 import { handleCloudFiles, handleCloudProjects } from './cloudProjectApi'
+import { handleAiCatalog, sendAiCatalogError } from './aiCatalogApi'
 
 const ENDPOINT = '/api/project-access'
 const CLOUD_PROJECTS_ENDPOINT = '/api/cloud-projects'
 const CLOUD_FILES_ENDPOINT = '/api/cloud-files'
+const AI_CATALOG_ENDPOINT = '/api/ai-catalog'
 const MAX_BODY_BYTES = 16 * 1024
 
 function sendJson(
@@ -212,12 +214,12 @@ function installAuthEndpoint(server: ViteDevServer | PreviewServer, localDev: bo
   })
 }
 
-function installCloudEndpoints(server: ViteDevServer | PreviewServer): void {
+function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev = false): void {
   server.middlewares.use((request, response, next) => {
     const pathname = request.url?.split('?')[0]
-    if (pathname !== CLOUD_PROJECTS_ENDPOINT && pathname !== CLOUD_FILES_ENDPOINT) return next()
+    if (pathname !== CLOUD_PROJECTS_ENDPOINT && pathname !== CLOUD_FILES_ENDPOINT && pathname !== AI_CATALOG_ENDPOINT) return next()
     response.setHeader('Cache-Control', 'no-store')
-    const allowed = pathname === CLOUD_PROJECTS_ENDPOINT ? ['POST'] : ['GET', 'POST']
+    const allowed = pathname === CLOUD_FILES_ENDPOINT ? ['GET', 'POST'] : ['POST']
     if (!allowed.includes(request.method ?? '')) {
       response.setHeader('Allow', allowed.join(', '))
       sendJson(response, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' })
@@ -233,9 +235,23 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer): void {
       sendJson(response, 403, { error: 'Same-origin request required', code: 'ORIGIN_REJECTED' })
       return
     }
-    if (pathname === CLOUD_PROJECTS_ENDPOINT
+    if (pathname === AI_CATALOG_ENDPOINT && localDev) {
+      sendJson(response, 503, { error: 'AI catalog cloud persistence is unavailable in local mode', code: 'AI_CATALOG_UNAVAILABLE' })
+      return
+    }
+    if ((pathname === CLOUD_PROJECTS_ENDPOINT || pathname === AI_CATALOG_ENDPOINT)
       && request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
       sendJson(response, 415, { error: 'Content-Type must be application/json', code: 'UNSUPPORTED_MEDIA_TYPE' })
+      return
+    }
+    if (pathname === AI_CATALOG_ENDPOINT) {
+      const length = request.headers['content-length']
+      if (length !== undefined && Number(length) > 32_000) {
+        request.resume()
+        sendJson(response, 413, { error: 'AI catalog request exceeds the 32 KB limit', code: 'REQUEST_TOO_LARGE' })
+        return
+      }
+      void handleAiCatalog(request, response).catch((error) => sendAiCatalogError(response, error))
       return
     }
     const handler = pathname === CLOUD_PROJECTS_ENDPOINT ? handleCloudProjects : handleCloudFiles
@@ -265,7 +281,7 @@ export function projectAccessPlugin(): Plugin {
         })
       })
       installAuthEndpoint(server, localDev)
-      installCloudEndpoints(server)
+      installCloudEndpoints(server, localDev)
       if (localDev) installEndpoint(server, createLocalDevProjectAccessService())
       else server.middlewares.use((request, response, next) => {
         if (request.url?.split('?')[0] !== ENDPOINT) return next()

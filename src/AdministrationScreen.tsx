@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { getAdministrationAccess } from './administrationAccess'
 import MySettings from './MySettings'
+import AiControlCenter from './ai-control-center/AiControlCenter'
 import type { MembershipRole, ProjectAccessContext, ProjectOwnership } from './ownership'
 
 type AdministrationScreenProps = {
@@ -274,8 +275,12 @@ export default function AdministrationScreen({
           </div>
         </div>
 
+        <div id="ai-control-center" className="mt-7">
+          <AiControlCenter key={`${mode}:${context.workspace.id}:${context.user.id}`} mode={mode} context={context} />
+        </div>
+
         <footer className="mt-7 border-t border-[#E4E2DC] pt-4 text-[10px] leading-5 text-[#92909A]">
-          Access is presented for clarity, not as an access-management surface. No changes are made from this screen.
+          Workspace roles and settings remain read-only. Personal settings and AI definitions use their own confirmed save paths.
         </footer>
       </div>
     </div>
