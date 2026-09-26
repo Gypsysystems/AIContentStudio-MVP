@@ -788,130 +788,182 @@ function WorkflowSteps({
   onNav: (s: Screen) => void
   stageStatuses: Record<string, StageStatus>
 }) {
-  const steps: [Screen, string][] = [
-    ['create',    'Details'],
-    ['branding',  'Theme'],
-    ['sources',   'Sources'],
-    ['analysis',  'Analysis'],
-    ['structure', 'TOC'],
-    ['studio',    'Author'],
-    ['quality',   'Review'],
-    ['publish',   'Publish'],
+  const phases: { id: Screen; label: string; statusKeys: string[] }[] = [
+    { id: 'sources', label: 'Sources', statusKeys: ['sources'] },
+    { id: 'analysis', label: 'Analyze & Structure', statusKeys: ['analysis', 'structure'] },
+    { id: 'studio', label: 'Author', statusKeys: ['studio'] },
+    { id: 'quality', label: 'Review', statusKeys: ['quality'] },
+    { id: 'publish', label: 'Publish', statusKeys: ['publish'] },
   ]
-
-  const statusIcon = (status: StageStatus, active: boolean) => {
-    if (active) return null
-    if (status === 'complete') return <span className="text-[#5B5BD6] leading-none">✓</span>
-    if (status === 'stale')    return <span className="text-[#D97706] leading-none text-[9px]">!</span>
-    if (status === 'in-progress') return <span className="w-1.5 h-1.5 rounded-full bg-[#5B5BD6] inline-block" />
-    return null
+  const statusFor = (keys: string[]): StageStatus => {
+    const values = keys.map(key => stageStatuses[key] ?? 'not-started')
+    if (values.includes('stale')) return 'stale'
+    if (values.every(value => value === 'complete')) return 'complete'
+    if (values.some(value => value === 'complete' || value === 'in-progress')) return 'in-progress'
+    return 'not-started'
   }
-
-  const statusTooltip = (screen: Screen): string => {
-    const s = stageStatuses[screen] ?? 'not-started'
-    if (s === 'complete')    return 'Complete'
-    if (s === 'stale')       return 'Needs attention'
-    if (s === 'in-progress') return 'In progress'
-    return 'Not started'
-  }
+  const statusLabel = (status: StageStatus) => ({
+    complete: 'Complete',
+    stale: 'Needs attention',
+    'in-progress': 'In progress',
+    'not-started': 'Upcoming',
+  })[status]
+  const activePhase = current === 'preview' ? 'publish' : current === 'structure' ? 'analysis' : current
+  const analysisPhase = current === 'analysis' || current === 'structure'
 
   return (
-    <div className="flex items-center gap-0.5 overflow-x-auto no-scrollbar">
-      {steps.map(([s, label], i) => {
-        const status = stageStatuses[s] ?? 'not-started'
-        const active = s === current || (current === 'preview' && s === 'quality')
-        return (
-          <div key={s} className="flex items-center gap-0.5 flex-shrink-0">
-            {i > 0 && <div className={`w-4 h-px flex-shrink-0 ${status === 'complete' ? 'bg-[#5B5BD6]' : 'bg-[#E2DED7]'}`} />}
-            <button
-              onClick={() => onNav(s)}
-              title={statusTooltip(s)}
-              className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] ${
-                active
-                  ? 'bg-[#EEEEFF] text-[#5B5BD6]'
-                  : status === 'complete'
-                  ? 'text-[#5B5BD6] hover:bg-[#EEEEFF]'
-                  : status === 'stale'
-                  ? 'text-[#D97706] hover:bg-[#FEF3C7]'
-                  : 'text-[#9898AB] hover:bg-[#F4F2EE] hover:text-[#6B6B7E]'
-              }`}
-            >
-              {statusIcon(status, active)}
-              {label}
-            </button>
-          </div>
-        )
-      })}
-    </div>
+    <nav aria-label="Content workflow" className="w-full">
+      <ol style={{ justifyContent: 'safe center' }} className="flex max-w-full items-center justify-start gap-1 overflow-x-auto no-scrollbar py-1">
+        {phases.map((phase, index) => {
+          const active = phase.id === activePhase
+          const status = statusFor(phase.statusKeys)
+          return (
+            <li key={phase.id} className="flex items-center flex-shrink-0">
+              {index > 0 && <span aria-hidden="true" className={`mx-1.5 h-px w-3 sm:w-5 ${status === 'complete' ? 'bg-[#5B5BD6]' : 'bg-[#D8D5CF]'}`} />}
+              <button
+                type="button"
+                onClick={() => onNav(phase.id)}
+                aria-current={active ? 'step' : undefined}
+                aria-label={`${phase.label}, ${active ? (current === 'preview' ? 'Preview' : 'Current stage') : statusLabel(status)}`}
+                title={active ? (current === 'preview' ? 'Preview' : 'Current stage') : statusLabel(status)}
+                className={`group flex min-h-9 items-center gap-2 rounded-lg px-2.5 sm:px-3 text-[11px] sm:text-[12px] font-semibold whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 ${
+                  active ? 'bg-[#EEEEFF] text-[#4D4DC2]' : status === 'stale'
+                    ? 'text-[#A85C08] hover:bg-[#FEF3C7]'
+                    : status === 'complete' ? 'text-[#5757B8] hover:bg-[#EEEEFF]'
+                      : 'text-[#747487] hover:bg-[#F4F2EE] hover:text-[#343444]'
+                }`}
+              >
+                <span className={`flex h-[18px] w-[18px] items-center justify-center rounded-full border text-[9px] font-bold ${
+                  active ? 'border-[#5B5BD6] bg-[#5B5BD6] text-white'
+                    : status === 'complete' ? 'border-[#C7C5F4] bg-[#EEEEFF] text-[#5B5BD6]'
+                      : status === 'stale' ? 'border-[#F1D39D] bg-[#FEF3C7] text-[#A85C08]'
+                        : status === 'in-progress' ? 'border-[#BDBBEF] bg-[#F7F6FF] text-[#5B5BD6]'
+                          : 'border-[#D8D5CF] bg-[#FAF9F7] text-[#8A8996]'
+                }`}>{status === 'complete' && !active ? '✓' : index + 1}</span>
+                <span>{phase.label}</span>
+                {status === 'stale' && <span className="sr-only">Needs attention</span>}
+              </button>
+            </li>
+          )
+        })}
+      </ol>
+      {analysisPhase && (
+        <div className="flex justify-center gap-1 pb-2" role="group" aria-label="Analyze and structure screens">
+          {([
+            ['analysis', 'Analysis'],
+            ['structure', 'Table of contents'],
+          ] as [Screen, string][]).map(([target, label]) => {
+            const active = current === target
+            const status = statusFor([target])
+            return (
+              <button
+                key={target}
+                type="button"
+                onClick={() => onNav(target)}
+                aria-current={active ? 'page' : undefined}
+                className={`rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] ${
+                  active ? 'bg-white text-[#4D4DC2] shadow-sm' : status === 'stale' ? 'text-[#A85C08] hover:bg-white/70' : 'text-[#777786] hover:bg-white/70'
+                }`}
+              >
+                {label}
+                <span className="sr-only">, {statusLabel(status)}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </nav>
   )
 }
 
 // ── Top Bar ───────────────────────────────────────────────────────────────────
-function TopBar({ screen, onNav, projectName, onDiagnostics, saveStatus, onRetrySave, stageStatuses }: {
+function TopBar({ screen, onNav, projectName, contentType, isProject, settingsReturnTo, onSettingsReturn, onDiagnostics, saveStatus, onRetrySave, stageStatuses }: {
   screen: Screen
   onNav: (s: Screen) => void
   projectName: string
+  contentType: string
+  isProject: boolean
+  settingsReturnTo: Screen
+  onSettingsReturn: () => Promise<unknown>
   onDiagnostics?: () => void
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
   onRetrySave?: () => void
   stageStatuses?: Record<string, StageStatus>
 }) {
-  const inProject = !['dashboard','create'].includes(screen)
+  const inProject = !['dashboard', 'create'].includes(screen)
+  const hasProject = screen !== 'dashboard' && isProject
+  const saveLabel = saveStatus === 'error' ? 'Save failed' : saveStatus === 'saving' ? 'Saving changes' : 'All changes saved'
   return (
-    <header className="h-12 bg-white border-b border-[#E2DED7] flex items-center px-5 gap-4 flex-shrink-0 z-30 relative">
-      {/* Logo / Home */}
-      <button onClick={() => onNav('dashboard')} className="flex items-center gap-2 mr-2 group flex-shrink-0">
-        <div className="w-6 h-6 rounded bg-[#5B5BD6] flex items-center justify-center">
+    <header className="relative z-30 flex-shrink-0 border-b border-[#E2DED7] bg-white">
+      <div className="flex min-h-[58px] flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 sm:px-5">
+        <button type="button" onClick={() => onNav('dashboard')} aria-label="Content Studio home" className="group flex flex-shrink-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#5B5BD6]">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <rect x="1" y="1" width="4" height="4" rx="0.75" fill="white" opacity="0.9" />
             <rect x="7" y="1" width="4" height="4" rx="0.75" fill="white" opacity="0.6" />
             <rect x="1" y="7" width="4" height="4" rx="0.75" fill="white" opacity="0.6" />
             <rect x="7" y="7" width="4" height="4" rx="0.75" fill="white" opacity="0.4" />
           </svg>
-        </div>
-        <span className="text-[13px] font-semibold text-[#111218] tracking-tight">Content Studio</span>
-      </button>
-
-      {/* Breadcrumb / project name */}
-      {inProject && (
-        <div className="flex items-center gap-2 min-w-0 flex-shrink-0">
-          <span className="text-[#C8C6C0]">/</span>
-          <span className="text-[13px] text-[#111218] font-medium truncate max-w-40">{projectName}</span>
-        </div>
-      )}
-
-      {/* Workflow steps — navigable */}
-      {inProject && (
-        <div className="flex-1 flex justify-center overflow-hidden">
-          <WorkflowSteps current={screen} onNav={onNav} stageStatuses={stageStatuses ?? {}} />
-        </div>
-      )}
-
-      <div className="ml-auto flex items-center gap-3">
-        {/* AI provider */}
-        {inProject && (
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[#E2DED7] text-[11px] text-[#6B6B7E] font-medium">
-            <div className="w-1.5 h-1.5 rounded-full bg-[#8B5CF6]" />
-            Auto – Recommended
+          </span>
+          <span className="text-[13px] font-semibold tracking-tight text-[#111218]">Content Studio</span>
+        </button>
+        {screen === 'dashboard' ? (
+          <span className="hidden text-[12px] text-[#777786] sm:block">Workspace</span>
+        ) : screen === 'create' && !hasProject ? (
+          <div className="min-w-0 border-l border-[#E2DED7] pl-3">
+            <p className="truncate text-[12px] font-semibold text-[#22222F]">New project</p>
+            <p className="text-[10px] text-[#858493]">Project setup</p>
+          </div>
+        ) : (
+          <div className="min-w-0 border-l border-[#E2DED7] pl-3">
+            <p className="max-w-[180px] truncate text-[12px] font-semibold text-[#22222F] sm:max-w-[240px]">{projectName}</p>
+            <p className="truncate text-[10px] text-[#858493]">{contentType || 'Content project'}</p>
           </div>
         )}
-        {/* Save status */}
-        {inProject && saveStatus && saveStatus !== 'idle' && (
-          saveStatus === 'error'
-            ? <button onClick={onRetrySave} className="flex items-center gap-1.5 text-[11px] font-medium text-[#DC2626] bg-[#FEF2F2] border border-[#FCA5A5] px-2.5 py-1 rounded-lg hover:bg-[#FEE2E2] transition-colors">⚠ Save failed — Retry</button>
-            : <span className={`text-[11px] font-medium transition-colors ${saveStatus === 'saving' ? 'text-[#D97706]' : 'text-[#16A34A]'}`}>{saveStatus === 'saving' ? 'Saving…' : '✓ Saved'}</span>
+        {inProject && (
+          <div className="order-3 w-full px-0 sm:order-none sm:w-auto sm:flex-1 sm:px-2">
+            <WorkflowSteps current={screen} onNav={onNav} stageStatuses={stageStatuses ?? {}} />
+          </div>
         )}
-        {/* Diagnostics (developer) */}
-        {inProject && onDiagnostics && (
-          <button onClick={onDiagnostics} title="Project Diagnostics" className="w-7 h-7 rounded border border-[#E2DED7] flex items-center justify-center text-[#9898AB] hover:text-[#5B5BD6] hover:border-[#C7C5F4] transition-colors text-[10px]">
-            ⚙
-          </button>
-        )}
-        {/* Avatar */}
-        <div className="w-7 h-7 rounded-full bg-[#EEEEFF] flex items-center justify-center text-[11px] font-semibold text-[#5B5BD6]">
-          AK
+        <div className="order-2 flex w-full flex-wrap items-center gap-1.5 sm:order-none sm:ml-auto sm:w-auto sm:flex-shrink-0 sm:gap-2">
+          {hasProject && (
+            <>
+              <button type="button" onClick={() => onNav('create')} className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
+                Project Settings
+              </button>
+              <button type="button" onClick={() => onNav('branding')} className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
+                Brand &amp; Output
+              </button>
+            </>
+          )}
+          {inProject && saveStatus && saveStatus !== 'idle' && (
+            saveStatus === 'error'
+              ? <button type="button" onClick={onRetrySave} aria-label="Save failed. Retry saving." className="min-h-8 rounded-md border border-[#F0B6B6] bg-[#FEF2F2] px-2.5 text-[10px] font-semibold text-[#B42323] transition-colors hover:bg-[#FEE2E2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42323] sm:text-[11px]">Save failed · Retry</button>
+              : <span role="status" aria-live="polite" className={`whitespace-nowrap text-[10px] font-medium sm:text-[11px] ${saveStatus === 'saving' ? 'text-[#A85C08]' : 'text-[#43845B]'}`}>{saveLabel}</span>
+          )}
+          {inProject && onDiagnostics && (
+            <button type="button" onClick={onDiagnostics} title="Open project diagnostics" className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#777786] transition-colors hover:border-[#C7C5F4] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
+              Diagnostics
+            </button>
+          )}
+          {screen === 'create' && hasProject && (
+            <button type="button" onClick={() => { void onSettingsReturn() }} className="min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">
+              Back to project
+            </button>
+          )}
+          {screen === 'create' && !hasProject && (
+            <button type="button" onClick={() => onNav('dashboard')} className="min-h-8 rounded-md border border-[#E2DED7] px-3 text-[11px] font-medium text-[#585866] hover:bg-[#F4F2EE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
+              All projects
+            </button>
+          )}
+          {screen === 'dashboard' && (
+            <button type="button" onClick={() => onNav('create')} className="min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">
+              New project
+            </button>
+          )}
         </div>
       </div>
+      {screen === 'preview' && <div className="border-t border-[#EAE8E2] bg-[#FAF9F7] px-4 py-1.5 text-center text-[10px] font-medium text-[#656474]">Preview mode <span className="mx-1 text-[#C7C5BE]">/</span> Publish outputs</div>}
     </header>
   )
 }
@@ -1380,7 +1432,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
 }
 
 // ── Screen: Create ────────────────────────────────────────────────────────────
-function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProjectName, themes, projectMeta, onProjectMetaChange, onAddTheme, onContinue }: {
+function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProjectName, themes, projectMeta, onProjectMetaChange, onContinue, settingsMode = false, returnTo = 'sources' }: {
   onNav: (s: Screen) => void
   projectName: string
   onProjectNameChange: (n: string) => void
@@ -1390,6 +1442,8 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
   onProjectMetaChange: (m: Partial<ProjectMeta>) => void
   onAddTheme: (t: Theme) => void
   onContinue: () => Promise<void>
+  settingsMode?: boolean
+  returnTo?: Screen
 }) {
   const [selected, setSelected] = useState(projectMeta?.contentType || 'user-guide')
   const [continuing, setContinuing] = useState(false)
@@ -1415,9 +1469,9 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
   return (
     <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
       <div className="mb-8">
-        <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Step 1 — Project Details</p>
+        <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">{settingsMode ? 'Project Settings' : 'Step 1 — Project Details'}</p>
         <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Project Details</h1>
-        <p className="text-[14px] text-[#6B6B7E]">Set the document type and name. Theme and styling are configured in the next step.</p>
+        <p className="text-[14px] text-[#6B6B7E]">{settingsMode ? 'Update this project’s name and document details. Your changes are saved to this project.' : 'Set the document type and name. Theme and styling are configured in the next step.'}</p>
       </div>
 
       {/* Content type grid */}
@@ -1468,21 +1522,21 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
               return
             }
             await onContinue()
-            onNav('branding')
+            onNav(settingsMode ? returnTo : 'branding')
           } catch (error) {
             const failure = error as Error & { code?: string }
             if (failure.code === 'PROJECT_NAME_CONFLICT'
               || failure.message.toLowerCase().includes('project with this name')) {
               setNameError(failure.message)
             } else {
-              setContinueError(`Could not create project: ${failure.message}`)
+              setContinueError(settingsMode ? `Could not save project settings: ${failure.message}` : `Could not create project: ${failure.message}`)
             }
           } finally {
             setContinuing(false)
           }
         }} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-60 text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
-          {continuing ? 'Creating project…' : 'Continue — Theme & Styles'}
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          {continuing ? (settingsMode ? 'Saving changes…' : 'Creating project…') : settingsMode ? 'Save changes' : 'Continue — Theme & Styles'}
+          {!settingsMode && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
         </button>
       </div>
     </div>
@@ -5283,8 +5337,8 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-5">
-        <div className="col-span-2 space-y-4">
+      <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 md:grid-cols-3 md:gap-5">
+        <div className="min-w-0 space-y-4 md:col-span-2">
           {/* Drop zone */}
           {!isDemoMode ? (
           <div
@@ -5687,7 +5741,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
         </div>
 
         {/* Integrations sidebar — unchanged */}
-        <div className="space-y-4">
+        <div className="min-w-0 w-full space-y-4">
           <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
             <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-3">Import From</p>
             {[
@@ -14539,6 +14593,7 @@ export default function App() {
   }
 
   const [prevScreen, setPrevScreen] = useState<Screen | null>(null)
+  const settingsReturnTo: Screen = prevScreen && prevScreen !== 'dashboard' && prevScreen !== 'create' ? prevScreen : 'sources'
 
   const queueProjectSave = (record: ProjectRecord, version: number): Promise<boolean> => {
     if (version <= savedVersionRef.current) return Promise.resolve(true)
@@ -14674,13 +14729,16 @@ export default function App() {
     const normalized = normalizeProjectName(candidate)
     if (!normalized) return 'Enter a project name.'
     const existing = await listProjects()
-    const conflict = existing.find(project => projectNameKey(project.projectName) === projectNameKey(normalized))
+    const conflict = existing.find(project =>
+      project.projectId !== projectId
+      && projectNameKey(project.projectName) === projectNameKey(normalized))
     return conflict
       ? `A project named “${normalized}” already exists in this workspace. Choose a different name.`
       : null
-  }, [])
+  }, [projectId])
 
   const handleCreateProjectPersist = useCallback(async () => {
+    if (projectId) throw new Error('This project already exists. Save project settings instead.')
     const newId = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const emptyReviewModel = createEmptyReviewModel(newId)
     try {
@@ -15022,6 +15080,25 @@ export default function App() {
       }
     }, delay)
   }, [projectId])
+  const handleProjectNameChange = useCallback((name: string) => {
+    setProjectName(name)
+    if (projectId) triggerAutosave()
+  }, [projectId, triggerAutosave])
+  const handleSaveProjectSettings = useCallback(async () => {
+    if (!projectId) throw new Error('No existing project is open.')
+    if (!await persistCurrentProject()) {
+      throw new Error('Your changes could not be saved. Retry saving before leaving Project Settings.')
+    }
+  }, [projectId])
+  const handleReturnFromProjectSettings = useCallback(async () => {
+    try {
+      await handleSaveProjectSettings()
+      return await navigate(settingsReturnTo)
+    } catch (error) {
+      setNavError(`Project settings were not saved: ${(error as Error).message}`)
+      return false
+    }
+  }, [handleSaveProjectSettings, navigate, settingsReturnTo])
 
   const canRebuildEvidence = sources.length > 0 && sources.every(source => {
     const extraction = sourceExtractions[source.fileId]
@@ -16111,7 +16188,7 @@ export default function App() {
     }
     switch (screen) {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
-      case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
+      case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} settingsMode={!!projectId} returnTo={settingsReturnTo} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
       case 'analysis':  return isDemoMode
@@ -16153,6 +16230,10 @@ export default function App() {
         screen={screen}
         onNav={navigate}
         projectName={displayName}
+        contentType={projectMeta.contentType}
+        isProject={!!projectId}
+        settingsReturnTo={settingsReturnTo}
+        onSettingsReturn={handleReturnFromProjectSettings}
         onDiagnostics={() => setDiagOpen(true)}
         saveStatus={projectId ? saveStatus : undefined}
         onRetrySave={() => triggerAutosave(true)}

@@ -1,5 +1,15 @@
 import { expect, test } from '@playwright/test'
 
+async function openAnalysis(page: import('@playwright/test').Page) {
+  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Analysis/ }).click()
+}
+
+async function openTableOfContents(page: import('@playwright/test').Page) {
+  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
+}
+
 test('Analysis generates a grounded proposal and opens TOC without using the progress bar', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: /New Project/ }).first().click()
@@ -21,7 +31,7 @@ test('Analysis generates a grounded proposal and opens TOC without using the pro
   await expect(page.getByRole('heading', { name: 'Review TOC proposal' })).toBeVisible()
   await expect(page.getByTestId('generate-grounded-toc')).toHaveCount(0)
   await expect(page.getByText('Access Control').first()).toBeVisible()
-  await page.locator('header').getByRole('button', { name: /Analysis/ }).click()
+  await openAnalysis(page)
   await expect(page.getByTestId('analysis-generate-toc')).toHaveText(/Review proposed TOC/)
 })
 
@@ -31,11 +41,11 @@ test('Analysis explains why TOC generation is unavailable before sources are rea
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill('No sources')
   await page.getByRole('button', { name: 'Continue — Theme & Styles' }).click()
   await page.getByRole('button', { name: 'Continue — Sources' }).click()
-  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await openAnalysis(page)
   await expect(page.getByTestId('analysis-generate-toc')).toBeDisabled()
   await expect(page.getByTestId('analysis-toc-unavailable')).toContainText('Evidence Index')
   await expect(page.getByTestId('real-toc-screen')).toHaveCount(0)
-  await page.locator('header').getByRole('button', { name: /TOC/ }).click()
+  await openTableOfContents(page)
   await expect(page.getByTestId('real-toc-screen')).toBeVisible()
 })
 

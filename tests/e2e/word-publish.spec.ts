@@ -223,7 +223,7 @@ test('Word UI downloads persisted topics after reload, not the stale active Auth
     await saveProject(record)
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Publish,/ }).click()
   await page.locator('label').filter({ hasText: 'Word' }).locator('input[type=checkbox]').check()
   await page.locator('label').filter({ hasText: 'PDF' }).locator('input[type=checkbox]').uncheck()
   await page.locator('label').filter({ hasText: 'HTML' }).locator('input[type=checkbox]').uncheck()

@@ -114,7 +114,7 @@ async function createProject(page: Page, name: string) {
 }
 
 async function openMasterPageSettings(page: Page) {
-  await page.locator('header').getByRole('button', { name: /Theme/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Brand & Output/ }).click()
   await page.getByRole('button', { name: 'Output Templates' }).click()
   await page.getByRole('button', { name: 'HTML Master Pages', exact: true }).click()
   return page.getByText('Content Width (px)', { exact: true }).locator('..').locator('input')
@@ -139,7 +139,7 @@ test('ordinary section navigation stays responsive and quick edits coalesce duri
   await saveStarted
 
   // A cloud request is still outstanding, but changing workflow sections is local and immediate.
-  await page.getByRole('button', { name: 'Sources', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Sources,/ }).click()
   await expect(page.getByRole('button', { name: 'Analyze Sources' })).toBeVisible()
 
   expect(cloud.saves).toHaveLength(0)
@@ -148,7 +148,7 @@ test('ordinary section navigation stays responsive and quick edits coalesce duri
     const pages = cloud.saves.at(-1)?.htmlMasterPages as Array<{ contentWidth: number }> | undefined
     return pages?.[0]?.contentWidth
   }).toBe(1500)
-  await expect(page.locator('header').getByText('✓ Saved', { exact: true })).toBeVisible()
+  await expect(page.locator('header').getByText('All changes saved', { exact: true })).toBeVisible()
   expect(cloud.saves.length).toBeLessThanOrEqual(2)
   expect(cloud.saves.at(-1)?.htmlMasterPages).toEqual(
     expect.arrayContaining([expect.objectContaining({ contentWidth: 1500 })]),
@@ -167,13 +167,13 @@ test('a stale-write conflict is visible and reload restores the last successful 
     const pages = [...cloud.records.values()][0]?.htmlMasterPages as Array<{ contentWidth: number }> | undefined
     return pages?.[0]?.contentWidth
   }).toBe(1300)
-  await expect(page.locator('header').getByText('✓ Saved', { exact: true })).toBeVisible()
+  await expect(page.locator('header').getByText('All changes saved', { exact: true })).toBeVisible()
   const successfulSaves = cloud.saves.length
 
   cloud.conflictNextSave = true
   width = await openMasterPageSettings(page)
   await width.fill('1400')
-  await expect(page.getByRole('button', { name: /Save failed — Retry/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Save failed\. Retry saving\./ })).toBeVisible()
   expect(cloud.saves).toHaveLength(successfulSaves)
 
   await page.reload()

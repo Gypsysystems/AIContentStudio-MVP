@@ -285,7 +285,7 @@ test('retires only the affected persisted finding when its topic is deleted', as
     ]),
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Author', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Author,/ }).click()
 
   const beta = page.locator('[title="Beta — double-click to open"]')
   await beta.hover()

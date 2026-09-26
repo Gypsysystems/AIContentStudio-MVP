@@ -153,7 +153,7 @@ test("persists an applied style profile and output template edits", async ({
     stored.htmlMasterPages.some((master) => master.contentWidth === 1400),
   ).toBe(true)
 
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(
     profileName,
   )
@@ -285,7 +285,7 @@ test("edits a duplicated profile independently and preserves both styles across 
   const reloadTheme = async () => {
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-    await page.getByRole("button", { name: /Theme$/ }).click()
+    await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   }
 
   await expectStoredState(original.id)
@@ -357,7 +357,7 @@ test("falls back to a remaining profile when the applied profile is deleted", as
 
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue("Remaining Profile")
   await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
   await expectFallbackApplied()
@@ -442,7 +442,7 @@ for (const scenario of [
 
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-    await page.getByRole("button", { name: /Theme$/ }).click()
+    await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
     await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue("Applied Profile")
     await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
     await expectProfilesInUI()
@@ -482,7 +482,7 @@ test(`falls back safely when the persisted style profile ID is ${persistedId ===
     }))
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-    await page.getByRole("button", { name: /Theme$/ }).click()
+    await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
     await expect(
       page.getByRole("heading", { name: "Theme & Style Profiles" }),
     ).toBeVisible()
@@ -501,10 +501,10 @@ test(`falls back safely when the persisted style profile ID is ${persistedId ===
     }).toBe(true)
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-    await page.getByRole("button", { name: /Theme$/ }).click()
+    await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
     await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(profileName)
     await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
-    await page.getByRole("button", { name: "Sources", exact: true }).click()
+  await page.locator("header").getByRole("button", { name: /^Sources,/ }).click()
 })
 }
 
@@ -539,7 +539,7 @@ test("resolves rich profiles by project, active, then active-theme priority acro
   const expectSelectedAfterReload = async (name: string, expectedId: string) => {
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-    await page.getByRole("button", { name: /Theme$/ }).click()
+    await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
     await expect(
       page.getByRole("textbox", { name: "Search profiles…" }),
     ).toHaveValue(name)
@@ -556,7 +556,7 @@ test("resolves rich profiles by project, active, then active-theme priority acro
       projectProfileId: expectedId,
       legacyProfileId: expectedId,
     })
-    await page.getByRole("button", { name: "Sources", exact: true }).click()
+    await page.locator("header").getByRole("button", { name: /^Sources,/ }).click()
   }
 
   await updateOnlyProject(page, project => ({
@@ -672,7 +672,7 @@ test("page layouts inherit the applied profile while preserving and resetting lo
 
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await page.getByRole("button", { name: "Output Templates", exact: true }).click()
   await expect(page.getByTestId("layout-background-source")).toHaveText("Layout override")
   await expectLayoutPreview(profiles[0], profiles[1].primaryColor)
@@ -687,7 +687,7 @@ test("page layouts inherit the applied profile while preserving and resetting lo
 
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await page.getByRole("button", { name: "Output Templates", exact: true }).click()
   await expect(page.getByTestId("layout-background-source")).toHaveText("Inherited from Brand")
   await expectLayoutPreview(profiles[0], profiles[0].primaryColor)
@@ -783,7 +783,7 @@ test("HTML masters inherit applied Brand styling and preserve resettable block o
 
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await openHtmlMasters()
   await expectMasterPreview(profiles[0], "#B45309")
   await page.getByTestId("html-master-header").click()
@@ -802,7 +802,7 @@ test("HTML masters inherit applied Brand styling and preserve resettable block o
 
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await openHtmlMasters()
   await expectMasterPreview(profiles[0], profiles[0].primaryColor)
 })
@@ -847,7 +847,7 @@ test("navigation cards bind to stable central TOC topic IDs and report missing t
 
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await openHtmlMasters()
 
   const legacyPreview = page.getByTestId("navigation-card-preview-c2")
@@ -895,7 +895,7 @@ test("navigation cards bind to stable central TOC topic IDs and report missing t
   }))
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await openHtmlMasters()
   await expect(page.getByTestId("navigation-card-preview-c1")).toContainText("Getting Started › Install and Configure")
   await expect(page.getByTestId("navigation-card-preview-c1")).toHaveAttribute("data-topic-id", "202")
@@ -906,7 +906,7 @@ test("navigation cards bind to stable central TOC topic IDs and report missing t
   }))
   await page.reload()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-  await page.getByRole("button", { name: /Theme$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Brand & Output/ }).click()
   await openHtmlMasters()
 
   const brokenPreview = page.getByTestId("navigation-card-preview-c1")

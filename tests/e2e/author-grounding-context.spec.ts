@@ -345,7 +345,7 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
   const firstContextId = (await readProject(page, projectName))
     .authorTopicMetadata["topic-access"].groundingContext.contextId
 
-  await page.getByRole("button", { name: "Author", exact: true }).click()
+  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.locator('[title="Access Control — double-click to open"]').dispatchEvent("dblclick")
   await expect(page.getByTestId("author-grounding-toggle")).toHaveAttribute("data-topic-id", "topic-access")
   await expect(page.getByTestId("author-grounding-toggle")).toHaveAttribute("data-context-id", firstContextId)
@@ -372,7 +372,7 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
     projectMeta: { ...beforeContentTypeChange.projectMeta, contentType: "api-reference" },
   })
   await page.reload()
-  await page.getByRole("button", { name: "Author", exact: true }).click()
+  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.locator('[title="Access Control — double-click to open"]').dispatchEvent("dblclick")
   await page.getByTestId("author-grounding-toggle").click()
   await expect(page.getByTestId("author-grounding-freshness")).toHaveText("Stale")

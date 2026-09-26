@@ -382,7 +382,7 @@ test('persists and reloads real Review inputs and exposes stable topic and block
     reviewModel: createEmptyReviewModel(project.projectId),
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Review', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   await expect(page.getByTestId('review-input-diagnostics')).toBeVisible()
   await page.getByTestId('review-input-topics').locator('summary').click()
   await expect(page.getByTestId('review-input-topics')).toContainText('topic-persisted')
@@ -396,7 +396,7 @@ test('persists and reloads real Review inputs and exposes stable topic and block
   expect((await readProject(page, projectName)).reviewModel.findings).toEqual([])
 
   await page.reload()
-  await page.getByRole('button', { name: 'Review', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   await page.waitForTimeout(1_500)
   await expect.poll(async () =>
     (await readProject(page, projectName)).reviewModel.inputSnapshot?.provenance.contentFingerprint,
@@ -459,7 +459,7 @@ test('keeps real Review diagnostics and persisted inputs isolated from explicit 
   const projectName = `Review input demo isolation ${Date.now()}`
   await createProject(page, projectName)
   await page.getByRole('button', { name: 'Use demo project', exact: true }).click()
-  await page.getByRole('button', { name: 'Review', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
 
   await expect(page.getByTestId('review-input-diagnostics')).toHaveCount(0)
   await expect(page.getByText('Ready to analyze your document')).toBeVisible()

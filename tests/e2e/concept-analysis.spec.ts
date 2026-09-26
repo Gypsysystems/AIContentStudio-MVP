@@ -521,7 +521,7 @@ test("marks analysis stale when evidence changes and replaces only concept and t
     topicContent: before.topicContent,
   }
 
-  await page.getByRole("button", { name: /Sources$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Sources,/ }).click()
   await page.locator('input[type="file"]').setInputFiles({
     name: "secondary.md",
     mimeType: "text/markdown",
@@ -541,7 +541,7 @@ test("marks analysis stale when evidence changes and replaces only concept and t
     conflicts: staleProject.conceptAnalysis!.conflicts,
     gaps: staleProject.conceptAnalysis!.gaps,
   }).toEqual(findingsBeforeStale)
-  await page.getByRole("button", { name: /Sources$/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Sources,/ }).click()
   await page.getByTestId("rebuild-evidence-index").click()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
 

@@ -104,7 +104,7 @@ async function openPublish(page: Page) {
     await saveProject(record)
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Publish,/ }).click()
   await expect(page.getByRole('heading', { name: 'Publish Document' })).toBeVisible()
 }
 
@@ -188,7 +188,7 @@ test('Publish QA explains missing HTML condition context and selected condition 
     return (await loadProject(getActiveProjectId()))?.publishConfig?.selectedCondition
   })).toBe('internal')
   await page.reload()
-  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Publish,/ }).click()
   await expect(page.getByRole('combobox', { name: 'HTML audience condition' })).toHaveValue('internal')
   await page.getByRole('button', { name: 'Generate Outputs' }).click()
   await expect(page.getByText('HTML Ready', { exact: true })).toBeVisible()

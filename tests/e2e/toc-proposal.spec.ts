@@ -48,6 +48,16 @@ type StoredProject = {
   tocRevision: number
 }
 
+async function openAnalysis(page: Page) {
+  await page.locator('header').getByRole("button", { name: /^Analyze & Structure/ }).click()
+  await page.locator('header').getByRole("button", { name: /^Analysis/ }).click()
+}
+
+async function openTableOfContents(page: Page) {
+  await page.locator('header').getByRole("button", { name: /^Analyze & Structure/ }).click()
+  await page.locator('header').getByRole("button", { name: /^Table of contents/ }).click()
+}
+
 async function createGroundedProject(page: Page, projectName: string) {
   await page.goto("/")
   await page.getByRole("button", { name: /New Project/ }).first().click()
@@ -78,7 +88,7 @@ async function createGroundedProject(page: Page, projectName: string) {
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current", { timeout: 15_000 })
   await page.getByRole("button", { name: "Analyze Sources" }).click()
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
-  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
+  await openTableOfContents(page)
   await expect(page.getByTestId("real-toc-screen")).toBeVisible()
 }
 
@@ -234,7 +244,7 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
 
   await expect.poll(async () => (await readProject(page, projectName)).tocProposal?.items.some(item => item.title === "Operator checklist")).toBe(true)
   await page.reload()
-  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
+  await openTableOfContents(page)
   await expect(page.getByTestId("toc-proposal-review")).toBeVisible()
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Operator checklist" })).toBeVisible()
 
@@ -329,7 +339,7 @@ test("committing evidence-backed topics opens editable initial drafts without fi
   expect(stored.topicContent[unsupported!.topicId!]).toBeUndefined()
   expect(stored.authorTopicMetadata[unsupported!.topicId!]?.generationStatus).toBe("not-generated")
 
-  await page.getByRole("button", { name: /Author/ }).click()
+  await page.locator('header').getByRole("button", { name: /^Author,/ }).click()
   await page.locator(`[title="${supported!.title} — double-click to open"]`).dispatchEvent("dblclick")
   await expect(page.getByTestId("author-generated-freshness")).toContainText("Current")
   await expect(page.getByText(blocks.find(block => block.type === "para")!.content, { exact: true }).first()).toBeVisible()
@@ -372,7 +382,7 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await page.getByTestId("generate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
 
-  await page.getByRole("button", { name: "Sources" }).click()
+  await page.locator('header').getByRole("button", { name: /^Sources,/ }).click()
   await page.locator('input[type="file"]').setInputFiles({
     name: "release-validation.md",
     mimeType: "text/markdown",
@@ -385,16 +395,16 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Stale", { timeout: 15_000 })
   await page.getByTestId("rebuild-evidence-index").click()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
-  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
+  await openTableOfContents(page)
 
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
   await expect(page.getByText("Regenerate before committing.", { exact: false })).toBeVisible()
   await expect(page.getByTestId("commit-toc-proposal")).toBeDisabled()
   await expect(page.getByTestId("regenerate-grounded-toc")).toBeDisabled()
-  await page.getByRole("button", { name: "Analysis" }).click()
+  await openAnalysis(page)
   await page.getByTestId("rebuild-concept-analysis").click()
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
-  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
+  await openTableOfContents(page)
   await page.getByTestId("regenerate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Release Validation" }).first()).toBeVisible()
@@ -412,12 +422,12 @@ test("marks a committed TOC stale after the project content type changes without
   const before = await readProject(page, projectName)
   const committedTopics = before.appToc.map(item => `${item.id}:${item.topicId}:${item.title}`)
 
-  await page.getByRole("button", { name: /Details/ }).click()
+  await page.locator('header').getByRole("button", { name: /^Project Settings/ }).click()
   await page.getByRole("button", { name: /Admin Guide/ }).click()
   await expect.poll(async () => (await readProject(page, projectName)).projectMeta.contentType).toBe("admin-guide")
   await page.getByRole("button", { name: /Content Studio/ }).click()
   await page.getByText(projectName, { exact: true }).click()
-  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
+  await openTableOfContents(page)
 
   await expect(page.getByTestId("committed-toc-stale")).toBeVisible()
   await expect(page.getByTestId("committed-toc-panel")).toContainText("Understand Flight Operations")
@@ -434,7 +444,7 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
   await page.getByTestId("generate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
 
-  await page.getByRole("button", { name: "Sources" }).click()
+  await page.locator('header').getByRole("button", { name: /^Sources,/ }).click()
   await page.locator('input[type="file"]').setInputFiles({
     name: "changed-evidence.md",
     mimeType: "text/markdown",
@@ -443,7 +453,7 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Stale", { timeout: 15_000 })
   await page.getByTestId("rebuild-evidence-index").click()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
-  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
+  await openTableOfContents(page)
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
 
   const original = await readProject(page, projectName)
@@ -474,7 +484,7 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
   expect(duplicate.tocProposal.items.map(item => item.topicId)).toEqual(originalTopicIds)
 
   await page.getByText(duplicateName, { exact: true }).click()
-  await page.locator('header').getByRole("button", { name: /TOC/ }).click()
+  await openTableOfContents(page)
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("commit-toc-proposal")).toBeDisabled()
 })

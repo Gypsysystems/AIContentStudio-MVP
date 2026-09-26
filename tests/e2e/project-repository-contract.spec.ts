@@ -267,7 +267,7 @@ test('v1 App hydration restores default styles, layouts, and conditions after re
   const expectDefaultsInApp = async () => {
     await expect(page.getByRole('heading', { name: 'Add Source Material' })).toBeVisible()
 
-    await page.getByRole('button', { name: /Theme$/ }).click()
+    await page.locator('header').getByRole('button', { name: /^Brand & Output/ }).click()
     await expect(page.getByRole('heading', { name: 'Theme & Style Profiles' })).toBeVisible()
     await expect(page.getByPlaceholder('Search profiles…')).toHaveValue('Presight Brand')
     await page.getByRole('button', { name: 'Output Templates', exact: true }).click()
@@ -293,7 +293,7 @@ test('v1 App hydration restores default styles, layouts, and conditions after re
     await expect(page.getByText('{{ProductName}}', { exact: true })).toBeVisible()
     await expect(page.getByText('{{Version}}', { exact: true })).toBeVisible()
 
-    await page.getByRole('button', { name: 'Author', exact: true }).click()
+    await page.locator('header').getByRole('button', { name: /^Author,/ }).click()
     await page.getByRole('button', { name: 'Conditions', exact: true }).click()
     await expect(page.getByText('Audience', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Beginner', exact: true })).toBeVisible()

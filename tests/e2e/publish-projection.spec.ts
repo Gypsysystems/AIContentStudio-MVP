@@ -183,7 +183,7 @@ test('Publish downloads every persisted topic, not the stale active Author block
     await saveProject(record)
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Publish,/ }).click()
   await expect(page.getByRole('heading', { name: 'Publish Document' })).toBeVisible()
   await page.locator('label').filter({ hasText: 'HTML' }).locator('input[type=checkbox]').check()
   await page.getByRole('button', { name: 'Generate Outputs' }).click()

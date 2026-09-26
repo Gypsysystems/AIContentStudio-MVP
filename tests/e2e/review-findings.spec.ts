@@ -978,7 +978,8 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     reviewModel: createEmptyReviewModel(stored.projectId),
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Analysis' }).click()
+  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Analysis/ }).click()
   await page.getByRole('button', { name: /Recheck Content|Check Content/ }).click()
   await expect.poll(async () => {
     const project = await readProject(page, projectName)
@@ -988,7 +989,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     (await readProject(page, projectName)).reviewModel.inputSnapshot?.readiness,
   ).toBe('ready')
 
-  await page.getByRole('button', { name: /Review/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   await expect(page.getByTestId('run-grounded-review')).toBeEnabled()
   await page.getByTestId('run-grounded-review').click()
   await expect(page.getByTestId('grounded-review-finding')).toHaveCount(4)
@@ -1039,7 +1040,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   await page.reload()
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(2)
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.findings.length).toBe(8)
-  await page.getByRole('button', { name: /Review/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   // Rehydrated grounding metadata may make an older run stale; rerun from the current ready snapshot.
   await expect(page.getByTestId('run-grounded-review')).toBeEnabled({ timeout: 10_000 })
   await page.getByTestId('run-grounded-review').click()
@@ -1063,11 +1064,12 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     reviewModel: previous.reviewModel,
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Analysis' }).click()
+  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Analysis/ }).click()
   await page.getByRole('button', { name: /Recheck Content|Check Content/ }).click()
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.inputSnapshot?.readiness)
     .toBe('ready')
-  await page.getByRole('button', { name: /Review/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   await page.getByTestId('run-grounded-review').click()
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.runs.length).toBe(4)
   const updated = (await readProject(page, projectName)).reviewModel
@@ -1097,7 +1099,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
   const persisted = (await readProject(page, projectName)).reviewModel
   expect(persisted.findings.find(finding => finding.findingId === current.find(finding => finding.category === 'Spelling')!.findingId))
     .toMatchObject({ topicId: 'topic-recovery-ui', blockId: 'block-recovery-ui', originalText: 'recieve' })
-  await page.getByRole('button', { name: /Review/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   await expect(page.getByTestId('review-open-in-author').first()).toBeEnabled()
   const beforeDeletion = await readProject(page, projectName)
   await patchProject(page, projectName, {
@@ -1106,7 +1108,7 @@ test('runs, filters, inspects, persists, and reruns grounded findings in the rea
     reviewModel: beforeDeletion.reviewModel,
   })
   await page.reload()
-  await page.getByRole('button', { name: /Review/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   await expect(page.getByTestId('review-navigation-unavailable').first()).toHaveAttribute('data-reason', 'stale')
   await expect(page.getByTestId('review-open-in-author').first()).toBeDisabled()
   await expect(page.getByTestId('review-navigation-unavailable').first()).toContainText('Rerun Review')
@@ -1143,10 +1145,11 @@ test('previews, rejects, dismisses, and applies only the exact real spelling rep
     reviewModel: createEmptyReviewModel(stored.projectId),
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Analysis' }).click()
+  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Analysis/ }).click()
   await page.getByRole('button', { name: /Recheck Content|Check Content/ }).click()
   await expect.poll(async () => (await readProject(page, projectName)).reviewModel.inputSnapshot?.readiness).toBe('ready')
-  await page.getByRole('button', { name: /Review/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   await page.getByTestId('run-grounded-review').click()
   await page.getByTestId('review-category-filter').selectOption('Spelling')
   await expect(page.getByTestId('grounded-review-finding')).toHaveCount(1)
@@ -1184,7 +1187,7 @@ test('previews, rejects, dismisses, and applies only the exact real spelling rep
   expect(reloaded.topicContent['topic-spelling'][0].content).toBe('Users should receive updates.')
   expect(reloaded.reviewModel.findings.find(item => item.findingId === findingId))
     .toMatchObject({ status: 'resolved', resolutionHistory: expect.arrayContaining([expect.objectContaining({ action: 'applied' })]) })
-  await page.getByRole('button', { name: /Review/ }).click()
+  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
   await page.getByTestId('review-category-filter').selectOption('Spelling')
   await page.getByTestId('review-status-filter').selectOption('resolved')
   await page.getByTestId('grounded-review-finding').getByRole('button', { name: 'Inspect' }).click()

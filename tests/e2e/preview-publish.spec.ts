@@ -10,7 +10,7 @@ async function createProject(page: Page) {
   await expect.poll(() => page.evaluate(() => localStorage.getItem('docflow-active-project'))).not.toBeNull()
 }
 async function openPreview(page: Page) {
-  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Publish,/ }).click()
   await page.getByRole('button', { name: 'Full Preview' }).click()
 }
 
@@ -104,7 +104,7 @@ test('real Preview renders all committed stable-ID topics and structures, select
     await saveProject(record)
   }, png)
   await page.reload()
-  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Publish,/ }).click()
   await expect(page.getByTestId('publish-conditional-warning')).toContainText('HTML export condition context is required')
   await page.getByRole('button', { name: 'Full Preview' }).click()
   const preview = page.getByTestId('project-preview')

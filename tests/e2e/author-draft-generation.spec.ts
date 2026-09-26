@@ -508,7 +508,7 @@ test("persists a reviewable draft without overwriting manual content and applies
   await expect.poll(async () =>
     (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.groundingContext?.contextId,
   ).toMatch(/^grounding-/)
-  await page.getByRole("button", { name: /Author/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.locator('[title="Access operations — double-click to open"]').dispatchEvent("dblclick")
   await page.getByTestId("author-draft-toggle").click()
   await page.getByTestId("generate-author-draft").click()
@@ -544,7 +544,7 @@ test("persists a reviewable draft without overwriting manual content and applies
   ).toBe(draftId)
   expect((await readProject(page, projectName)).topicContent).toEqual(manualContent)
 
-  await page.getByRole("button", { name: /Author/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.locator('[title="Access operations — double-click to open"]').dispatchEvent("dblclick")
   await page.getByTestId("author-draft-toggle").click()
   await expect(page.getByTestId("author-draft-freshness")).toHaveText("Current")
@@ -594,7 +594,7 @@ test("persists a reviewable draft without overwriting manual content and applies
   await expect.poll(async () =>
     (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.generatedFreshness,
   ).toBe("stale")
-  await page.getByRole("button", { name: /Author/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.locator('[title="Access operations — double-click to open"]').dispatchEvent("dblclick")
   await page.getByTestId("author-draft-toggle").click()
   await expect(page.getByTestId("author-draft-freshness")).toHaveText("Stale")
@@ -630,7 +630,7 @@ test("persists a reviewable draft without overwriting manual content and applies
     (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.regenerationProposal?.proposalId,
   ).toBe(proposalId)
   expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
-  await page.getByRole("button", { name: /Author/ }).click()
+  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.locator('[title="Access operations — double-click to open"]').dispatchEvent("dblclick")
   await page.getByTestId("author-draft-toggle").click()
   const protectedRow = page.locator('[data-diff-status="protected"]').filter({ hasText: "Reference details" })

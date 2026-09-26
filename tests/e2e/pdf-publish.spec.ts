@@ -275,7 +275,7 @@ test('PDF download reads persisted full-project content after reload instead of 
     await saveProject(record)
   })
   await page.reload()
-  await page.getByRole('button', { name: 'Publish', exact: true }).click()
+  await page.locator('header').getByRole('button', { name: /^Publish,/ }).click()
   await page.locator('label').filter({ hasText: 'PDF' }).locator('input[type=checkbox]').check()
   await page.locator('label').filter({ hasText: 'Word' }).locator('input[type=checkbox]').uncheck()
   await page.locator('label').filter({ hasText: 'HTML' }).locator('input[type=checkbox]').uncheck()
