@@ -8827,11 +8827,13 @@ function StructureScreen({ onNav, isDemoMode, toc: tocProp, onTocChange, analysi
 
 // ── Studio: Editable Outline / TOC Panel ─────────────────────────────────────
 function OutlineTocPanel({
-  toc, setToc, activeSection, onSelectSection, onOpenTopic, width, onCollapse,
+  toc, setToc, activeSection, activeTopicId, metadata, onSelectSection, onOpenTopic, width, onCollapse,
 }: {
   toc: TocItem[]
   setToc: React.Dispatch<React.SetStateAction<TocItem[]>>
   activeSection: number
+  activeTopicId: number | null
+  metadata?: AuthorTopicMetadataMap
   onSelectSection: (id: number) => void
   onOpenTopic: (id: number, title: string) => void
   width: number
@@ -8983,7 +8985,8 @@ function OutlineTocPanel({
   const renderTree = () => (
     <div className="p-1">
       {visibleItems.map(item => {
-        const isActive = activeSection === item.id
+        const isActive = activeTopicId === item.id
+        const isSelected = activeSection === item.id
         const isEditing = editing === item.id
         const isFlashing = justMoved === item.id
         const isDragTarget = dragOver === item.id && dragId !== item.id
@@ -8997,16 +9000,24 @@ function OutlineTocPanel({
         return (
           <div
             key={item.id}
+            data-testid="author-topic-row"
+            data-topic-id={stableAuthorTopicId(item)}
+            role="button"
+            aria-current={isActive ? 'true' : undefined}
+            tabIndex={0}
             draggable
             onDragStart={e => { e.stopPropagation(); setDragId(item.id) }}
             onDragEnd={handleDragEnd}
             onDragOver={e => { e.preventDefault(); setDragOver(item.id) }}
-            onClick={e => { e.stopPropagation(); onSelectSection(item.id); setTocSelected(item.id) }}
-            onDoubleClick={e => { e.stopPropagation(); onOpenTopic(item.id, item.title) }}
-            title={`${item.title} — double-click to open`}
-            className={`group relative flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer transition-all select-none ${indentCls}
+            onClick={e => { e.stopPropagation(); onSelectSection(item.id); setTocSelected(item.id); if (activeTopicId !== item.id) onOpenTopic(item.id, item.title) }}
+            onKeyDown={e => {
+              if (e.target !== e.currentTarget) return
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectSection(item.id); setTocSelected(item.id); if (activeTopicId !== item.id) onOpenTopic(item.id, item.title) }
+            }}
+            title={`${item.title} — open topic`}
+            className={`group relative flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer transition-all select-none ${indentCls}
               ${isDragTarget ? 'border-t-2 border-[#5B5BD6]' : ''}
-              ${isFlashing ? 'bg-[#DCFCE7]' : isActive ? 'bg-[#EEEEFF]' : 'hover:bg-[#F9F8F6]'}
+              ${isFlashing ? 'bg-[#DCFCE7]' : isActive ? 'bg-[#E8EBE7] ring-1 ring-inset ring-[#9BAA9D]' : isSelected ? 'bg-[#F4F2EE]' : 'hover:bg-[#F9F8F6]'}
             `}
           >
             {/* Drag grip */}
@@ -9050,6 +9061,19 @@ function OutlineTocPanel({
                 {isCollapsed && hasKids && <span className="ml-1 text-[9px] text-[#C8C6C0]">({toc.filter(x => x.parentId === item.id).length})</span>}
               </span>
             )}
+
+            {/* Topic readiness */}
+            {(() => {
+              const stableId = stableAuthorTopicId(item)
+              const topicMeta = metadata?.[stableId]
+              const fresh = topicMeta?.generatedFreshness === 'current'
+              const status = topicMeta?.generatedFreshness ?? (item.hasGap ? 'needs-grounding' : 'not-applicable')
+              return (
+                <span className={`flex-shrink-0 rounded px-1 py-0.5 text-[8px] font-medium ${fresh ? 'bg-[#E4F1E8] text-[#38694A]' : status === 'stale' || status === 'needs-grounding' ? 'bg-[#F8EBDD] text-[#89551C]' : 'bg-[#F1F0EC] text-[#77786F]'}`}>
+                  {fresh ? 'Ready' : status === 'stale' ? 'Stale' : status === 'needs-grounding' ? 'Ground' : topicMeta?.contentOrigin === 'manual' ? 'Manual' : 'Draft'}
+                </span>
+              )
+            })()}
 
             {/* Source status */}
             {item.hasGap ? (
@@ -9117,12 +9141,13 @@ function OutlineTocPanel({
     <>
       {/* ── Sidebar panel ── */}
       <aside
-        className="flex-shrink-0 bg-white flex flex-col overflow-hidden"
+        data-testid="author-outline"
+        className="author-outline-panel flex-shrink-0 bg-white flex flex-col overflow-hidden"
         style={{ width }}
       >
         {/* Header */}
         <div className="px-3 py-2.5 border-b border-[#E2DED7] flex items-center gap-1.5">
-          <span className="text-[10px] font-semibold text-[#9898AB] uppercase tracking-wider flex-1">Outline</span>
+          <span className="text-[10px] font-semibold text-[#7A8279] uppercase tracking-[0.14em] flex-1">Outline</span>
           {crossRefHint !== null && (
             <div className="flex items-center gap-1 text-[9px] text-[#D97706] fade-in">
               <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 0.5L7.5 7.5H0.5z" stroke="currentColor" strokeWidth="0.9" strokeLinejoin="round"/></svg>
@@ -9135,6 +9160,7 @@ function OutlineTocPanel({
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
           </button>
           <button onClick={onCollapse}
+            aria-label="Close outline"
             title="Hide outline"
             className="w-5 h-5 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#C8C6C0] hover:text-[#6B6B7E] transition-colors">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5h6M2 3h6M2 7h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
@@ -9240,16 +9266,36 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
+  const [contextTab, setContextTab] = useState<'evidence' | 'sources' | 'review' | 'assist'>('evidence')
+  const [outlineDrawerOpen, setOutlineDrawerOpen] = useState(false)
+  const [contextDrawerOpen, setContextDrawerOpen] = useState(false)
+  const [compactLayout, setCompactLayout] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1280)
+  const outlineTriggerRef = useRef<HTMLButtonElement>(null)
+  const contextTriggerRef = useRef<HTMLButtonElement>(null)
+  const closeOutlineDrawer = (hideOutline = false) => {
+    setOutlineDrawerOpen(false)
+    if (hideOutline) setOutlineOpen(false)
+    requestAnimationFrame(() => outlineTriggerRef.current?.focus())
+  }
+  const closeContextDrawer = () => {
+    setContextDrawerOpen(false)
+    requestAnimationFrame(() => contextTriggerRef.current?.focus())
+  }
   const [tocWidth, setTocWidth] = useState(260)
   const [activeSection, setActiveSection] = useState(1)
   const [activeTopicId, setActiveTopicId] = useState<number | null>(null)
+  useEffect(() => {
+    const update = () => setCompactLayout(window.innerWidth < 1280)
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
   const [realReviewFocus, setRealReviewFocus] = useState<'pending' | 'focused' | 'unavailable' | 'missing' | null>(null)
 
-  // Open a topic in the canvas (on double-click)
+  // Open a topic in the canvas while preserving the current topic's blocks.
   const openTopic = (topicId: number, topicTitle: string) => {
     // Save current topic's blocks into central state
     if (activeTopicId !== null && onTopicContentChange) {
@@ -9364,8 +9410,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   const canvasRef = useRef<HTMLDivElement>(null)
 
   // --- Authoring state ---
-  const [saveState, setSaveState] = useState<'saved' | 'saving'>('saved')
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [showInsertMenu, setShowInsertMenu] = useState(false)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showConditions, setShowConditions] = useState(false)
@@ -9580,9 +9624,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   }, [docBlocks, activeTopicId])
 
   const triggerSave = () => {
-    setSaveState('saving')
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => setSaveState('saved'), 1500)
     onContentEdit?.()
   }
 
@@ -9963,7 +10004,25 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   const groundedSourceReference = primaryTopicEvidence
     ? `[Source: ${primaryTopicEvidence.sourceFileName} · ${primaryTopicEvidence.location}]`
     : null
-
+  const activeReviewFindings = !isDemoMode && activeStableTopicId && reviewModel?.activeReviewRunId
+    ? reviewModel.findings.filter(finding =>
+        finding.reviewRunId === reviewModel.activeReviewRunId
+        && finding.topicId === activeStableTopicId
+        && finding.status !== 'retired'
+        && finding.status !== 'dismissed')
+    : []
+  const focusReviewFinding = (finding: ReviewFinding) => {
+    if (!activeTopic || finding.freshness.status !== 'current' || !finding.blockId) return
+    const blockExists = docBlocks.some(block => block.id === finding.blockId)
+    if (!blockExists) return
+    const target = canvasRef.current?.querySelector<HTMLElement>(`[data-author-block-id="${CSS.escape(finding.blockId)}"]`)
+    if (!target) return
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setFocusedBlockId(finding.blockId)
+    const editable = target.querySelector<HTMLElement>('[contenteditable]')
+    if (editable) editable.focus({ preventScroll: true })
+    else target.focus({ preventScroll: true })
+  }
   const setTopicSourceSelection = (nextSourceIds: string[]) => {
     if (!activeStableTopicId || isDemoMode || !onAuthorTopicMetadataChange) return
     const sourceIds = [...new Set(nextSourceIds)].filter(fileId =>
@@ -10056,6 +10115,222 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
       : [...selectedTopicSourceIds, fileId])
   }
 
+  const renderAuthorContext = () => (
+    <aside data-testid="author-context" className="author-context-pane flex min-h-0 flex-col bg-[#FBFCFA]">
+      <div className="flex items-start justify-between gap-3 border-b border-[#E2E6DF] px-4 py-4">
+        <div className="min-w-0">
+          <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[#788378]">Topic context</p>
+          <h2 className="mt-1 truncate text-[14px] font-semibold text-[#263229]">{activeTopic?.title ?? 'Choose a topic'}</h2>
+          <p className="mt-1 text-[10px] text-[#7D877D]">
+            {activeGroundingFresh ? 'Grounding current' : activeGroundingContext ? 'Grounding needs refresh' : 'No grounding context'}
+            {activeReviewFindings.length > 0 ? ` · ${activeReviewFindings.length} review finding${activeReviewFindings.length === 1 ? '' : 's'}` : ''}
+          </p>
+        </div>
+        {compactLayout && (
+          <button type="button" aria-label="Close context panel" onClick={closeContextDrawer} className="author-close-button">Close</button>
+        )}
+      </div>
+      <div role="tablist" aria-label="Topic context" className="grid grid-cols-4 gap-1 border-b border-[#E2E6DF] px-3 py-2">
+        {([
+          ['evidence', 'Evidence'],
+          ['sources', 'Sources'],
+          ['review', 'Review'],
+          ['assist', 'Assist'],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={contextTab === key}
+            data-testid={`author-context-tab-${key}`}
+            onClick={() => setContextTab(key)}
+            className={`rounded-md px-1 py-2 text-[10px] font-medium transition-colors ${contextTab === key ? 'bg-[#E8ECE6] text-[#33483A] shadow-sm' : 'text-[#778078] hover:bg-[#F0F2EE] hover:text-[#344138]'}`}
+          >{label}</button>
+        ))}
+      </div>
+      <div className="author-context-scroll flex-1 overflow-y-auto px-4 py-4">
+        {contextTab === 'evidence' && (
+          <div className="space-y-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold text-[#344138]">Grounding evidence</p>
+                <p className="mt-0.5 text-[10px] text-[#879087]">Committed to this topic</p>
+              </div>
+              {!isDemoMode && <span className={`rounded-full px-2 py-1 text-[9px] font-semibold ${activeGroundingFresh ? 'bg-[#E4F1E8] text-[#38694A]' : 'bg-[#F7EBDD] text-[#8B5B25]'}`}>{activeGroundingFresh ? 'Current' : 'Refresh'}</span>}
+            </div>
+            {activeGroundingContext ? (
+              <>
+                <section data-testid="author-context-required-evidence">
+                  <p className="mb-2 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#788378]">Required · {activeGroundingContext.requiredEvidence.length}</p>
+                  {activeGroundingContext.requiredEvidence.length ? activeGroundingContext.requiredEvidence.map(item => (
+                    <article key={item.evidenceId} data-evidence-id={item.evidenceId} data-source-id={item.fileId} className="mb-2 rounded-lg border border-[#E0E5DE] bg-white p-3">
+                      <p className="text-[11px] font-semibold text-[#435A49]">{item.sourceFileName}</p>
+                      <p className="mt-0.5 font-mono-code text-[9px] text-[#899288]">{item.location}</p>
+                      <p className="mt-2 line-clamp-4 text-[10px] leading-relaxed text-[#4E5A50]">{item.text}</p>
+                    </article>
+                  )) : <p className="rounded-lg border border-dashed border-[#D9D8C9] bg-[#FAF8F0] p-3 text-[10px] text-[#856A3E]">No required evidence is attached to this topic.</p>}
+                </section>
+                <section data-testid="author-context-optional-evidence">
+                  <p className="mb-2 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#788378]">Optional · {activeGroundingContext.optionalSupportingEvidence.length}</p>
+                  {activeGroundingContext.optionalSupportingEvidence.length ? activeGroundingContext.optionalSupportingEvidence.map(item => (
+                    <article key={item.evidenceId} data-evidence-id={item.evidenceId} className="mb-2 rounded-lg border border-[#E0E5DE] bg-white p-3">
+                      <p className="text-[10px] font-medium text-[#46564A]">{item.sourceFileName}</p>
+                      <p className="mt-0.5 font-mono-code text-[9px] text-[#899288]">{item.location}</p>
+                      <p className="mt-2 line-clamp-3 text-[10px] leading-relaxed text-[#657066]">{item.text}</p>
+                    </article>
+                  )) : <p className="text-[10px] text-[#8A9288]">No optional evidence matched this topic.</p>}
+                </section>
+              </>
+            ) : (
+              <div className="rounded-xl border border-dashed border-[#D7DDD5] bg-white p-4">
+                <p className="text-[11px] font-semibold text-[#46564A]">Grounding has not been built</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-[#818B81]">Build a read-only evidence context from current project sources. Nothing in the authored blocks will change.</p>
+                {!isDemoMode && <button type="button" data-testid="refresh-author-grounding" disabled={!activeStableTopicId} onClick={() => activeStableTopicId && onRefreshTopicGrounding?.(activeStableTopicId)} className="author-context-action mt-3 w-full">Build grounding context</button>}
+              </div>
+            )}
+            {activeGroundingContext && activeGroundingContext.gaps.length > 0 && (
+              <section>
+                <p className="mb-2 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#946C33]">Evidence gaps</p>
+                {activeGroundingContext.gaps.map(gap => <div key={gap.id} className="mb-2 rounded-lg border border-[#E9DFC9] bg-[#FBF7EC] p-3"><p className="text-[10px] font-semibold text-[#755B31]">{gap.title}</p><p className="mt-1 text-[10px] leading-relaxed text-[#827252]">{gap.rationale}</p></div>)}
+              </section>
+            )}
+          </div>
+        )}
+        {contextTab === 'sources' && (
+          <div>
+            <div className="mb-4">
+              <p className="text-[11px] font-semibold text-[#344138]">Source references</p>
+              <p className="mt-0.5 text-[10px] text-[#879087]">{selectedTopicSources.length} source{selectedTopicSources.length === 1 ? '' : 's'} selected for this topic</p>
+            </div>
+            {selectedTopicSources.length ? selectedTopicSources.map(source => {
+              const extraction = sourceExtractions?.[source.fileId]
+              const sourceEvidence = topicEvidenceItems.filter(item => item.fileId === source.fileId || item.sourceId === source.fileId)
+              const sourceBlocks = extraction?.blocks.filter(block => block.text.trim().length > 0) ?? []
+              return (
+                <section key={source.fileId} className="mb-4">
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <p className="text-[11px] font-semibold leading-snug text-[#435A49]">{source.name}</p>
+                    <span className="shrink-0 rounded bg-[#EEF1EC] px-1.5 py-0.5 text-[8px] font-medium text-[#68766A]">{extraction?.status ?? 'selected'}</span>
+                  </div>
+                  {sourceEvidence.length ? sourceEvidence.slice(0, 5).map(item => (
+                    <article key={item.id} className="mb-2 rounded-lg border border-[#E0E5DE] bg-white p-3">
+                      <p className="font-mono-code text-[9px] text-[#899288]">{item.location}</p>
+                      <p className="mt-1 line-clamp-4 text-[10px] leading-relaxed text-[#4E5A50]">{item.text}</p>
+                    </article>
+                  )) : sourceBlocks.length ? sourceBlocks.slice(0, 5).map(block => (
+                    <article key={block.id} className="mb-2 rounded-lg border border-[#E0E5DE] bg-white p-3">
+                      <p className="font-mono-code text-[9px] text-[#899288]">{block.page != null ? `p. ${block.page}` : block.sectionPath?.join(' › ') || 'Extracted passage'}</p>
+                      <p className="mt-1 line-clamp-4 text-[10px] leading-relaxed text-[#4E5A50]">{block.text}</p>
+                    </article>
+                  )) : <p className="rounded-lg border border-dashed border-[#D9DDD7] p-3 text-[10px] text-[#818B81]">{extraction ? 'No extracted text is available for this source.' : 'Extraction is not available for this source yet.'}</p>}
+                </section>
+              )
+            }) : <div className="rounded-xl border border-dashed border-[#D7DDD5] bg-white p-4 text-[10px] leading-relaxed text-[#818B81]">No source references are selected for the active topic.</div>}
+          </div>
+        )}
+        {contextTab === 'review' && (
+          <div>
+            <div className="mb-4">
+              <p className="text-[11px] font-semibold text-[#344138]">Review findings</p>
+              <p className="mt-0.5 text-[10px] text-[#879087]">Current run · exact authored block targets only</p>
+            </div>
+            {activeReviewFindings.length ? activeReviewFindings.map(finding => {
+              const exactBlockExists = !!finding.blockId && docBlocks.some(block => block.id === finding.blockId)
+              const targetIsCurrent = finding.freshness.status === 'current' && exactBlockExists
+              return (
+                <button
+                  key={finding.findingId}
+                  type="button"
+                  data-testid="author-review-finding"
+                  data-finding-id={finding.findingId}
+                  disabled={!targetIsCurrent}
+                  onClick={() => focusReviewFinding(finding)}
+                  className="mb-2 block w-full rounded-lg border border-[#E0E5DE] bg-white p-3 text-left transition-colors hover:border-[#A9B7A9] hover:bg-[#FBFCFA] disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-label={`${finding.severity} finding: ${finding.category}. ${targetIsCurrent ? 'Focus exact block' : 'Target unavailable or stale'}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`rounded px-1.5 py-0.5 text-[8px] font-semibold uppercase ${finding.severity === 'critical' ? 'bg-[#F7E3E0] text-[#914D42]' : finding.severity === 'warning' ? 'bg-[#F7EBDD] text-[#89551C]' : 'bg-[#EEF1EC] text-[#657467]'}`}>{finding.severity}</span>
+                    <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-[#405044]">{finding.category}</span>
+                    <span className="text-[9px] text-[#778078]">{finding.status}</span>
+                  </div>
+                  {finding.originalText && (
+                    <div className="mt-2 rounded-md border-l-2 border-[#9EAC9F] bg-[#F7F9F6] px-2.5 py-2">
+                      <p className="text-[8px] font-semibold uppercase tracking-[0.12em] text-[#788378]">Claim in authored block</p>
+                      <p className="mt-1 whitespace-pre-wrap text-[10px] leading-relaxed text-[#46564A]">{finding.originalText}</p>
+                    </div>
+                  )}
+                  <p className="mt-2 text-[10px] leading-relaxed text-[#59665B]">{finding.rationale}</p>
+                  {(finding.suggestion || finding.sourceReferences.length > 0 || finding.evidenceReferences.length > 0) && (
+                    <div className="mt-3 space-y-2 border-t border-[#EDF0EB] pt-2">
+                      {finding.suggestion && (
+                        <div className="rounded-md bg-[#F7F9F6] p-2.5">
+                          <p className="text-[8px] font-semibold uppercase tracking-[0.12em] text-[#788378]">Review suggestion</p>
+                          {finding.suggestion.originalText && <p className="mt-1 text-[10px] leading-relaxed text-[#6B756B]"><span className="font-semibold">Current: </span>{finding.suggestion.originalText}</p>}
+                          {finding.suggestion.proposedText && <p className="mt-1 text-[10px] leading-relaxed text-[#46564A]"><span className="font-semibold">Proposed: </span>{finding.suggestion.proposedText}</p>}
+                          {finding.suggestion.rationale && <p className="mt-1 text-[9px] leading-relaxed text-[#788378]">{finding.suggestion.rationale}</p>}
+                        </div>
+                      )}
+                      {finding.sourceReferences.length > 0 && (
+                        <section aria-label="Finding source references">
+                          <p className="mb-1 text-[8px] font-semibold uppercase tracking-[0.12em] text-[#788378]">Source references</p>
+                          {finding.sourceReferences.map((reference, index) => {
+                            const location = reference.location || reference.sectionPath?.join(' › ')
+                            return (
+                              <div key={`${reference.sourceId}-${reference.fileId}-${reference.blockId ?? ''}-${index}`} className="mb-1 rounded-md border border-[#E4E9E2] bg-white px-2.5 py-2">
+                                <p className="text-[9px] font-semibold text-[#4B5E4D]">{reference.sourceFileName || reference.sourceId || reference.fileId}</p>
+                                {(location || reference.blockId) && <p className="mt-0.5 font-mono-code text-[8px] text-[#899288]">{location}{location && reference.blockId ? ' · ' : ''}{reference.blockId ? `Block ${reference.blockId}` : ''}</p>}
+                              </div>
+                            )
+                          })}
+                        </section>
+                      )}
+                      {finding.evidenceReferences.length > 0 && (
+                        <section aria-label="Finding evidence references">
+                          <p className="mb-1 text-[8px] font-semibold uppercase tracking-[0.12em] text-[#788378]">Evidence references</p>
+                          {finding.evidenceReferences.map((reference, index) => {
+                            const location = reference.location || reference.sectionPath?.join(' › ')
+                            return (
+                              <div key={`${reference.evidenceId}-${index}`} className="mb-1 rounded-md border border-[#E4E9E2] bg-white px-2.5 py-2">
+                                <p className="text-[9px] font-semibold text-[#4B5E4D]">{reference.sourceFileName || reference.evidenceId}</p>
+                                {(location || reference.blockId) && <p className="mt-0.5 font-mono-code text-[8px] text-[#899288]">{location}{location && reference.blockId ? ' · ' : ''}{reference.blockId ? `Block ${reference.blockId}` : ''}</p>}
+                                {reference.excerpt && <p className="mt-1 line-clamp-3 text-[9px] leading-relaxed text-[#58645A]">{reference.excerpt}</p>}
+                              </div>
+                            )
+                          })}
+                        </section>
+                      )}
+                    </div>
+                  )}
+                  <p className="mt-2 font-mono-code text-[9px] text-[#899288]">{finding.blockId ? `Block ${finding.blockId}` : 'No exact block target'} · {targetIsCurrent ? 'Focus target' : exactBlockExists ? 'Stale target' : 'Target unavailable'}</p>
+                </button>
+              )
+            }) : <div className="rounded-xl border border-dashed border-[#D7DDD5] bg-white p-4 text-[10px] leading-relaxed text-[#818B81]">There are no current-run Review findings for this topic.</div>}
+          </div>
+        )}
+        {contextTab === 'assist' && (
+          <div className="space-y-4">
+            <div>
+              <p className="text-[11px] font-semibold text-[#344138]">Grounded drafting</p>
+              <p className="mt-1 text-[10px] leading-relaxed text-[#778278]">Drafts are deterministic and grounded in the selected evidence. This is not provider-backed AI. Nothing enters the editor until you review and apply changes.</p>
+            </div>
+            <div className="rounded-lg border border-[#E0E5DE] bg-white p-3">
+              <p className="text-[10px] font-semibold text-[#46564A]">Grounding status</p>
+              <p className="mt-1 text-[10px] text-[#7D877D]">{activeGroundingFresh ? 'Current context is ready for drafting.' : activeGroundingContext ? 'Refresh the context before drafting.' : 'Build topic grounding before drafting.'}</p>
+              <button type="button" disabled={!activeStableTopicId || isDemoMode} onClick={() => activeStableTopicId && onRefreshTopicGrounding?.(activeStableTopicId)} className="author-context-action mt-3 w-full disabled:cursor-not-allowed disabled:opacity-50">{activeGroundingContext ? 'Refresh grounding' : 'Build grounding'}</button>
+            </div>
+            <div className="rounded-lg border border-[#E0E5DE] bg-white p-3">
+              <p className="text-[10px] font-semibold text-[#46564A]">Draft controls</p>
+              <p className="mt-1 text-[10px] text-[#7D877D]">{activeDraft ? `${activeDraft.blocks.length} draft blocks · ${activeDraftFresh ? 'current' : 'out of date'}` : 'No draft has been generated for this topic.'}</p>
+              <button type="button" disabled={!activeStableTopicId || !activeGroundingFresh || isDemoMode} onClick={() => { setDraftOpen(true); generateTopicContent(activeTopic?.title ?? 'New topic') }} className="author-context-action mt-3 w-full disabled:cursor-not-allowed disabled:opacity-50">Generate deterministic draft</button>
+              <button type="button" disabled={!activeStableTopicId} onClick={() => { setDraftOpen(true); setConfirmDraftApply(false) }} className="mt-2 w-full rounded-lg border border-[#DCE2DA] bg-[#F9FAF8] px-3 py-2 text-[10px] font-medium text-[#566458] hover:bg-[#F0F3EE] disabled:cursor-not-allowed disabled:opacity-50">{activeDraft ? 'Review draft and apply changes' : 'Open draft review'}</button>
+            </div>
+            {topicAiWarning && <p role="status" className="rounded-lg border border-[#E7DCC7] bg-[#FBF7EC] p-3 text-[10px] leading-relaxed text-[#765F37]">{topicAiWarning}</p>}
+          </div>
+        )}
+      </div>
+    </aside>
+  )
+
   const handleSelection = useCallback(() => {
     const sel = window.getSelection()
     if (sel && sel.toString().trim().length > 10 && canvasRef.current?.contains(sel.anchorNode ?? null)) {
@@ -10093,6 +10368,20 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
         }
       }
       if (e.key === 'Escape') {
+        const target = e.target as HTMLElement | null
+        const editingField = !!target?.closest('input, textarea, [contenteditable="true"]')
+        if (!editingField && contextDrawerOpen) {
+          e.preventDefault()
+          e.stopPropagation()
+          closeContextDrawer()
+          return
+        }
+        if (!editingField && compactLayout && outlineDrawerOpen) {
+          e.preventDefault()
+          e.stopPropagation()
+          closeOutlineDrawer()
+          return
+        }
         setShowFind(false)
         setShowInsertMenu(false)
         setShowMoreMenu(false)
@@ -10106,7 +10395,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [])
+  }, [compactLayout, contextDrawerOpen, outlineDrawerOpen])
 
   // Focus newly created list items after state settles
   useEffect(() => {
@@ -10261,21 +10550,24 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
 
 
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div data-testid="author-workspace" className="author-workspace flex-1 flex overflow-hidden">
       {/* Editable outline / TOC panel */}
-      {outlineOpen && (
+      {outlineOpen && (!compactLayout || outlineDrawerOpen) && (
         <>
+          {compactLayout && <button type="button" aria-label="Close outline drawer" className="author-drawer-scrim" onClick={() => closeOutlineDrawer()} />}
           <OutlineTocPanel
             toc={studioToc}
             setToc={setStudioToc}
             activeSection={activeSection}
+            activeTopicId={activeTopicId}
+            metadata={authorTopicMetadata}
             onSelectSection={setActiveSection}
             onOpenTopic={openTopic}
             width={tocWidth}
-            onCollapse={() => setOutlineOpen(false)}
+            onCollapse={() => closeOutlineDrawer(true)}
           />
           {/* Draggable separator */}
-          <div
+          {!compactLayout && <div
             ref={separatorRef}
             onMouseDown={startResize}
             onDoubleClick={resetWidth}
@@ -10284,12 +10576,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
           >
             {/* Wider invisible hit area */}
             <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
-          </div>
+          </div>}
         </>
       )}
 
       {/* Main canvas */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-[#F4F2EE]">
+      <div data-testid="author-editor" className="author-editor flex-1 min-w-0 flex flex-col overflow-hidden bg-[#F4F2EE]">
         {/* Review context banner — shown when jumped here from Review */}
         {reviewContext && (
           <div className="bg-[#EEEEFF] border-b border-[#C7C5F4] flex items-center gap-3 px-4 py-2 flex-shrink-0">
@@ -10329,13 +10621,16 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
         {/* Studio toolbar — two rows */}
         <div className="bg-white border-b border-[#E2DED7] flex-shrink-0">
           {/* Row 1: document-level controls */}
-          <div className="flex items-center gap-1 px-4 py-1.5 border-b border-[#F0EDE8]">
+          <div className="flex flex-wrap items-center gap-1 px-4 py-1.5 border-b border-[#F0EDE8]">
           {/* Outline toggle */}
-          {!outlineOpen && (
-            <button onClick={() => setOutlineOpen(true)} className="w-7 h-7 rounded hover:bg-[#F4F2EE] flex items-center justify-center text-[#6B6B7E] transition-colors mr-1">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M3 7h8M3 4h8M3 10h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-              </svg>
+          {(!outlineOpen || compactLayout) && (
+            <button ref={outlineTriggerRef} data-testid="author-open-outline" aria-label="Open outline" type="button" onClick={() => { setOutlineOpen(true); setOutlineDrawerOpen(true) }} className="author-open-control mr-1">
+              <span>Outline</span>
+            </button>
+          )}
+          {compactLayout && (
+            <button ref={contextTriggerRef} data-testid="author-open-context" aria-label="Open topic context" type="button" onClick={() => setContextDrawerOpen(true)} className="author-open-control mr-1">
+              <span>Context</span>
             </button>
           )}
           {/* Mode switcher */}
@@ -10354,11 +10649,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
           </div>
           {/* Row 1 right side */}
           <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-            {mode === 'author' && (
-              <span className={`text-[11px] font-medium transition-colors ${saveState === 'saving' ? 'text-[#D97706]' : 'text-[#9898AB]'}`}>
-                {saveState === 'saving' ? 'Saving…' : 'Saved'}
-              </span>
-            )}
             <button onClick={() => onNav('branding')} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium text-[#9898AB] hover:text-[#6B6B7E] transition-colors" title="Style Profile">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.2"/><circle cx="6" cy="6" r="1.5" fill="currentColor"/></svg>
               Style
@@ -11067,6 +11357,15 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
           <div className="max-w-2xl mx-auto">
             {/* Document card */}
             <div ref={canvasRef} className="bg-white rounded-xl shadow-sm border border-[#E2DED7] p-10 min-h-[600px]">
+              {activeTopic && (
+                <div className="mb-5 flex flex-wrap items-center gap-2 border-b border-[#EBEEE9] pb-3">
+                  <span className="text-[9px] font-semibold uppercase tracking-[0.15em] text-[#7D897D]">Active topic</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-semibold ${activeGroundingFresh ? 'bg-[#E4F1E8] text-[#38694A]' : activeGeneratedFreshness === 'stale' || activeGeneratedFreshness === 'needs-grounding' ? 'bg-[#F8EBDD] text-[#89551C]' : 'bg-[#F1F0EC] text-[#747B72]'}`}>
+                    {activeGroundingFresh ? 'Grounded' : activeGeneratedFreshness === 'stale' ? 'Stale draft' : activeGeneratedFreshness === 'needs-grounding' ? 'Needs grounding' : 'Manual / in progress'}
+                  </span>
+                  <span className="font-mono-code text-[9px] text-[#9AA198]">{activeStableTopicId}</span>
+                </div>
+              )}
               {/* Document header — breadcrumb only when inside a topic */}
               {activeTopicId !== null && (
                 <div className="mb-4">
@@ -12034,6 +12333,14 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
           </div>
         )}
       </div>
+
+      {!compactLayout && renderAuthorContext()}
+      {compactLayout && contextDrawerOpen && (
+        <>
+          <button type="button" aria-label="Close context drawer" className="author-drawer-scrim author-context-scrim" onClick={closeContextDrawer} />
+          {renderAuthorContext()}
+        </>
+      )}
 
       {/* Contextual AI Popover */}
       {aiPopover?.visible && (
@@ -16536,7 +16843,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
+       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {

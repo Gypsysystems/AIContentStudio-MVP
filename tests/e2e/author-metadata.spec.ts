@@ -260,21 +260,21 @@ test("keeps metadata linked through rename and reorder, then removes only delete
   await page.reload()
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
 
-  const alpha = page.locator('[title="Alpha — double-click to open"]')
+  const alpha = page.getByTestId("author-outline").locator('[data-topic-id="topic-alpha"]')
   await alpha.hover()
   await alpha.getByTitle("Rename").click()
   await alpha.locator("input").fill("Alpha renamed")
   await alpha.locator("input").press("Enter")
-  await expect(page.locator('[title="Alpha renamed — double-click to open"]')).toBeVisible()
+  await expect(alpha).toContainText("Alpha renamed")
 
-  const gamma = page.locator('[title="Gamma — double-click to open"]')
-  await gamma.dragTo(page.locator('[title="Alpha renamed — double-click to open"]'))
+  const gamma = page.getByTestId("author-outline").locator('[data-topic-id="topic-gamma"]')
+  await gamma.dragTo(alpha)
   await expect.poll(async () => (await readProject(page, projectName)).appToc[0].topicId)
     .toBe("topic-gamma")
   expect(Object.keys((await readProject(page, projectName)).authorTopicMetadata!).sort())
     .toEqual(["topic-alpha", "topic-beta", "topic-gamma"])
 
-  const beta = page.locator('[title="Beta — double-click to open"]')
+  const beta = page.getByTestId("author-outline").locator('[data-topic-id="topic-beta"]')
   await beta.hover()
   await beta.getByTitle("Delete").click()
   await expect(beta).toHaveCount(0)
@@ -517,7 +517,8 @@ test("uses only persisted project sources and evidence in Author and reloads sou
 
   await page.reload()
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
-  await page.locator('[title="Access requirements — double-click to open"]').dblclick()
+  await page.getByTestId("author-outline").locator('[data-topic-id="topic-real-sources"]')
+    .click()
   await page.getByRole("button", { name: /Generate with AI/ }).click()
 
   const sourceOptions = page.getByTestId("author-source-option")
@@ -536,7 +537,8 @@ test("uses only persisted project sources and evidence in Author and reloads sou
 
   await page.reload()
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
-  await page.locator('[title="Access requirements — double-click to open"]').dblclick()
+  await page.getByTestId("author-outline").locator('[data-topic-id="topic-real-sources"]')
+    .click()
   await page.getByRole("button", { name: /Generate with AI/ }).click()
   await expect(page.locator(`[data-testid="author-source-option"][data-source-id="${accessSourceId}"]`))
     .toContainText("✓")

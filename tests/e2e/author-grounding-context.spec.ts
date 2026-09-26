@@ -346,7 +346,8 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
     .authorTopicMetadata["topic-access"].groundingContext.contextId
 
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
-  await page.locator('[title="Access Control — double-click to open"]').dispatchEvent("dblclick")
+  await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
+    .getByText("Access Control", { exact: true }).click()
   await expect(page.getByTestId("author-grounding-toggle")).toHaveAttribute("data-topic-id", "topic-access")
   await expect(page.getByTestId("author-grounding-toggle")).toHaveAttribute("data-context-id", firstContextId)
   await page.getByTestId("author-grounding-toggle").click()
@@ -357,7 +358,8 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
   await expect(page.getByTestId("grounding-gaps")).toContainText("exceptions are missing")
   await expect(page.getByTestId("grounding-writing-guidance")).toContainText("runbook")
 
-  await page.locator('[title="Manual appendix — double-click to open"]').dispatchEvent("dblclick")
+  await page.getByTestId("author-outline").locator('[data-topic-id="topic-manual"]')
+    .getByText("Manual appendix", { exact: true }).click()
   await expect(page.getByTestId("grounding-required-evidence")).toContainText("No supporting evidence is committed")
   await expect(page.getByTestId("grounding-unavailable")).toContainText("no supporting evidence")
 
@@ -373,7 +375,8 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
   })
   await page.reload()
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
-  await page.locator('[title="Access Control — double-click to open"]').dispatchEvent("dblclick")
+  await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
+    .getByText("Access Control", { exact: true }).click()
   await page.getByTestId("author-grounding-toggle").click()
   await expect(page.getByTestId("author-grounding-freshness")).toHaveText("Stale")
   await page.getByTestId("refresh-author-grounding").click()

@@ -92,3 +92,126 @@ body {
 /* Node hover */
 .km-node { cursor: pointer; transition: transform 0.15s; }
 .km-node:hover { transform-origin: center; }
+
+/* Author workspace — quiet, fixed-frame panels with a generous writing surface. */
+.author-workspace {
+  min-width: 0;
+  background: #f2f4f0;
+}
+
+.author-outline-panel {
+  border-right: 1px solid #e1e6df;
+  background: #fbfcfa;
+}
+
+.author-context-pane {
+  width: 320px;
+  flex: 0 0 320px;
+  border-left: 1px solid #e1e6df;
+}
+
+.author-context-scroll {
+  overscroll-behavior: contain;
+}
+
+.author-context-action {
+  min-height: 36px;
+  border: 1px solid #506b56;
+  border-radius: 8px;
+  background: #506b56;
+  padding: 8px 12px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.author-context-action:hover:not(:disabled) {
+  border-color: #3f5945;
+  background: #3f5945;
+}
+
+.author-open-control,
+.author-close-button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dce2da;
+  border-radius: 7px;
+  background: #fbfcfa;
+  padding: 0 10px;
+  color: #46564a;
+  font-size: 10px;
+  font-weight: 600;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.author-open-control:hover,
+.author-close-button:hover {
+  border-color: #abb9ac;
+  background: #eef2ed;
+}
+
+.author-drawer-scrim {
+  position: fixed;
+  z-index: 55;
+  inset: 0;
+  border: 0;
+  background: rgb(31 40 33 / 28%);
+}
+
+.author-context-pane:has(.author-close-button) {
+  position: fixed;
+  z-index: 61;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(92vw, 400px);
+  flex-basis: auto;
+  box-shadow: -18px 0 48px rgb(34 45 35 / 14%);
+}
+
+.author-context-scrim {
+  z-index: 60;
+}
+
+.author-workspace :is(button, input, select, textarea, [tabindex="0"]):focus-visible {
+  outline: 2px solid #54745a;
+  outline-offset: 2px;
+}
+
+@media (max-width: 1279px) {
+  .author-outline-panel {
+    position: fixed;
+    z-index: 60;
+    inset: 0 auto 0 0;
+    width: min(86vw, 360px) !important;
+    box-shadow: 18px 0 48px rgb(34 45 35 / 14%);
+  }
+}
+
+@media (max-width: 767px) {
+  .author-editor .p-10 {
+    padding: 18px;
+  }
+
+  .author-editor .px-6 {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .author-context-pane:has(.author-close-button) {
+    width: min(94vw, 400px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .author-workspace *,
+  .author-workspace *::before,
+  .author-workspace *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

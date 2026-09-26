@@ -344,10 +344,12 @@ test("committing evidence-backed topics opens editable initial drafts without fi
   expect(stored.authorTopicMetadata[unsupported!.topicId!]?.generationStatus).toBe("not-generated")
 
   await page.locator('header').getByRole("button", { name: /^Author,/ }).click()
-  await page.locator(`[title="${supported!.title} — double-click to open"]`).dispatchEvent("dblclick")
+  await page.getByTestId("author-topic-row").filter({ hasText: supported!.title })
+    .getByText(supported!.title, { exact: true }).click()
   await expect(page.getByTestId("author-generated-freshness")).toContainText("Current")
   await expect(page.getByText(blocks.find(block => block.type === "para")!.content, { exact: true }).first()).toBeVisible()
-  await page.locator(`[title="${unsupported!.title} — double-click to open"]`).dispatchEvent("dblclick")
+  await page.getByTestId("author-topic-row").filter({ hasText: unsupported!.title })
+    .getByText(unsupported!.title, { exact: true }).click()
   await expect(page.getByTestId("author-generated-freshness")).toContainText("Needs Grounding")
   await expect.poll(async () =>
     (await readProject(page, projectName)).topicContent[unsupported!.topicId!]?.filter(block => block.type !== "h1").length ?? 0,

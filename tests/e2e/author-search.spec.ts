@@ -130,7 +130,8 @@ test("searches all persisted topics after reload, uses renamed titles, navigates
   await betaResult.click()
 
   await expect(page.locator("#beta-quote")).toBeVisible()
-  await expect(page.locator('[title="Second topic renamed — double-click to open"]')).toHaveClass(/bg-\[#EEEEFF\]/)
+  await expect(page.getByTestId("author-outline").locator('[data-topic-id="topic-beta"]'))
+    .toHaveAttribute("aria-current", "true")
   await expect.poll(() => page.evaluate(() =>
     document.activeElement?.closest("#beta-quote")?.id ?? null,
   )).toBe("beta-quote")
