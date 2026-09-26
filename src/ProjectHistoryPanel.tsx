@@ -4,6 +4,7 @@ import {
   type CheckpointVerification, type ProjectCheckpoint, type ProjectCheckpointSummary,
 } from './projectCheckpoint'
 import { buildCheckpointDetail } from './checkpointDetail'
+import { FileHistoryPanel } from './FileHistoryPanel'
 import { buildCheckpointChangeSummary, unknownCheckpointChanges, type CheckpointChangeSummary } from './checkpointChanges'
 import { readValidatedCheckpointRecord } from './checkpointRecordRead'
 import { CURRENT_PROJECT_SCHEMA_VERSION } from './projectMigrations'
@@ -567,6 +568,9 @@ export function ProjectHistoryPanel({
           </div>}
         </div>}
       </section>
+
+      <FileHistoryPanel key={projectId} projectId={projectId} checkpoints={checkpoints} listLoading={loading}
+        listError={loadError} getCheckpointRecord={getCheckpointRecordRef.current} />
 
       <section className="rounded-xl border border-[#E3E0DA] bg-white shadow-sm" aria-labelledby="history-list-title">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#ECE9E4] px-5 py-4 sm:px-6">
