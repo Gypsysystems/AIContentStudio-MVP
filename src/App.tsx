@@ -111,9 +111,11 @@ import { generateWordDocument } from './wordPublisher'
 import { generatePdfDocument } from './pdfPublisher'
 import { ProjectPreview } from './projectPreview'
 import { availableConditions, htmlConditionError } from './publishConditions'
+import { ProjectHomeScreen } from './ProjectHomeScreen'
+import { summarizeProjectHome } from './projectHomeModel'
 
 // ── Types ────────────────────────────────────────────────────────────────────
-type Screen = 'dashboard' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
+type Screen = 'dashboard' | 'project-home' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
 type StudioMode = 'author' | 'knowledge'
 type FindingStatus = 'open' | 'in-review' | 'resolved' | 'dismissed'
 type ReviewContext = { findingId: number; section: string; category: string } | null
@@ -958,6 +960,16 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
         <div className="order-2 flex w-full flex-wrap items-center gap-1.5 sm:order-none sm:ml-auto sm:w-auto sm:flex-shrink-0 sm:gap-2">
           {hasProject && (
             <>
+              {screen !== 'project-home' && (
+                <button
+                  type="button"
+                  onClick={() => onNav('project-home')}
+                  data-testid="topbar-project-home"
+                  className="min-h-8 rounded-md border border-[#C7C5F4] bg-[#F4F3FF] px-2.5 text-[10px] font-semibold text-[#4D4DC2] transition-colors hover:border-[#AAA7E8] hover:bg-[#EEEEFF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 sm:text-[11px]"
+                >
+                  Project Home
+                </button>
+              )}
               <button type="button" onClick={() => onNav('create')} className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
                 Project Settings
               </button>
@@ -9266,7 +9278,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
@@ -9325,6 +9337,14 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
       ? 'write'
       : 'choose')
   }
+  useEffect(() => {
+    if (!requestedTopicId || realReviewTarget || isDemoMode) return
+    const requestedTopic = (toc ?? []).find(topic => stableAuthorTopicId(topic) === requestedTopicId)
+    if (requestedTopic) {
+      openTopic(requestedTopic.id, requestedTopic.title)
+      onRequestedTopicOpened?.()
+    }
+  }, [requestedTopicId, realReviewTarget, isDemoMode, toc])
 
   // Suggest titles based on the style of existing topic titles
   const suggestTitles = (raw: string) => {
@@ -13364,6 +13384,8 @@ function RealReviewFindingsPanel({
   onSetStatus,
   onApplyFinding,
   onOpenFinding,
+  requestedFindingId,
+  onRequestedFindingOpened,
 }: {
   onNav: (s: Screen) => void
   reviewModel: ReviewModel
@@ -13374,6 +13396,8 @@ function RealReviewFindingsPanel({
   onSetStatus: (findingId: string, status: ReviewFindingStatus) => string | null
   onApplyFinding: (findingId: string) => string | null
   onOpenFinding: (finding: ReviewFinding) => Promise<string | null>
+  requestedFindingId?: string | null
+  onRequestedFindingOpened?: () => void
 }) {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [statusFilter, setStatusFilter] = useState('active')
@@ -13385,6 +13409,15 @@ function RealReviewFindingsPanel({
     setViewRunId(reviewModel.activeReviewRunId)
     setSelectedFindingId(null)
   }, [reviewModel.activeReviewRunId])
+  useEffect(() => {
+    if (!requestedFindingId) return
+    const finding = reviewModel.findings.find(item => item.findingId === requestedFindingId)
+    if (finding) {
+      setViewRunId(finding.reviewRunId)
+      setSelectedFindingId(finding.findingId)
+    }
+    onRequestedFindingOpened?.()
+  }, [requestedFindingId])
 
   const selectedRunId = viewRunId ?? reviewModel.activeReviewRunId
   const run = reviewModel.runs.find(item => item.reviewRunId === selectedRunId) ?? null
@@ -13771,6 +13804,8 @@ function QualityScreen({
   onSetGroundedFindingStatus,
   onApplyGroundedFinding,
   onOpenGroundedFinding,
+  requestedFindingId,
+  onRequestedFindingOpened,
 }: {
   onNav: (s: Screen) => void
   findingStatuses: Record<number, FindingStatus>
@@ -13790,6 +13825,8 @@ function QualityScreen({
   onSetGroundedFindingStatus: (findingId: string, status: ReviewFindingStatus) => string | null
   onApplyGroundedFinding: (findingId: string) => string | null
   onOpenGroundedFinding: (finding: ReviewFinding) => Promise<string | null>
+  requestedFindingId?: string | null
+  onRequestedFindingOpened?: () => void
 }) {
   const stage = reviewStage
   const setStage = onSetReviewStage
@@ -14273,6 +14310,8 @@ function QualityScreen({
       onSetStatus={onSetGroundedFindingStatus}
       onApplyFinding={onApplyGroundedFinding}
       onOpenFinding={onOpenGroundedFinding}
+      requestedFindingId={requestedFindingId}
+      onRequestedFindingOpened={onRequestedFindingOpened}
     />
   ) : (
     <div>
@@ -15239,7 +15278,9 @@ export default function App() {
   }
 
   const [prevScreen, setPrevScreen] = useState<Screen | null>(null)
-  const settingsReturnTo: Screen = prevScreen && prevScreen !== 'dashboard' && prevScreen !== 'create' ? prevScreen : 'sources'
+  const [requestedStudioTopicId, setRequestedStudioTopicId] = useState<string | null>(null)
+  const [requestedQualityFindingId, setRequestedQualityFindingId] = useState<string | null>(null)
+  const settingsReturnTo: Screen = prevScreen && prevScreen !== 'dashboard' && prevScreen !== 'create' ? prevScreen : 'project-home'
 
   const queueProjectSave = (record: ProjectRecord, version: number): Promise<boolean> => {
     if (version <= savedVersionRef.current) return Promise.resolve(true)
@@ -16536,7 +16577,7 @@ export default function App() {
           const record = await loadProject(activeId)
           if (record) {
             await hydrateFromRecord(record)
-            setScreen('sources') // reopen to last meaningful screen
+            setScreen('sources') // Preserve the existing active-project reload destination.
           }
         }
       } catch (e) {
@@ -16787,7 +16828,7 @@ export default function App() {
     try {
       await hydrateFromRecord(record)
       setAppLoadError(null)
-      setScreen('sources')
+      setScreen('project-home')
     } catch (error) {
       resetProjectState()
       setAppLoadError(`Could not open project: ${(error as Error).message}`)
@@ -16816,6 +16857,73 @@ export default function App() {
   // ── Project Diagnostics ────────────────────────────────────────────────────
   const [diagOpen, setDiagOpen] = useState(false)
 
+  const projectHomeSummary = useMemo(() => summarizeProjectHome({
+    sources: sources.map(source => ({ fileId: source.fileId, name: source.file.name })),
+    sourceExtractions,
+    evidenceFresh,
+    conceptAnalysisFresh,
+    unsupportedAnalysisFresh,
+    hasEvidenceIndex: !!evidenceIndex,
+    hasConceptAnalysis: !!conceptAnalysis,
+    hasUnsupportedAnalysis: !!unsupportedAnalysis,
+    materialConflicts: (conceptAnalysisFresh ? conceptAnalysis?.conflicts ?? [] : []).map(conflict => ({
+      id: conflict.id,
+      label: conflict.subject,
+      detail: conflict.summary || conflict.rationale,
+    })),
+    committedTocStale,
+    topics: appToc.map(topic => {
+      const stableId = stableAuthorTopicId(topic)
+      const blocks = topicContent[stableId] ?? topicContent[String(topic.id)] ?? []
+      const reviewTopic = currentReviewInputSnapshot?.topics.find(item => item.topicId === stableId)
+      return {
+        topicId: stableId,
+        title: topic.title,
+        hasContent: reviewTopic ? reviewTopic.blocks.length > 0 : blocks.length > 0,
+        blocks: reviewTopic?.blocks ?? blocks,
+      }
+    }),
+    topicMetadata: authorTopicMetadata,
+    reviewSnapshot: currentReviewInputSnapshot,
+    reviewModel,
+    publishConfig,
+    isDemoMode,
+    demoProgress: {
+      hasSources: sources.length > 0,
+      analysisCurrent: !!analysisResult && !analysisStale,
+      structureAccepted: appToc.length > 0,
+      reviewComplete: aiReviewDone,
+      formatsSelected: publishConfig.selectedFormats.length > 0,
+    },
+    reviewFindingEligibility: findingId => currentFindingEligibility(findingId, 'exact').ok,
+  }), [
+    sources, sourceExtractions, evidenceFresh, conceptAnalysisFresh, unsupportedAnalysisFresh,
+    evidenceIndex, conceptAnalysis, unsupportedAnalysis, committedTocStale, appToc, topicContent,
+    authorTopicMetadata, currentReviewInputSnapshot, reviewModel, publishConfig, isDemoMode,
+    analysisResult, analysisStale, aiReviewDone,
+  ])
+  const handleProjectHomeIssue = (issue: import('./projectHomeModel').ProjectHomeIssue) => {
+    if (issue.findingId) {
+      const finding = reviewModel.findings.find(candidate => candidate.findingId === issue.findingId)
+      if (finding && issue.authorTargetEligible) {
+        void handleOpenGroundedFinding(finding).then(error => {
+          if (error) setNavError(error)
+        })
+      } else {
+        setReviewStage(1)
+        setRequestedQualityFindingId(issue.findingId)
+        void navigate('quality').then(ok => { if (!ok) setRequestedQualityFindingId(null) })
+      }
+      return
+    }
+    if (issue.topicId) {
+      setRequestedStudioTopicId(issue.topicId)
+      void navigate('studio').then(ok => { if (!ok) setRequestedStudioTopicId(null) })
+      return
+    }
+    void navigate(issue.destination ?? (issue.id === 'toc-stale' || issue.id === 'toc-missing' ? 'structure' : issue.stage))
+  }
+
   const renderScreen = () => {
     const effectiveStyleProfile = resolveEffectiveStyleProfile({ themes, projectMeta, activeStyleProfileId })
     // The same read-only snapshot is used by Publish and the real-project Preview.
@@ -16834,6 +16942,15 @@ export default function App() {
     }
     switch (screen) {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
+      case 'project-home': return <ProjectHomeScreen
+        projectName={displayName}
+        contentType={projectMeta.contentType}
+        summary={projectHomeSummary}
+        saveStatus={saveStatus}
+        onRetrySave={() => triggerAutosave(true)}
+        onNavigate={destination => { void navigate(destination) }}
+        onIssue={handleProjectHomeIssue}
+      />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} settingsMode={!!projectId} returnTo={settingsReturnTo} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
@@ -16843,8 +16960,8 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
-      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} />
+       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
+      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {
         const projection = publishProjection()

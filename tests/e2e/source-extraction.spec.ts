@@ -457,6 +457,8 @@ test("duplicates extracted sources with copied file IDs and preserves searchable
   expect(originalAfter.sourceExtractions).toEqual(originalBefore.sourceExtractions)
 
   await page.getByText(duplicateName, { exact: true }).click()
+  await expect(page.getByTestId("project-home")).toBeVisible()
+  await page.getByTestId("project-home-stage-sources").click()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   await page.reload()
   const duplicateRow = page.getByTestId("source-file-row").filter({ hasText: "duplicate-source.md" })

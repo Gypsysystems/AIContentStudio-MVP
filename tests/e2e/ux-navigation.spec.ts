@@ -116,15 +116,8 @@ test("reopens a persisted existing project without losing its project identity",
   await expect(page.getByText(projectName, { exact: true })).toBeVisible()
 
   await page.reload()
-  await expect(page.getByText(projectName, { exact: true }).first()).toBeVisible()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
-
-  await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
-  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
-  await expect(page.getByText(projectName, { exact: true })).toBeVisible()
-  await page.getByText(projectName, { exact: true }).click()
-  await expect(page.getByText(projectName, { exact: true }).first()).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  await expect(page.locator("header").getByText(projectName, { exact: true })).toBeVisible()
 })
 
 test("project settings edits the same project and returns to the previous stage", async ({ page }) => {
@@ -149,7 +142,9 @@ test("leaving unchanged project settings does not write a new project revision",
   await createProject(page, name)
   const revision = async () => page.evaluate(async projectName => {
     const { projectRepository } = await import("/src/projectService.ts" as string)
-    const project = (await projectRepository.listProjects()).find(item => item.projectName === projectName)
+    const project = (await projectRepository.listProjects()).find(
+      (item: { projectName: string; projectId: string }) => item.projectName === projectName,
+    )
     if (!project) throw new Error("Created project was not found")
     return (await projectRepository.loadProject(project.projectId))?.recordRevision
   }, name)

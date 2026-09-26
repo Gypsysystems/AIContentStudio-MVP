@@ -669,6 +669,8 @@ test("duplicates grounded analysis with copied source references and stable anal
   expect(originalAfter.unsupportedAnalysis).toEqual(original.unsupportedAnalysis)
 
   await page.getByText(duplicateName, { exact: true }).click()
+  await expect(page.getByTestId("project-home")).toBeVisible()
+  await page.getByTestId("project-home-stage-sources").click()
   await waitForCurrentEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
