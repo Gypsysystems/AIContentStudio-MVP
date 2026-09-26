@@ -30,3 +30,4 @@
 - [Topic history from checkpoints](topic-history-checkpoints.md) — derive authored topic history only from committed checkpoints; missing records break change comparisons.
 - [Administration access display](administration-access-display.md) — client role capabilities are orientation, not cloud authority; unsupported settings stay read-only.
 - [AI catalog boundary](ai-catalog-boundary.md) — workspace definitions are separate from project snapshots; metadata never implies a real provider connection or execution.
+- [AI connection integrity](ai-connection-integrity.md) — bind requests to a workspace; canonicalize signed timestamps and reject reader URL TLS overrides.

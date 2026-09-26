@@ -291,3 +291,90 @@ end;
 $test_rpc$;
 
 reset role;
+
+-- Secure connections share only the workspace/auth fixture, not catalog storage.
+\i supabase/migrations/20260926000400_ai_connections.sql
+
+set role authenticated;
+set request.jwt.claim.sub = '20000000-0000-0000-0000-000000000002';
+do $connections$
+declare
+  payload jsonb;
+  denied boolean;
+begin
+  -- An admin can create using ciphertext only; the RPC never returns it.
+  payload := public.ai_connection_command('create', '10000000-0000-0000-0000-000000000001',
+    'fixture-provider', null, 'YQ==', 'AAAAAAAAAAAAAAAA', 'AAAAAAAAAAAAAAAAAAAAAA==');
+  if payload->'connection'->>'state' <> 'untested'
+    or payload::text ~ '(ciphertext|nonce|tag|YQ==)' then
+    raise exception 'Connection creation returned sensitive material or wrong state';
+  end if;
+  denied := false;
+  begin
+    perform ciphertext from public.ai_connections;
+  exception when insufficient_privilege then denied := true;
+  end;
+  if not denied then raise exception 'Authenticated role read encrypted table'; end if;
+
+  payload := public.ai_connection_command('replace', '10000000-0000-0000-0000-000000000001',
+    'fixture-provider', 1, 'Yg==', 'AAAAAAAAAAAAAAAA', 'AAAAAAAAAAAAAAAAAAAAAA==');
+  if (payload->'connection'->>'revision')::integer <> 2 then raise exception 'Revision not incremented'; end if;
+  denied := false;
+  begin
+    perform public.ai_connection_command('replace', '10000000-0000-0000-0000-000000000001',
+      'fixture-provider', 1, 'Yw==', 'AAAAAAAAAAAAAAAA', 'AAAAAAAAAAAAAAAAAAAAAA==');
+  exception when serialization_failure then denied := true;
+  end;
+  if not denied then raise exception 'Stale connection replacement succeeded'; end if;
+  payload := public.ai_connection_command('test', '10000000-0000-0000-0000-000000000001',
+    'fixture-provider', 2, null, null, null, 'unavailable', repeat('a',64), now());
+  if payload->'connection'->>'state' <> 'unavailable' then raise exception 'Test status missing'; end if;
+
+  perform set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000003', true);
+  denied := false;
+  begin
+    perform public.ai_connection_command('delete', '10000000-0000-0000-0000-000000000001', 'fixture-provider', 2);
+  exception when insufficient_privilege then denied := true;
+  end;
+  if not denied then raise exception 'Editor deleted a credential'; end if;
+  perform set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000004', true);
+  payload := public.ai_connection_command('list', '10000000-0000-0000-0000-000000000001');
+  if jsonb_array_length(payload->'connections') <> 1 or payload::text ~ '(ciphertext|nonce|tag)' then
+    raise exception 'Viewer status is missing or leaked ciphertext';
+  end if;
+  denied := false;
+  begin
+    perform public.ai_connection_command('list', '10000000-0000-0000-0000-000000000002');
+  exception when insufficient_privilege then denied := true;
+  end;
+  if not denied then raise exception 'Viewer crossed workspace boundary'; end if;
+  perform set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000002', true);
+  payload := public.ai_connection_command('delete', '10000000-0000-0000-0000-000000000001', 'fixture-provider', 2);
+  if payload->>'deleted' <> 'true' then raise exception 'Connection was not deleted'; end if;
+end;
+$connections$;
+reset role;
+do $audit$
+begin
+  if (select count(*) from public.ai_connection_audit where provider_id = 'fixture-provider') <> 4 then
+    raise exception 'Connection audit missing events';
+  end if;
+end;
+$audit$;
+delete from public.workspace_memberships
+  where user_id = '20000000-0000-0000-0000-000000000002';
+set role authenticated;
+set request.jwt.claim.sub = '20000000-0000-0000-0000-000000000002';
+do $revoked$
+declare denied boolean;
+begin
+  denied := false;
+  begin
+    perform public.ai_connection_command('create', '10000000-0000-0000-0000-000000000001',
+      'fixture-provider', null, 'YQ==', 'AAAAAAAAAAAAAAAA', 'AAAAAAAAAAAAAAAAAAAAAA==');
+  exception when insufficient_privilege then denied := true;
+  end;
+  if not denied then raise exception 'Revoked member created connection'; end if;
+end;
+$revoked$;
+reset role;

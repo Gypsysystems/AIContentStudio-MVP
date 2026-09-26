@@ -8,11 +8,7 @@ export type BlueprintContentType =
 export type AiVersionRef = { id: string; version: number }
 export type ProviderDescriptor = { id: string; label: string }
 export type ModelDescriptor = { providerId: string; id: string; label: string }
-export type ConnectionMetadata = {
-  providerId: string
-  state: 'unconfigured' | 'configured' | 'unavailable'
-  verifiedAt: string | null
-}
+export type { ConnectionMetadata, ModelDiscovery } from './aiConnectionModel'
 
 export type WorkflowDefinition = {
   capability: string

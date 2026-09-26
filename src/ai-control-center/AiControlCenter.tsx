@@ -19,6 +19,7 @@ import {
 } from '../aiCatalogModel'
 import { AiCatalogApiError, executeAiCatalog, historyAiAsset, listAiAssets } from '../aiCatalogRepository'
 import type { ProjectAccessContext } from '../ownership'
+import Connections from './Connections'
 
 type Props = { mode: 'local-dev' | 'cloud'; context: ProjectAccessContext }
 type Area = 'connections' | AiAssetKind
@@ -558,7 +559,7 @@ export default function AiControlCenter({ mode, context }: Props) {
       </nav>
 
       <main className="min-w-0" aria-busy={loading || busy}>
-        {area === 'connections' ? <Connections mode={mode} /> : <>
+        {area === 'connections' ? <Connections mode={mode} context={context} /> : <>
           <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
             <div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#74738A]">{kindTitles[kind!]}</p>
               <h3 className="mt-1 text-[19px] font-semibold tracking-[-0.03em] text-[#292834]">{areas.find(item => item.id === area)?.label}</h3>
@@ -598,40 +599,6 @@ export default function AiControlCenter({ mode, context }: Props) {
     <footer className="mt-6 border-t border-[#E4E2DC] pt-3 text-[10px] leading-5 text-[#92909A]">
       Catalog actions are workspace-scoped and version-checked. Authorization must be enforced by the persistence layer as well as this interface.
     </footer>
-  </section>
-}
-
-function Connections({ mode }: { mode: 'local-dev' | 'cloud' }) {
-  return <section aria-labelledby="connections-title" className="rounded-2xl border border-[#E2E0DA] bg-[#FCFBF9] p-5 sm:p-7">
-    <div className="flex flex-col justify-between gap-3 border-b border-[#ECEAE5] pb-5 sm:flex-row sm:items-start">
-      <div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#74738A]">Provider access</p>
-        <h3 id="connections-title" className="mt-1 text-[20px] font-semibold tracking-[-0.03em] text-[#292834]">Connections</h3>
-        <p className="mt-1 max-w-xl text-[11px] leading-5 text-[#777685]">A transparent status surface. This workspace has no provider configuration available to inspect or manage.</p>
-      </div>
-      <span className="inline-flex w-fit items-center gap-2 rounded-full border border-[#E6DDC9] bg-[#F8F3E8] px-3 py-1.5 text-[9px] font-semibold uppercase tracking-[0.09em] text-[#8B7040]"><span className="h-1.5 w-1.5 rounded-full bg-[#B58749]" />Unconfigured</span>
-    </div>
-    <div className="mt-5 rounded-xl border border-[#E8E6E0] bg-[#F8F7F4] p-4 sm:p-5">
-      <div className="flex items-start gap-3">
-        <div aria-hidden="true" className="flex h-9 w-9 flex-none items-center justify-center rounded-xl border border-[#E3E1DA] bg-[#F0EFEB] text-[#777581]">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6.1 9.9 9.9 6.1M5.2 6.4l-1.1 1.1a2.4 2.4 0 0 0 3.4 3.4l1.1-1.1M10.8 9.6l1.1-1.1a2.4 2.4 0 0 0-3.4-3.4L7.4 6.2" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" /></svg>
-        </div>
-        <div className="min-w-0">
-          <p className="text-[12px] font-semibold text-[#393844]">No connection record</p>
-          <p className="mt-1 text-[11px] leading-5 text-[#777685]">{mode === 'cloud'
-            ? 'The server has not exposed a configured connection for this workspace.'
-            : 'Local development does not provide a persisted provider connection.'}</p>
-        </div>
-      </div>
-      <dl className="mt-4 divide-y divide-[#E9E7E1] rounded-lg border border-[#E6E4DE] bg-[#FCFBF9]">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-3"><dt className="text-[10px] text-[#858391]">Provider identity</dt><dd className="text-[10px] font-medium text-[#777581]">Not available</dd></div>
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-3"><dt className="text-[10px] text-[#858391]">Verification time</dt><dd className="text-[10px] font-medium text-[#777581]">Not available</dd></div>
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-3"><dt className="text-[10px] text-[#858391]">Model selection</dt><dd className="text-[10px] font-medium text-[#777581]">Auto only</dd></div>
-      </dl>
-    </div>
-    <aside role="note" className="mt-4 rounded-xl border border-[#E9DECD] bg-[#F7F1E8] px-4 py-3.5">
-      <p className="text-[11px] font-semibold text-[#6D5738]">No provider operations are available here</p>
-      <p className="mt-1 text-[10px] leading-5 text-[#75634A]">There is no credential field, connect or test action, provider/model catalogue, or AI execution in this surface. Workflow definitions remain provider-neutral until a real connection contract exists.</p>
-    </aside>
   </section>
 }
 

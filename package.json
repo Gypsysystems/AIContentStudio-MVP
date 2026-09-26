@@ -11,11 +11,13 @@
     "format": "oxfmt"
   },
   "dependencies": {
+    "@types/pg": "^8.23.1",
     "docx": "^9.7.1",
     "jspdf": "^4.2.1",
     "jszip": "^3.10.2",
     "mammoth": "^1.12.3",
     "pdfjs-dist": "^6.3.289",
+    "pg": "^8.23.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

@@ -1,11 +1,17 @@
 import { expect, test } from '@playwright/test'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { Client } from 'pg'
+import { executeConnections, type ConnectionDependencies } from '../../server/aiConnectionsApi'
 import { execFile, spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
 const migration = await readFile(
   new URL('../../supabase/migrations/20260926000300_ai_catalog.sql', import.meta.url),
+  'utf8',
+)
+const connectionMigration = await readFile(
+  new URL('../../supabase/migrations/20260926000400_ai_connections.sql', import.meta.url),
   'utf8',
 )
 const api = await readFile(new URL('../../server/aiCatalogApi.ts', import.meta.url), 'utf8')
@@ -26,6 +32,20 @@ test('AI catalog schema is immutable and has narrowly scoped writes', () => {
   expect(sql).toContain('actor_role not in (\'owner\',\'admin\')')
   expect(sql).toContain('membership.user_id = (select auth.uid())')
   expect(sql).toContain('using (public.workspace_can(workspace_id, \'read\'))')
+})
+
+test('connections migration denies browser table reads and grants only a scoped server reader', () => {
+  const text = connectionMigration.toLowerCase()
+  expect(text).toContain('revoke all on public.ai_connections from public, anon, authenticated')
+  expect(text).toContain('grant select (workspace_id, provider_id, revision, ciphertext, nonce, tag, key_version)')
+  expect(text).toContain('to ai_connection_reader')
+  expect(text).not.toMatch(/grant select[\s\S]*?on public\.ai_connections to authenticated/)
+  expect(text).toContain('membership.user_id = (select auth.uid())')
+  expect(text).toContain("actor_role not in ('owner','admin')")
+  expect(text).toContain('for share')
+  expect(text).toContain('pg_catalog.pg_advisory_xact_lock')
+  expect(text).toContain('revoke all on public.ai_connection_audit from public, anon, authenticated, ai_connection_reader')
+  expect(text).not.toContain('service_role')
 })
 
 test('AI catalog RPC creates immutable versions and guards transitions and tombstones', () => {
@@ -80,13 +100,14 @@ test('PostgreSQL integration runs in an isolated disposable local database', asy
       coalesce(inet_server_addr()::text, 'local-socket'),
       (select rolsuper from pg_roles where rolname = current_user),
       exists(select 1 from pg_roles where rolname = 'anon'),
-      exists(select 1 from pg_roles where rolname = 'authenticated')`,
+      exists(select 1 from pg_roles where rolname = 'authenticated'),
+      exists(select 1 from pg_roles where rolname = 'ai_connection_reader')`,
   ], { encoding: 'utf8', timeout: 10_000 })
   if (preflight.error || preflight.status !== 0) {
     test.skip(true, `Local PostgreSQL preflight unavailable: ${preflight.error?.message ?? preflight.stderr.trim()}`)
     return
   }
-  const [database, address, isSuperuser, hadAnon, hadAuthenticated] =
+  const [database, address, isSuperuser, hadAnon, hadAuthenticated, hadReader] =
     preflight.stdout.trim().split('|')
   if (database !== 'postgres' || address !== 'local-socket' || isSuperuser !== 't') {
     test.skip(true, 'Requires a local Unix-socket PostgreSQL superuser; remote/database URLs are intentionally refused.')
@@ -118,6 +139,62 @@ test('PostgreSQL integration runs in an isolated disposable local database', asy
         `PostgreSQL AI catalog integration failed (exit ${String(result.status)}):\n${result.stdout}\n${result.stderr}`,
       )
     } else {
+      // Exercise the actual timestamptz JSON and restricted-reader bytea round trips.
+      const sqlWriter = new Client({ database: testDatabase })
+      const reader = new Client({ database: testDatabase })
+      try {
+        await sqlWriter.connect()
+        await reader.connect()
+        await sqlWriter.query('set role authenticated')
+        await sqlWriter.query("select set_config('request.jwt.claim.sub', $1, false)", ['20000000-0000-0000-0000-000000000001'])
+        await reader.query('set role ai_connection_reader')
+        const columns = ['p_action', 'p_workspace_id', 'p_provider_id', 'p_expected_revision',
+          'p_ciphertext', 'p_nonce', 'p_tag', 'p_state', 'p_proof', 'p_tested_at'] as const
+        const dependencies: ConnectionDependencies = {
+          async command(args) {
+            const response = await sqlWriter.query(
+              `select public.ai_connection_command($1::text,$2::uuid,$3::text,$4::integer,$5::text,
+                $6::text,$7::text,$8::text,$9::text,$10::timestamptz) as value`,
+              columns.map(column => args[column] ?? null),
+            )
+            return response.rows[0].value as unknown
+          },
+          async readEncrypted(workspaceId, providerId) {
+            const response = await reader.query(
+              'select workspace_id, provider_id, revision, ciphertext, nonce, tag, key_version from public.ai_connections where workspace_id = $1 and provider_id = $2',
+              [workspaceId, providerId],
+            )
+            if (!response.rows.length) return null
+            const row = response.rows[0]
+            return { workspaceId: row.workspace_id as string, providerId: row.provider_id as string,
+              revision: row.revision as number, ciphertext: row.ciphertext as Buffer,
+              nonce: row.nonce as Buffer, tag: row.tag as Buffer, keyVersion: row.key_version as string }
+          },
+          async verify(_providerId, credential) {
+            expect(credential).toBe('isolated-sql-test-credential')
+            return 'verified'
+          },
+        }
+        const ws = '10000000-0000-0000-0000-000000000001'
+        const credentialKey = randomBytes(32)
+        const create = await executeConnections(
+          { action: 'create', providerId: 'sql-roundtrip', credential: 'isolated-sql-test-credential' },
+          ws, 'owner', credentialKey, dependencies,
+        )
+        expect(create).toMatchObject({ connection: { revision: 1, state: 'untested' } })
+        const tested = await executeConnections(
+          { action: 'test', providerId: 'sql-roundtrip', expectedRevision: 1 },
+          ws, 'owner', credentialKey, dependencies,
+        )
+        expect(tested).toMatchObject({ connection: { state: 'verified' } })
+        expect(await executeConnections({ action: 'list' }, ws, 'viewer', credentialKey, dependencies))
+          .toMatchObject({ connections: [{ providerId: 'sql-roundtrip', state: 'verified' }] })
+        expect(await executeConnections({ action: 'delete', providerId: 'sql-roundtrip', expectedRevision: 1 },
+          ws, 'owner', credentialKey, dependencies)).toMatchObject({ deleted: true })
+      } finally {
+        await sqlWriter.end().catch(() => {})
+        await reader.end().catch(() => {})
+      }
       const writerPromise = runPsqlAsync([
         '-d', testDatabase, '-c',
         `SET ROLE authenticated;
@@ -201,6 +278,11 @@ test('PostgreSQL integration runs in an isolated disposable local database', asy
       const dropAuthenticated = runPsql(['-d', 'postgres', '-c', 'DROP ROLE IF EXISTS authenticated'])
       if (dropAuthenticated.error || dropAuthenticated.status !== 0)
         cleanupErrors.push(`Test authenticated role cleanup failed: ${dropAuthenticated.stderr}`)
+    }
+    if (hadReader !== 't') {
+      const dropReader = runPsql(['-d', 'postgres', '-c', 'DROP ROLE IF EXISTS ai_connection_reader'])
+      if (dropReader.error || dropReader.status !== 0)
+        cleanupErrors.push(`Test connection reader role cleanup failed: ${dropReader.stderr}`)
     }
     if (cleanupErrors.length)
       integrationFailure = new Error([integrationFailure?.message, ...cleanupErrors].filter(Boolean).join('\n'))
