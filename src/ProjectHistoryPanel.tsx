@@ -1,16 +1,17 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import type { AuthorTopicMetadata } from './authorMetadata'
 import {
-  canonicalCheckpointJson, verifyCheckpointRecord,
   type CheckpointVerification, type ProjectCheckpoint, type ProjectCheckpointSummary,
 } from './projectCheckpoint'
+import { buildCheckpointDetail } from './checkpointDetail'
+import { readValidatedCheckpointRecord } from './checkpointRecordRead'
 import { CURRENT_PROJECT_SCHEMA_VERSION } from './projectMigrations'
 import { buildTopicHistory, type TopicHistoryTopic } from './topicHistory'
 
 type VerificationState =
-  | { status: 'verifying' }
-  | { status: 'verified'; result: CheckpointVerification }
-  | { status: 'error'; message: string }
+  | { status: 'verifying'; projectId: string; integrityDigest: string }
+  | { status: 'verified'; projectId: string; integrityDigest: string; result: CheckpointVerification }
+  | { status: 'error'; projectId: string; integrityDigest: string; message: string }
 
 type TopicRecordLoad = { checkpointId: string; message: string }
 
@@ -171,6 +172,66 @@ function TopicHistoryView({ topic }: { topic: TopicHistoryTopic }) {
   </div>
 }
 
+function CheckpointDetailView({ checkpoint, fullVerification }: {
+  checkpoint: ProjectCheckpoint
+  fullVerification: CheckpointVerification | null
+}) {
+  const detail = buildCheckpointDetail(checkpoint)
+  return <section id="checkpoint-detail" data-testid="checkpoint-detail" className="mt-4 rounded-lg border border-[#E3E0DA] bg-[#FAF9F7] p-4 sm:p-5" aria-labelledby="checkpoint-detail-title">
+    <h3 id="checkpoint-detail-title" className="text-[14px] font-semibold text-[#292936]">Saved checkpoint detail</h3>
+    <p className="mt-1 text-[11px] leading-5 text-[#686879]">
+      Saved record and manifest metadata validated. Archived file bytes were not downloaded or verified by this view.
+      {fullVerification?.valid ? ' A separate full integrity verification passed.' : ' Use Verify integrity for the separate full record-and-file check.'}
+    </p>
+    <dl className="mt-4 grid grid-cols-1 gap-x-5 gap-y-3 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
+      {([
+        ['Saved project name', detail.projectName || 'Unavailable'],
+        ['Checkpoint ID', checkpoint.checkpointId],
+        ['Note', checkpoint.reason],
+        ['Saved at', formatDate(checkpoint.createdAt)],
+        ['Actor', checkpoint.actorUserId || 'Unknown'],
+        ['Originating record revision', `Revision ${checkpoint.originatingRecordRevision}`],
+        ['Saved record schema', String(checkpoint.recordSchemaVersion)],
+        ['Parent checkpoint', checkpoint.parentCheckpointId || 'None (first checkpoint)'],
+        ['Saved file count', String(checkpoint.files.length)],
+        ['Saved record digest', checkpoint.recordDigest],
+        ['Saved checkpoint digest', checkpoint.integrityDigest],
+      ] as Array<[string, string]>).map(([label, value]) => <div key={label}><dt className="text-[#858391]">{label}</dt><dd className="mt-0.5 break-words text-[#444351]">{value}</dd></div>)}
+    </dl>
+    {detail.limitations.length > 0 && <div className="mt-4 rounded-md bg-[#FFF7E8] p-3 text-[11px] text-[#8A5A13]" role="status">
+      <p className="font-semibold">Saved record limitations</p>
+      <ul className="mt-1 list-disc space-y-1 pl-5">{detail.limitations.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul>
+    </div>}
+    <div className="mt-5">
+      <h4 className="text-[12px] font-semibold text-[#292936]">Saved project outline and topic list</h4>
+      {detail.outline === null
+        ? <p className="mt-2 text-[11px] text-[#8A5A13]">This saved outline cannot be shown safely. See the limitations above.</p>
+        : detail.outlineCount === 0
+          ? <p className="mt-2 text-[11px] text-[#686879]">The saved project outline has no topics.</p>
+          : <><p className="mt-1 text-[11px] text-[#686879]">{detail.outline.length} of {detail.outlineCount} saved outline items shown, in saved order. Titles and IDs come only from this checkpoint.</p>
+            <ol className="mt-3 space-y-1.5" data-testid="saved-outline">{detail.outline.map(item => <li key={item.position} className="rounded-md border border-[#E7E4DF] bg-white px-3 py-2" style={{ marginLeft: Math.min((item.level ?? 1) - 1, 4) * 12 }}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2"><span className="text-[11px] font-medium text-[#353543]">{item.position}. {item.title || 'Untitled saved topic'}</span><span className="break-all text-[10px] text-[#777786]">{item.topicId ? `Topic ID ${item.topicId}` : item.legacyNumericId !== null ? `Legacy numeric ID ${item.legacyNumericId} (no stable ID)` : 'ID unavailable'} · {item.level === null ? 'Level unavailable' : `Level ${item.level}`}</span></div>
+            </li>)}</ol></>}
+    </div>
+    <div className="mt-5">
+      <h4 className="text-[12px] font-semibold text-[#292936]">Saved file manifest</h4>
+      <p className="mt-1 text-[11px] text-[#686879]">These are saved file descriptions and hashes, not current files or verified archive bytes.</p>
+      {checkpoint.files.length === 0 ? <p className="mt-2 text-[11px] text-[#686879]">No files were saved in this checkpoint.</p> : <ul className="mt-3 space-y-2" data-testid="saved-file-manifest">
+        {checkpoint.files.map((file, index) => <li key={`${file.fileId}-${index}`} className="rounded-md border border-[#E7E4DF] bg-white p-3 text-[11px]">
+          <p className="font-medium text-[#353543]">{typeof file.name === 'string' ? file.name : 'File name unavailable'}{detail.sourceFileIds?.includes(file.fileId) && <span className="ml-2 text-[10px] font-normal text-[#686879]">Saved source</span>}</p>
+          <dl className="mt-1 grid gap-x-4 gap-y-1 text-[10px] text-[#686879] sm:grid-cols-2">
+            <div><dt className="inline font-semibold">File ID: </dt><dd className="inline break-all">{file.fileId}</dd></div>
+            <div><dt className="inline font-semibold">Type: </dt><dd className="inline">{typeof file.type === 'string' && file.type ? file.type : 'Not recorded'}</dd></div>
+            <div><dt className="inline font-semibold">Saved size: </dt><dd className="inline">{Number.isSafeInteger(file.size) && file.size >= 0 ? `${file.size} bytes` : 'Unavailable'}</dd></div>
+            <div><dt className="inline font-semibold">Uploaded: </dt><dd className="inline">{typeof file.uploadedAt === 'number' ? formatDate(file.uploadedAt) : 'Unavailable'}</dd></div>
+            <div className="sm:col-span-2"><dt className="inline font-semibold">Saved SHA-256: </dt><dd className="inline break-all">{typeof file.sha256 === 'string' ? file.sha256 : 'Unavailable'}</dd></div>
+          </dl>
+        </li>)}
+      </ul>}
+    </div>
+  </section>
+}
+
 export function ProjectHistoryPanel({
   projectId, currentToc, onBack, onCreateCheckpoint, listCheckpoints, getCheckpointRecord, verifyCheckpoint,
 }: ProjectHistoryPanelProps) {
@@ -181,6 +242,13 @@ export function ProjectHistoryPanel({
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   const [verification, setVerification] = useState<Record<string, VerificationState>>({})
+  const verificationGeneration = React.useRef(0)
+  const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null)
+  const [detailCheckpoint, setDetailCheckpoint] = useState<ProjectCheckpoint | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
+  const [detailRetry, setDetailRetry] = useState(0)
+  const detailRequestId = React.useRef(0)
   const [topicOpen, setTopicOpen] = useState(false)
   const [topicLoading, setTopicLoading] = useState(false)
   const [topicLoaded, setTopicLoaded] = useState(false)
@@ -188,6 +256,7 @@ export function ProjectHistoryPanel({
   const [topicFailures, setTopicFailures] = useState<TopicRecordLoad[]>([])
   const [topics, setTopics] = useState<TopicHistoryTopic[]>([])
   const [selectedTopicId, setSelectedTopicId] = useState('')
+  const listRequestId = React.useRef(0)
   const listCheckpointsRef = React.useRef(listCheckpoints)
   listCheckpointsRef.current = listCheckpoints
   const getCheckpointRecordRef = React.useRef(getCheckpointRecord)
@@ -195,24 +264,57 @@ export function ProjectHistoryPanel({
   const topicRequestId = React.useRef(0)
 
   const refresh = useCallback(async () => {
+    const requestId = ++listRequestId.current
     topicRequestId.current += 1
+    detailRequestId.current += 1
+    verificationGeneration.current += 1
     setLoading(true)
     setLoadError('')
+    setVerification({})
+    setDetailCheckpoint(null)
+    setDetailLoading(false)
+    setDetailError('')
     setTopicLoading(false)
     setTopicLoaded(false)
     setTopics([])
     setTopicFailures([])
     setTopicError('')
     try {
-      setCheckpoints(await listCheckpointsRef.current(projectId))
+      const list = await listCheckpointsRef.current(projectId)
+      if (requestId !== listRequestId.current) return
+      setCheckpoints(list)
+      setSelectedCheckpointId(current => current && list.some(item => item.checkpointId === current) ? current : null)
     } catch (error) {
-      setLoadError(`Could not load project history: ${(error as Error).message}`)
+      if (requestId === listRequestId.current)
+        setLoadError(`Could not load project history: ${(error as Error).message}`)
     } finally {
-      setLoading(false)
+      if (requestId === listRequestId.current) setLoading(false)
     }
   }, [projectId])
 
   useEffect(() => { void refresh() }, [refresh])
+
+  useEffect(() => {
+    if (!selectedCheckpointId || loading || loadError) return
+    const summary = checkpoints.find(item => item.checkpointId === selectedCheckpointId)
+    if (!summary) return
+    const requestId = ++detailRequestId.current
+    setDetailLoading(true)
+    setDetailCheckpoint(null)
+    setDetailError('')
+    void readValidatedCheckpointRecord(projectId, summary, getCheckpointRecordRef.current)
+      .then(checkpoint => {
+        if (requestId === detailRequestId.current) setDetailCheckpoint(checkpoint)
+      })
+      .catch(error => {
+        if (requestId === detailRequestId.current)
+          setDetailError(`Could not inspect saved checkpoint: ${(error as Error).message}`)
+      })
+      .finally(() => {
+        if (requestId === detailRequestId.current) setDetailLoading(false)
+      })
+    return () => { detailRequestId.current += 1 }
+  }, [selectedCheckpointId, checkpoints, loading, loadError, projectId, detailRetry])
 
   const loadTopicHistory = async () => {
     const requestId = ++topicRequestId.current
@@ -222,14 +324,7 @@ export function ProjectHistoryPanel({
     try {
       const results = await Promise.all(checkpoints.map(async summary => {
         try {
-          const checkpoint = await getCheckpointRecordRef.current(projectId, summary.checkpointId)
-          if (!checkpoint) return { checkpoint: null, failure: { checkpointId: summary.checkpointId, message: 'Committed checkpoint record was not found.' } }
-          const { record: _record, ...returnedSummary } = checkpoint
-          if (canonicalCheckpointJson(returnedSummary) !== canonicalCheckpointJson(summary))
-            return { checkpoint: null, failure: { checkpointId: summary.checkpointId, message: 'Returned checkpoint metadata did not match the committed summary.' } }
-          const recordVerification = await verifyCheckpointRecord(checkpoint)
-          if (!recordVerification.valid)
-            return { checkpoint: null, failure: { checkpointId: summary.checkpointId, message: recordVerification.issues.join(' ') } }
+          const checkpoint = await readValidatedCheckpointRecord(projectId, summary, getCheckpointRecordRef.current)
           return { checkpoint, failure: null }
         } catch (error) {
           return { checkpoint: null, failure: { checkpointId: summary.checkpointId, message: (error as Error).message || 'Could not read committed checkpoint record.' } }
@@ -289,12 +384,18 @@ export function ProjectHistoryPanel({
   }
 
   const verify = async (checkpointId: string) => {
-    setVerification(current => ({ ...current, [checkpointId]: { status: 'verifying' } }))
+    const summary = checkpoints.find(item => item.checkpointId === checkpointId)
+    if (!summary) return
+    const generation = verificationGeneration.current
+    const identity = { projectId, integrityDigest: summary.integrityDigest }
+    setVerification(current => ({ ...current, [checkpointId]: { status: 'verifying', ...identity } }))
     try {
       const result = await verifyCheckpoint(projectId, checkpointId)
-      setVerification(current => ({ ...current, [checkpointId]: { status: 'verified', result } }))
+      if (generation === verificationGeneration.current)
+        setVerification(current => ({ ...current, [checkpointId]: { status: 'verified', result, ...identity } }))
     } catch (error) {
-      setVerification(current => ({ ...current, [checkpointId]: { status: 'error', message: (error as Error).message } }))
+      if (generation === verificationGeneration.current)
+        setVerification(current => ({ ...current, [checkpointId]: { status: 'error', message: (error as Error).message, ...identity } }))
     }
   }
 
@@ -378,7 +479,8 @@ export function ProjectHistoryPanel({
           <div className="px-6 py-10 text-center"><p className="text-[13px] font-medium text-[#353543]">No checkpoints yet</p><p className="mt-1 text-[11px] text-[#777786]">Create a checkpoint to preserve a named, verifiable project state.</p></div>
         ) : <ol className="divide-y divide-[#ECE9E4]">
           {checkpoints.map(checkpoint => {
-            const checked = verification[checkpoint.checkpointId]
+             const state = verification[checkpoint.checkpointId]
+             const checked = state?.projectId === projectId && state.integrityDigest === checkpoint.integrityDigest ? state : undefined
             const result = checked?.status === 'verified' ? checked.result : null
             return <li key={checkpoint.checkpointId} className="px-5 py-4 sm:px-6">
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
@@ -395,7 +497,15 @@ export function ProjectHistoryPanel({
               </dl>
               {checked?.status === 'error' && <p className="mt-3 text-[11px] text-[#A52A2A]" role="alert">Verification could not be completed: {checked.message}</p>}
               {result && !result.valid && result.issues.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-[11px] text-[#A52A2A]" aria-label="Integrity issues">{result.issues.map((issue, index) => <li key={`${index}-${issue}`}>{issue}</li>)}</ul>}
-              <div className="mt-3"><button type="button" disabled={checked?.status === 'verifying'} onClick={() => void verify(checkpoint.checkpointId)} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[10px] font-semibold text-[#41414F] hover:bg-[#F8F7F5] disabled:opacity-50">{checked?.status === 'verifying' ? 'Verifying…' : result ? 'Verify again' : 'Verify integrity'}</button></div>
+               <div className="mt-3 flex flex-wrap gap-2">
+                 <button type="button" aria-expanded={selectedCheckpointId === checkpoint.checkpointId} aria-controls="checkpoint-detail" onClick={() => setSelectedCheckpointId(current => current === checkpoint.checkpointId ? null : checkpoint.checkpointId)} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[10px] font-semibold text-[#41414F] hover:bg-[#F8F7F5]">{selectedCheckpointId === checkpoint.checkpointId ? 'Close saved detail' : 'Inspect saved checkpoint'}</button>
+                 <button type="button" disabled={checked?.status === 'verifying'} onClick={() => void verify(checkpoint.checkpointId)} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[10px] font-semibold text-[#41414F] hover:bg-[#F8F7F5] disabled:opacity-50">{checked?.status === 'verifying' ? 'Verifying…' : result ? 'Verify again' : 'Verify integrity'}</button>
+               </div>
+               {selectedCheckpointId === checkpoint.checkpointId && !loading && !loadError && <>
+                 {detailLoading && <p className="mt-4 text-[11px] text-[#686879]" role="status">Checking saved record and manifest metadata…</p>}
+                 {detailError && <p className="mt-4 rounded-md bg-[#FEF2F2] p-3 text-[11px] text-[#B42318]" role="alert">{detailError} <button type="button" onClick={() => setDetailRetry(current => current + 1)} className="underline">Retry saved detail</button></p>}
+                 {!detailLoading && detailCheckpoint?.checkpointId === checkpoint.checkpointId && detailCheckpoint.projectId === projectId && <CheckpointDetailView checkpoint={detailCheckpoint} fullVerification={result} />}
+               </>}
             </li>
           })}
         </ol>}
