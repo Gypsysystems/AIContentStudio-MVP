@@ -770,3 +770,60 @@ test("Home navigation stays immediate and save status stays pending during delay
   releaseSave()
   await expect(page.locator("header").getByText("All changes saved", { exact: true })).toBeVisible()
 })
+
+test("cloud account and sign-out controls never cover project header actions", async ({ page }) => {
+  test.setTimeout(90_000)
+  await mockCloud(page)
+  await page.route("**/api/auth/logout", route => route.fulfill({
+    json: { authenticated: false, mode: "supabase" },
+  }))
+  await createProject(page, `Account header ${Date.now()}`)
+  const header = page.locator("header")
+  await expect(header.getByRole("status")).toContainText("All changes saved")
+
+  for (const width of [1280, 768, 375]) {
+    await page.setViewportSize({ width, height: 850 })
+    const actions = [
+      header.getByRole("button", { name: "Project Home" }),
+      header.getByRole("button", { name: "Project Settings" }),
+      header.getByRole("button", { name: "Brand & Output" }),
+      header.getByRole("button", { name: "Diagnostics" }),
+      header.getByRole("button", { name: "Sign out" }),
+    ]
+    const bounds = await Promise.all(actions.map(async action => {
+      await expect(action).toBeVisible()
+      const box = await action.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1)
+      return box!
+    }))
+    for (let i = 0; i < bounds.length; i++) {
+      for (let j = i + 1; j < bounds.length; j++) {
+        const overlapWidth = Math.min(bounds[i].x + bounds[i].width, bounds[j].x + bounds[j].width)
+          - Math.max(bounds[i].x, bounds[j].x)
+        const overlapHeight = Math.min(bounds[i].y + bounds[i].height, bounds[j].y + bounds[j].height)
+          - Math.max(bounds[i].y, bounds[j].y)
+        expect(overlapWidth <= 1 || overlapHeight <= 1, `Header actions overlap at ${width}px`).toBe(true)
+      }
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1)
+
+    await actions[0].click()
+    await expect(page.getByTestId("project-home")).toBeVisible()
+    await header.getByRole("button", { name: "Project Settings" }).click()
+    await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
+    await header.getByRole("button", { name: "Back to project" }).click()
+    await expect(page.getByTestId("project-home")).toBeVisible()
+    await header.getByRole("button", { name: "Brand & Output" }).click()
+    await expect(page.getByRole("heading", { name: "Theme & Style Profiles" })).toBeVisible()
+    await header.getByRole("button", { name: "Project Home" }).click()
+    await page.getByTestId("project-home-stage-sources").click()
+    await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  }
+
+  await expect(page.getByTestId("header-account")).toBeVisible()
+  await header.getByRole("button", { name: "Sign out" }).click()
+  await expect(page.getByText("Signed out.")).toBeVisible()
+  await expect(page.getByTestId("header-account")).toHaveCount(0)
+})

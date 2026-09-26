@@ -8,3 +8,9 @@ Cloud section navigation may update the interface before a remote save finishes,
 **Why:** Cloud readiness checks and whole-project writes make ordinary navigation feel delayed. Local writes are cheap, and some local workflows depend on a completed save before directly inspecting or editing IndexedDB; removing that barrier caused timing-dependent persistence failures. A failed cloud write must remain visible with an explicit retry, not be silently treated as saved. A needless settings save can make another tab's legitimate edit fail its optimistic revision check even though no project data changed.
 
 **How to apply:** Coalesce only the latest queued snapshot while preserving one revision-guarded write at a time. Tie queued writes and status updates to the active project generation, and never overwrite newer queued state with an older timer. Keep the saved indicator visible until a new edit, a failure, or a project reset; old status timers must not clear a later result. A settings exit should flush pending changes if there are any, but should not schedule a new write merely because the user visited settings.
+
+Authenticated account and sign-out controls must remain in normal header layout flow, rather than floating above the app.
+
+**Why:** A fixed session panel overlapped top-right project actions in cloud mode. Moving it into the header lets actions wrap at narrower widths without blocking settings, navigation, save status, or sign-out.
+
+**How to apply:** Keep account actions in the shared header alongside other controls; verify pointer access and horizontal containment at desktop and narrow viewports when adding future header actions.

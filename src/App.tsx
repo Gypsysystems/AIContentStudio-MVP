@@ -113,6 +113,7 @@ import { ProjectPreview } from './projectPreview'
 import { availableConditions, htmlConditionError } from './publishConditions'
 import { ProjectHomeScreen } from './ProjectHomeScreen'
 import { summarizeProjectHome } from './projectHomeModel'
+import { useCloudAccount } from './AuthGate'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'project-home' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -922,6 +923,7 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
   onRetrySave?: () => void
   stageStatuses?: Record<string, StageStatus>
 }) {
+  const cloudAccount = useCloudAccount()
   const inProject = !['dashboard', 'create'].includes(screen)
   const hasProject = screen !== 'dashboard' && isProject
   const saveLabel = saveStatus === 'error' ? 'Save failed' : saveStatus === 'saving' ? 'Saving changes' : 'All changes saved'
@@ -1002,6 +1004,18 @@ function TopBar({ screen, onNav, projectName, contentType, isProject, settingsRe
             <button type="button" onClick={() => onNav('create')} className="min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">
               New project
             </button>
+          )}
+          {cloudAccount && (
+            <div data-testid="header-account" className="flex min-h-8 max-w-full min-w-0 items-center gap-2 border-l border-[#E2DED7] pl-2 sm:pl-3">
+              <span className="hidden min-w-0 max-w-[130px] truncate text-[11px] text-[#686879] md:block xl:max-w-[180px]"
+                title={`${cloudAccount.organizationName} / ${cloudAccount.workspaceName}`}>
+                <span className="hidden xl:inline">{cloudAccount.organizationName} / </span>{cloudAccount.workspaceName}
+              </span>
+              <button type="button" disabled={cloudAccount.busy} onClick={cloudAccount.signOut}
+                className="min-h-8 flex-shrink-0 rounded-md border border-[#E2DED7] px-2.5 text-[11px] font-medium text-[#4D4DC2] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 disabled:opacity-60">
+                Sign out
+              </button>
+            </div>
           )}
         </div>
       </div>

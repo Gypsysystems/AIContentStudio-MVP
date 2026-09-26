@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { setCloudAuthSession } from './authSession'
 import { setCloudProjectMode } from './authorizedProjectService'
 import { isCloudProjectStorageReady } from './cloudProjectRepository'
@@ -11,6 +11,19 @@ type AuthState =
   | { kind: 'cloud-pending'; userId: string; workspaceId: string; role: MembershipRole; organizationName: string; workspaceName: string; message: string }
   | { kind: 'signed-out'; message?: string }
   | { kind: 'unavailable'; message: string }
+
+type CloudAccount = {
+  organizationName: string
+  workspaceName: string
+  busy: boolean
+  signOut: () => void
+}
+
+const CloudAccountContext = createContext<CloudAccount | null>(null)
+
+export function useCloudAccount(): CloudAccount | null {
+  return useContext(CloudAccountContext)
+}
 
 async function authRequest(action: 'session' | 'login' | 'logout' | 'refresh',
   payload: Record<string, string> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -149,10 +162,12 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   if (state.kind === 'loading') return <div role="status" className="min-h-screen grid place-items-center text-sm text-gray-600">Checking session…</div>
   if (state.kind === 'signed-in') {
     if (state.mode === 'local-dev') return <>{children}</>
-    return <Fragment key={state.workspaceId}>{children}<div className="fixed right-4 top-4 z-50 flex items-center gap-3 rounded-lg border border-gray-200 bg-white/95 px-3 py-2 text-xs shadow-sm">
-      <span className="text-gray-600">{state.organizationName} / {state.workspaceName}</span>
-      <button type="button" disabled={busy} onClick={() => void logout()} className="text-[#5B5BD6] disabled:opacity-60">Sign out</button>
-    </div></Fragment>
+    return <CloudAccountContext.Provider key={state.workspaceId} value={{
+      organizationName: state.organizationName,
+      workspaceName: state.workspaceName,
+      busy,
+      signOut: () => { void logout() },
+    }}>{children}</CloudAccountContext.Provider>
   }
   if (state.kind === 'cloud-pending') return <main className="min-h-screen bg-[#F8F7F5] flex items-center justify-center p-5">
       <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
