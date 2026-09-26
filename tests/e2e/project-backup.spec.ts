@@ -71,7 +71,9 @@ async function makeCurrentBackup(page: Page, projectId: string) {
     const saved = await projectRepository.saveProjectIfCurrent(record, project.recordRevision)
     const archive = await createProjectBackup(projectId)
     const summary = await inspectProjectBackup(archive)
-    const restored = await restoreProjectBackup(archive, { mode: 'new' })
+    const restored = await restoreProjectBackup(archive, {
+      mode: 'new', newName: 'Complete backup project (Restored)',
+    })
     const restoredFiles = await projectRepository.loadProjectFiles(restored.projectId)
     return {
       originalId: projectId,
@@ -238,8 +240,12 @@ test('v1 and v2 project records inside backups migrate safely before restore', a
     }
     const v1Archive = await createOldBackup(v1, `backup-v1-${Date.now()}`)
     const v2Archive = await createOldBackup(v2, `backup-v2-${Date.now()}`)
-    const v1Restored = await restoreProjectBackup(v1Archive, { mode: 'new' })
-    const v2Restored = await restoreProjectBackup(v2Archive, { mode: 'new' })
+    const v1Restored = await restoreProjectBackup(v1Archive, {
+      mode: 'new', newName: `${v1.projectName} (Restored)`,
+    })
+    const v2Restored = await restoreProjectBackup(v2Archive, {
+      mode: 'new', newName: `${v2.projectName} (Restored)`,
+    })
     return { v1Restored, v2Restored }
   }, { v1: v1Fixture, v2: v2Fixture })
 
@@ -279,7 +285,7 @@ test('tampered manifests, corrupt checksums, and missing blobs are rejected with
     const valid = await createProjectBackup(id)
     const attempt = async (archive: Blob) => {
       try {
-        await restoreProjectBackup(archive, { mode: 'new' })
+        await restoreProjectBackup(archive, { mode: 'new', newName: `Corrupt backup ${crypto.randomUUID()}` })
         return { rejected: false, message: '' }
       } catch (error) {
         return { rejected: true, message: error instanceof Error ? error.message : String(error) }
@@ -357,7 +363,7 @@ test('duplicate project IDs require explicit restore mode; guarded replacement r
       staleConflict = error instanceof Error ? error.message : String(error)
     }
     const afterConflict = await projectRepository.loadProject(id)
-    const copy = await restoreProjectBackup(archive, { mode: 'new' })
+    const copy = await restoreProjectBackup(archive, { mode: 'new', newName: 'Archived version restore copy' })
     const afterCopy = await projectRepository.loadProject(id)
     const replaced = await restoreProjectBackup(archive, { mode: 'replace', expectedRevision: newer.recordRevision,
       expectedFileIds: [file.fileId] })
@@ -481,21 +487,21 @@ test('valid checksums cannot import unusable records or overwrite files changed 
       ...snapshot, record: { ...snapshot.record, themes: {} } as any,
     })
     let malformedError = ''
-    try { await restoreProjectBackup(malformed, { mode: 'new' }) }
+    try { await restoreProjectBackup(malformed, { mode: 'new', newName: 'Malformed restore copy' }) }
     catch (error) { malformedError = (error as Error).message }
     const nestedArchive = await serializeProjectBackup({
       ...snapshot,
       record: { ...snapshot.record, themes: [{ id: 'broken', styleProfiles: {} }] } as any,
     })
     let nestedError = ''
-    try { await restoreProjectBackup(nestedArchive, { mode: 'new' }) }
+    try { await restoreProjectBackup(nestedArchive, { mode: 'new', newName: 'Nested restore copy' }) }
     catch (error) { nestedError = (error as Error).message }
     const brokenMasterArchive = await serializeProjectBackup({
       ...snapshot,
       record: { ...snapshot.record, htmlMasterPages: [{ id: 'broken-master', blocks: {} }] } as any,
     })
     let masterError = ''
-    try { await restoreProjectBackup(brokenMasterArchive, { mode: 'new' }) }
+    try { await restoreProjectBackup(brokenMasterArchive, { mode: 'new', newName: 'Broken master restore copy' }) }
     catch (error) { masterError = (error as Error).message }
     const brokenReviewArchive = await serializeProjectBackup({
       ...snapshot,

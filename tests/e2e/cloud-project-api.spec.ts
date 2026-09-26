@@ -4,6 +4,7 @@ import { Readable } from 'node:stream'
 import { readFileSync } from 'node:fs'
 import { CloudApiError, CloudProjectApi, handleCloudFiles } from '../../server/cloudProjectApi'
 import { handleSupabaseAuthRequest } from '../../server/supabaseProjectAccess'
+import { projectNameKey } from '../../src/projectNames'
 
 const ORIGINAL_FETCH = globalThis.fetch
 const ORIGINAL_ENV = {
@@ -50,7 +51,7 @@ test.describe('workspace cloud project API', () => {
         return reply([{ workspace_id: 'workspace-1', role }])
       }
       if (url.pathname === '/rest/v1/cloud_schema_versions') {
-        return storageReady ? reply([{ component: 'project-storage', version: 1 }]) : reply([], 404)
+        return storageReady ? reply([{ component: 'project-storage', version: 2 }]) : reply([], 404)
       }
       if (url.pathname === '/rest/v1/workspace_role_permissions') {
         const permissions: Record<string, string[]> = {
@@ -107,7 +108,7 @@ test.describe('workspace cloud project API', () => {
           if (initialChecks.size === 2) releaseInitial()
           await initialReady
           if (url.pathname === '/rest/v1/cloud_schema_versions')
-            return reply([{ component: 'project-storage', version: 1 }])
+            return reply([{ component: 'project-storage', version: 2 }])
           return reply(['create', 'read', 'write', 'duplicate', 'backup', 'restore-new']
             .map(permission => ({ permission })))
         }
@@ -155,6 +156,8 @@ test.describe('workspace cloud project API', () => {
     }
     let inserted: Record<string, unknown> | null = null
     const restore = provider('editor', true, (url, init) => {
+      if (url.pathname === '/rest/v1/cloud_projects' && init?.method === undefined
+        && url.searchParams.has('workspace_id') && !url.searchParams.has('limit')) return reply([])
       if (url.pathname !== '/rest/v1/cloud_projects' || init?.method !== 'POST')
         throw new Error(`Unexpected provider call: ${url.pathname}`)
       inserted = JSON.parse(String(init.body)) as Record<string, unknown>
@@ -175,6 +178,131 @@ test.describe('workspace cloud project API', () => {
         workspace_id: 'workspace-1',
         owner_user_id: 'user-1',
         record_revision: 0,
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('create rejects case-insensitive whitespace-normalized name conflicts with a suggested name', async () => {
+    const restore = provider('editor', true, url => {
+      if (url.pathname !== '/rest/v1/cloud_projects') throw new Error(`Unexpected provider call: ${url.pathname}`)
+      return reply([{
+        project_id: 'existing-project',
+        record: { projectName: 'Asteria 2' },
+      }])
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      await expect(api.execute({
+        action: 'create',
+        record: { projectId: 'new-project', projectName: ' asteria   2 ' },
+      })).rejects.toMatchObject({
+        status: 409,
+        code: 'PROJECT_NAME_CONFLICT',
+        details: { suggestedName: 'asteria 2 Copy' },
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('the database unique-index response closes concurrent create races', async () => {
+    const projects: Array<{ workspace_id: string; project_id: string; record: Record<string, unknown> }> = []
+    let nameReads = 0
+    let releaseNameReads!: () => void
+    const bothNameReads = new Promise<void>(resolve => { releaseNameReads = resolve })
+    const restore = provider('editor', true, async (url, init) => {
+      if (url.pathname !== '/rest/v1/cloud_projects') throw new Error(`Unexpected provider call: ${url.pathname}`)
+      if (init?.method === 'POST') {
+        const row = JSON.parse(String(init.body)) as typeof projects[number]
+        const exists = projects.some(project => project.workspace_id === row.workspace_id
+          && projectNameKey(String(project.record.projectName)) === projectNameKey(String(row.record.projectName)))
+        if (exists) return reply({
+          code: '23505',
+          message: 'duplicate key value violates unique constraint "cloud_projects_workspace_name_key"',
+        }, 409)
+        projects.push(row)
+        return reply([{ record: row.record }])
+      }
+      if (url.searchParams.has('workspace_id') && !url.searchParams.has('limit')) {
+        nameReads += 1
+        if (nameReads === 2) releaseNameReads()
+        await bothNameReads
+        return reply(projects.filter(row => row.workspace_id === url.searchParams.get('workspace_id')?.slice(3))
+          .map(({ project_id, record }) => ({ project_id, record })))
+      }
+      throw new Error(`Unexpected provider request: ${url.pathname}`)
+    })
+    try {
+      const apis = await Promise.all([CloudProjectApi.fromRequest(request()), CloudProjectApi.fromRequest(request())])
+      const outcomes = await Promise.allSettled(apis.map((api, index) => api.execute({
+        action: 'create',
+        record: { projectId: `concurrent-${index}`, projectName: index ? 'ASTERIA   2' : 'Asteria 2' },
+      })))
+      expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1)
+      const rejected = outcomes.find(outcome => outcome.status === 'rejected')
+      expect(rejected).toMatchObject({
+        status: 'rejected',
+        reason: { status: 409, code: 'PROJECT_NAME_CONFLICT' },
+      })
+      expect(projects).toHaveLength(1)
+    } finally {
+      restore()
+    }
+  })
+
+  test('rename rejects a normalized name already owned by another project', async () => {
+    const restore = provider('editor', true, url => {
+      if (url.pathname !== '/rest/v1/cloud_projects') throw new Error(`Unexpected provider call: ${url.pathname}`)
+      if (url.searchParams.has('limit')) return reply([{
+        record: { projectId: 'project-to-rename', ownerUserId: 'owner', recordRevision: 0 },
+      }])
+      return reply([{ project_id: 'another-project', record: { projectName: 'Asteria 2' } }])
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      await expect(api.execute({
+        action: 'save',
+        projectId: 'project-to-rename',
+        expectedRevision: 0,
+        record: { projectName: ' asteria   2 ' },
+      })).rejects.toMatchObject({ status: 409, code: 'PROJECT_NAME_CONFLICT' })
+    } finally {
+      restore()
+    }
+  })
+
+  test('duplicate and import-as-new do not silently reuse an occupied name', async () => {
+    const restore = provider('editor', true, url => {
+      if (url.pathname === '/rest/v1/cloud_projects') {
+        if (url.searchParams.get('project_id') === 'eq.source-project') {
+          return reply([{ record: { projectId: 'source-project', projectName: 'Source', recordRevision: 0 } }])
+        }
+        if (url.searchParams.has('limit')) return reply([])
+        return reply([
+          { project_id: 'source-project', record: { projectName: 'Source' } },
+          { project_id: 'existing-copy', record: { projectName: 'Source Copy' } },
+        ])
+      }
+      if (url.pathname === '/rest/v1/cloud_project_files') return reply([])
+      throw new Error(`Unexpected provider call: ${url.pathname}`)
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      await expect(api.execute({ action: 'duplicate', projectId: 'source-project' }))
+        .rejects.toMatchObject({
+          status: 409, code: 'PROJECT_NAME_CONFLICT',
+          details: { suggestedName: 'Source Copy (2)' },
+        })
+      await expect(api.execute({
+        action: 'restore-new',
+        projectId: 'imported-project',
+        record: { projectName: 'Source Copy' },
+        fileIds: [],
+      })).rejects.toMatchObject({
+        status: 409, code: 'PROJECT_NAME_CONFLICT',
+        details: { suggestedName: 'Source Copy (2)' },
       })
     } finally {
       restore()
@@ -220,8 +348,10 @@ test.describe('workspace cloud project API', () => {
         patchCalls.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> })
         return reply([])
       }
+      if (url.pathname === '/rest/v1/cloud_projects' && init?.method === undefined
+        && url.searchParams.has('workspace_id') && !url.searchParams.has('limit')) return reply([])
       if (url.pathname === '/rest/v1/cloud_projects' && init?.method === undefined && url.searchParams.get('limit') === '1')
-        return reply([{ record: { projectId: 'stable-id', ownerUserId: 'original-owner', recordRevision: ++projectReads === 1 ? 6 : 7 } }])
+        return reply([{ record: { projectId: 'stable-id', ownerUserId: 'original-owner', recordRevision: ++projectReads <= 2 ? 6 : 7 } }])
       throw new Error(`Unexpected provider call: ${url.pathname}`)
     })
     try {

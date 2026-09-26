@@ -192,7 +192,7 @@ test('workspace owner, member, editor, and viewer permissions are enforced by re
     const editorDelete = await attempt(() => projectRepository.deleteProject(id, editor))
     const editorArchive = await createProjectBackup(id, owner)
     const editorRestore = await attempt(() =>
-      restoreProjectBackup(editorArchive, { mode: 'new' }, editor))
+      restoreProjectBackup(editorArchive, { mode: 'new', newName: 'Permission matrix editor restore' }, editor))
     const roleMatrix = Object.fromEntries(
       [owner, memberOwner, editor, viewer].map(roleContext => [
         roleContext.membership.role,
@@ -353,7 +353,9 @@ test('duplicate and restore assign actor ownership; denied and cross-workspace r
     const sourceMember = context(`source-member-${Date.now()}`, sourceOwner.workspace.id, 'editor')
     const duplicate = await projectRepository.duplicateProject(sourceId, 'Source copy', sourceMember)
     if (!duplicate) throw new Error('Owner duplicate unexpectedly missing')
-    const restored = await restoreProjectBackup(archive, { mode: 'new' }, actor)
+    const restored = await restoreProjectBackup(archive, {
+      mode: 'new', newName: 'Restorable source actor restore',
+    }, actor)
     const restoredFiles = await projectRepository.loadProjectFiles(restored.projectId, actor)
 
     const destinationId = `restore-destination-${Date.now()}`
@@ -385,7 +387,9 @@ test('duplicate and restore assign actor ownership; denied and cross-workspace r
         return { rejected: true, message: error instanceof Error ? error.message : String(error) }
       }
     }
-    const deniedNew = await attempt(() => restoreProjectBackup(archive, { mode: 'new' }, viewer))
+    const deniedNew = await attempt(() => restoreProjectBackup(archive, {
+      mode: 'new', newName: 'Restorable source viewer restore',
+    }, viewer))
     const deniedReplace = await attempt(() => restoreProjectBackup(foreignArchive, {
       mode: 'replace',
       expectedRevision: current.recordRevision,

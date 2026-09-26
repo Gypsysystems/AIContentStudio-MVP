@@ -15,7 +15,9 @@ test('app-facing project operations use server metadata while content remains lo
     const loaded = await repo.loadProject(id)
     const backup = await createAuthorizedProjectBackup(id)
     const duplicate = await repo.duplicateProject(id, 'Duplicated through the gate')
-    const restored = await restoreAuthorizedProjectBackup(backup, { mode: 'new' })
+    const restored = await restoreAuthorizedProjectBackup(backup, {
+      mode: 'new', newName: 'Saved through the gate backup copy',
+    })
     const metadata = await (await fetch('/api/project-access', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'list' }),
@@ -123,7 +125,7 @@ test('creating a project cannot advance past a denied or unavailable server gate
   await page.getByPlaceholder(/Nexus Platform/).fill('Server-required project')
   await page.route('**/api/project-access', route => route.abort())
   await page.getByRole('button', { name: /Continue — Theme & Styles/i }).click()
-  await expect(page.getByRole('alert')).toContainText('Could not create project')
+  await expect(page.getByRole('alert').filter({ hasText: 'Could not create project' })).toBeVisible()
   await expect(page.getByText('Step 1 — Project Details')).toBeVisible()
   expect(await page.evaluate(() => localStorage.getItem('docflow-active-project'))).toBeNull()
   await page.unroute('**/api/project-access')

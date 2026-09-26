@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from '../src/projectNames'
 
 const ACCESS_COOKIE = 'sb_access_token'
 const MAX_JSON_BYTES = 16 * 1024 * 1024
@@ -15,9 +16,10 @@ type Json = Record<string, unknown>
 type User = { id: string }
 type Membership = { workspace_id: string; role: string }
 type FileRow = { file_id: string; project_id: string; name: string; type: string; size: number; uploaded_at: number; storage_path: string; state: string }
+type ProjectNameRow = { project_id: string; record: Json }
 
 export class CloudApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(readonly status: number, readonly code: string, message: string, readonly details?: Record<string, unknown>) {
     super(message)
     this.name = 'CloudApiError'
   }
@@ -120,6 +122,11 @@ class SupabaseCloudClient {
       const databaseCode = isObject(body) && typeof body.code === 'string' ? body.code : ''
       if (response.status === 401) throw new CloudApiError(401, 'UNAUTHENTICATED', 'A valid authenticated session is required')
       if (response.status === 403) throw new CloudApiError(403, 'FORBIDDEN', 'The current workspace role does not allow this action')
+      if (databaseCode === '23505' && /cloud_projects_workspace_name_key/i.test(
+        `${message} ${isObject(body) && typeof body.details === 'string' ? body.details : ''}`,
+      )) {
+        throw new CloudApiError(409, 'PROJECT_NAME_CONFLICT', 'A project with this name already exists in the workspace')
+      }
       if (response.status === 404 || databaseCode === 'P0002')
         throw new CloudApiError(404, 'RESOURCE_NOT_FOUND', message)
       if (databaseCode === '40001')
@@ -159,7 +166,7 @@ class SupabaseCloudClient {
       value => ({ ok: true as const, value }),
       error => ({ ok: false as const, error }),
     )
-    const markerQuery = new URLSearchParams({ select: 'component,version', component: 'eq.project-storage', version: 'eq.1', limit: '1' })
+    const markerQuery = new URLSearchParams({ select: 'component,version', component: 'eq.project-storage', version: 'eq.2', limit: '1' })
     const markerCheck = settle(this.call(`/rest/v1/cloud_schema_versions?${markerQuery}`))
     const permissionsQuery = new URLSearchParams({ select: 'permission', role: `eq.${role}` })
     const permissionCheck = settle(this.call(`/rest/v1/workspace_role_permissions?${permissionsQuery}`))
@@ -210,6 +217,15 @@ class SupabaseCloudClient {
     const rows = await this.json(`/rest/v1/cloud_projects?${query}`)
     if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid project list')
     return rows.map(row => isObject(row) ? row.record : null).filter(Boolean)
+  }
+
+  async listProjectNames(workspaceId: string): Promise<ProjectNameRow[]> {
+    const query = new URLSearchParams({ select: 'project_id,record', workspace_id: `eq.${workspaceId}` })
+    const rows = await this.json(`/rest/v1/cloud_projects?${query}`)
+    if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid project-name list')
+    return rows.filter((row): row is ProjectNameRow =>
+      isObject(row) && typeof row.project_id === 'string' && isObject(row.record),
+    )
   }
 
   async getProject(projectId: string, workspaceId: string): Promise<Json | null> {
@@ -310,6 +326,48 @@ export class CloudProjectApi {
     this.role = membership.role
   }
 
+  private async projectNameConflict(name: string, excludedProjectId?: string): Promise<CloudApiError> {
+    let names: string[] = []
+    try {
+      names = (await this.client.listProjectNames(this.workspaceId))
+        .filter(row => row.project_id !== excludedProjectId)
+        .map(row => row.record.projectName)
+        .filter((value): value is string => typeof value === 'string')
+    } catch {
+      // The database unique index remains authoritative if this lookup fails.
+    }
+    const suggestedName = suggestUniqueProjectName(name, [...names, name])
+    return new CloudApiError(409, 'PROJECT_NAME_CONFLICT',
+      'A project with this name already exists in the workspace', { suggestedName })
+  }
+
+  private async ensureProjectNameAvailable(name: unknown, excludedProjectId?: string): Promise<string> {
+    if (typeof name !== 'string' || !normalizeProjectName(name))
+      throw new CloudApiError(400, 'INVALID_PROJECT_NAME', 'Project name must contain at least one non-whitespace character')
+    const rows = await this.client.listProjectNames(this.workspaceId)
+    const existingNames = rows
+      .filter(row => row.project_id !== excludedProjectId)
+      .map(row => row.record.projectName)
+      .filter((value): value is string => typeof value === 'string')
+    if (existingNames.some(existing => projectNameKey(existing) === projectNameKey(name)))
+      throw await this.projectNameConflict(name, excludedProjectId)
+    return name
+  }
+
+  private async withNameConflictSuggestion<T>(
+    name: string,
+    operation: Promise<T>,
+    excludedProjectId?: string,
+  ): Promise<T> {
+    try {
+      return await operation
+    } catch (error) {
+      if (error instanceof CloudApiError && error.code === 'PROJECT_NAME_CONFLICT')
+        throw await this.projectNameConflict(name, excludedProjectId)
+      throw error
+    }
+  }
+
   static async fromRequest(request: IncomingMessage): Promise<CloudProjectApi> {
     const config = getConfig()
     const token = readCookie(request, ACCESS_COOKIE)
@@ -340,7 +398,9 @@ export class CloudProjectApi {
         this.client.assertPermission(this.role, 'create')
         const record = safeRecord(input.record)
         const projectId = validateId(input.projectId ?? record.projectId ?? `project-${randomUUID()}`, 'projectId')
-        return { record: await this.client.insertProject(projectId, this.workspaceId, this.userId, record) }
+        const projectName = await this.ensureProjectNameAvailable(record.projectName)
+        return { record: await this.withNameConflictSuggestion(projectName,
+          this.client.insertProject(projectId, this.workspaceId, this.userId, record)) }
       }
       case 'read':
       case 'backup': {
@@ -356,7 +416,15 @@ export class CloudProjectApi {
         this.client.assertPermission(this.role, 'write')
         const projectId = validateId(input.projectId, 'projectId')
         const record = safeRecord(input.record)
-        return { record: await this.client.saveProject(projectId, this.workspaceId, record, input.expectedRevision as number) }
+        if (!Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 0)
+          throw new CloudApiError(400, 'INVALID_REVISION', 'expectedRevision must be a nonnegative integer')
+        const current = await this.client.getProject(projectId, this.workspaceId)
+        if (!current) throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
+        if (current.recordRevision !== input.expectedRevision)
+          throw new CloudApiError(409, 'PROJECT_CONFLICT', `Project changed; expected revision ${String(input.expectedRevision)}, found ${String(current.recordRevision)}`)
+        const projectName = await this.ensureProjectNameAvailable(record.projectName, projectId)
+        return { record: await this.withNameConflictSuggestion(projectName,
+          this.client.saveProject(projectId, this.workspaceId, record, input.expectedRevision as number), projectId) }
       }
       case 'delete': {
         assertExactKeys(input, ['action', 'projectId'])
@@ -409,8 +477,14 @@ export class CloudProjectApi {
         const sourceFiles = await this.client.fileRows(sourceId, this.workspaceId)
         const remappedFileIds = new Map(sourceFiles.map(file => [file.file_id, `file-${randomUUID()}`]))
         const copy = remapStableReferences(source, remappedFileIds) as Json
-        if (typeof input.newName === 'string') copy.projectName = input.newName
-        const created = await this.client.insertProject(id, this.workspaceId, this.userId, copy)
+        if (input.newName !== undefined && typeof input.newName !== 'string')
+          throw new CloudApiError(400, 'INVALID_PROJECT_NAME', 'newName must be a string')
+        const projectName = await this.ensureProjectNameAvailable(
+          input.newName ?? `${String(source.projectName ?? 'Untitled Project')} Copy`,
+        )
+        copy.projectName = projectName
+        const created = await this.withNameConflictSuggestion(projectName,
+          this.client.insertProject(id, this.workspaceId, this.userId, copy))
         const copiedPaths: string[] = []
         try {
           for (const file of sourceFiles) {
@@ -449,13 +523,17 @@ export class CloudProjectApi {
       case 'restore-replace': {
         const isNew = input.action === 'restore-new'
         assertExactKeys(input, isNew
-          ? ['action', 'record', 'fileIds', 'projectId']
-          : ['action', 'projectId', 'record', 'expectedRevision', 'expectedFileIds', 'fileIds'])
+          ? ['action', 'record', 'fileIds', 'projectId', 'newName']
+          : ['action', 'projectId', 'record', 'expectedRevision', 'expectedFileIds', 'fileIds', 'newName'])
         this.client.assertPermission(this.role, isNew ? 'restore-new' : 'replace')
         const record = safeRecord(input.record)
+        if (input.newName !== undefined && typeof input.newName !== 'string')
+          throw new CloudApiError(400, 'INVALID_PROJECT_NAME', 'newName must be a string')
+        if (input.newName !== undefined) record.projectName = input.newName
         const projectId = validateId(isNew
           ? input.projectId ?? `project-${randomUUID()}`
           : input.projectId, 'projectId')
+        const projectName = await this.ensureProjectNameAvailable(record.projectName, isNew ? undefined : projectId)
         const fileIds = validateFileIdList(input.fileIds, 'fileIds')
         const stageId = randomUUID()
         let destinationFileIds: string[] = []
@@ -474,10 +552,10 @@ export class CloudProjectApi {
             throw new CloudApiError(409, 'FILE_SET_CONFLICT', 'Destination file set changed; replacement was not staged')
         } else {
           const stagedRecord = ownRecord(record, projectId, this.userId, this.workspaceId, 0)
-          await this.client.json('/rest/v1/cloud_projects', {
+          await this.withNameConflictSuggestion(projectName, this.client.json('/rest/v1/cloud_projects', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ project_id: projectId, workspace_id: this.workspaceId, owner_user_id: this.userId, record_revision: 0, record: stagedRecord, status: 'staging' }),
-          })
+          }))
         }
         const stagedRecord = ownRecord(record, projectId, this.userId, this.workspaceId, isNew ? 0 : expectedRevision! + 1)
         try {
@@ -504,7 +582,7 @@ export class CloudProjectApi {
         this.client.assertPermission(this.role, 'write')
         const stageId = validateId(input.stageId, 'stageId')
         const fileIds = validateFileIdList(input.fileIds, 'fileIds')
-        const query = new URLSearchParams({ select: 'workspace_id,project_id,mode,staged_file_ids', stage_id: `eq.${stageId}`, workspace_id: `eq.${this.workspaceId}`, owner_user_id: `eq.${this.userId}`, limit: '1' })
+        const query = new URLSearchParams({ select: 'workspace_id,project_id,mode,staged_file_ids,staged_record', stage_id: `eq.${stageId}`, workspace_id: `eq.${this.workspaceId}`, owner_user_id: `eq.${this.userId}`, limit: '1' })
         const stages = await this.client.json(`/rest/v1/cloud_project_restore_stages?${query}`)
         if (!Array.isArray(stages) || !isObject(stages[0]))
           throw new CloudApiError(404, 'RESTORE_STAGE_NOT_FOUND', 'Restore stage was not found')
@@ -521,10 +599,15 @@ export class CloudProjectApi {
           const exists = await this.client.call(`/storage/v1/object/info/${String(file.storage_path)}`)
           if (!exists.ok) throw new CloudApiError(409, 'STAGED_FILE_MISSING', 'A staged file is missing; the project was not restored')
         }
-        const finalized = await this.client.json('/rest/v1/rpc/finalize_cloud_project_restore', {
+        const stagedRecord = isObject(stage.staged_record) ? stage.staged_record : null
+        const finalized = await this.withNameConflictSuggestion(
+          typeof stagedRecord?.projectName === 'string' ? stagedRecord.projectName : '',
+          this.client.json('/rest/v1/rpc/finalize_cloud_project_restore', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ p_stage_id: stageId, p_expected_file_ids: fileIds }),
-        })
+          }),
+          stage.mode === 'replace' ? String(stage.project_id) : undefined,
+        )
         if (!isObject(finalized)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage did not confirm restore finalization')
         let cleanupPending = false
         if (stage.mode === 'replace') {
@@ -801,7 +884,7 @@ function sendJson(response: ServerResponse, status: number, payload: object): vo
 function sendCloudError(response: ServerResponse, error: unknown): void {
   if (response.headersSent) return
   if (error instanceof CloudApiError) {
-    sendJson(response, error.status, { error: error.message, code: error.code })
+    sendJson(response, error.status, { error: error.message, code: error.code, ...(error.details ?? {}) })
     return
   }
   sendJson(response, 503, { error: 'Cloud project storage is unavailable', code: 'CLOUD_STORAGE_UNAVAILABLE' })

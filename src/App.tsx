@@ -19,6 +19,7 @@ import { importLocalProjectToCloud } from './cloudProjectRepository'
 import { LOCAL_ACCESS_CONTEXT } from './ownership'
 import { getAccessContext } from './authSession'
 import type { ProjectOwnership } from './ownership'
+import { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from './projectNames'
 const {
   createProject, loadProject, listProjects, deleteProject, duplicateProject,
   saveProjectIfCurrent, saveFile, loadProjectFiles, removeFile, getActiveProjectId, setActiveProjectId,
@@ -921,7 +922,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
   activeProjectId?: string | null
   onOpenProject: (record: ProjectRecord) => void
   onDeleteProject: (projectId: string) => Promise<void>
-  onDuplicateProject: (projectId: string) => Promise<void>
+  onDuplicateProject: (projectId: string, confirmedName: string) => Promise<void>
   onRestored: (record: ProjectRecord, mode: RestoreOptions['mode']) => void
   onNewProject: () => void
 }) {
@@ -937,6 +938,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
   const [restoreBusy, setRestoreBusy] = useState(false)
   const [restoreError, setRestoreError] = useState<string | null>(null)
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null)
+  const [restoreName, setRestoreName] = useState('')
   const [replaceRequested, setReplaceRequested] = useState(false)
   const [replacePhrase, setReplacePhrase] = useState('')
   const [localImportOpen, setLocalImportOpen] = useState(false)
@@ -944,6 +946,10 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
   const [localImportBusy, setLocalImportBusy] = useState<string | null>(null)
   const [localImportMessage, setLocalImportMessage] = useState<string | null>(null)
   const [localImportError, setLocalImportError] = useState<string | null>(null)
+  const [localImportCandidate, setLocalImportCandidate] = useState<ProjectSummary | null>(null)
+  const [localImportName, setLocalImportName] = useState('')
+  const [duplicateCandidate, setDuplicateCandidate] = useState<{ projectId: string; sourceName: string; name: string } | null>(null)
+  const [duplicateError, setDuplicateError] = useState<string | null>(null)
   const readOnlyViewer = isCloudProjectMode() && getAccessContext().membership.role === 'viewer'
 
   useEffect(() => {
@@ -966,12 +972,32 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
     } finally { setActionLoading(null); setDeleteConfirm(null) }
   }
 
-  const handleDuplicate = async (pid: string) => {
+  const beginDuplicate = (project: ProjectSummary) => {
+    setDuplicateError(null)
+    setDuplicateCandidate({
+      projectId: project.projectId,
+      sourceName: project.projectName,
+      name: suggestUniqueProjectName(`${project.projectName} Copy`, projects.map(item => item.projectName)),
+    })
+  }
+
+  const handleDuplicate = async () => {
+    if (!duplicateCandidate || actionLoading) return
+    const name = normalizeProjectName(duplicateCandidate.name)
+    if (projects.some(item => projectNameKey(item.projectName) === projectNameKey(name))) {
+      setDuplicateError(`A project named “${name}” already exists. Choose a different copy name.`)
+      return
+    }
+    const pid = duplicateCandidate.projectId
     setActionLoading(pid)
+    setDuplicateError(null)
     try {
-      await onDuplicateProject(pid)
+      await onDuplicateProject(pid, name)
       const updated = await listProjects()
       setProjects(updated)
+      setDuplicateCandidate(null)
+    } catch (error) {
+      setDuplicateError((error as Error).message)
     } finally { setActionLoading(null) }
   }
 
@@ -1010,12 +1036,27 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
     }
   }
 
-  const handleLocalProjectImport = async (project: ProjectSummary) => {
+  const beginLocalProjectImport = (project: ProjectSummary) => {
+    setLocalImportError(null)
+    setLocalImportMessage(null)
+    setLocalImportCandidate(project)
+    setLocalImportName(suggestUniqueProjectName(`${project.projectName} Copy`, projects.map(item => item.projectName)))
+  }
+
+  const handleLocalProjectImport = async () => {
+    if (!localImportCandidate || localImportBusy) return
+    const project = localImportCandidate
+    const name = normalizeProjectName(localImportName)
+    if (projects.some(item => projectNameKey(item.projectName) === projectNameKey(name))) {
+      setLocalImportError(`A project named “${name}” already exists. Choose a different import name.`)
+      return
+    }
     setLocalImportBusy(project.projectId)
     setLocalImportError(null)
     setLocalImportMessage(null)
     try {
-      const imported = await importLocalProjectToCloud(project.projectId)
+      const imported = await importLocalProjectToCloud(project.projectId, name)
+      setLocalImportCandidate(null)
       setLocalImportMessage(`Imported “${imported.projectName}” to this workspace. The original local project and files were kept.`)
       try { setProjects(await listProjects()) } catch (error) {
         setLocalImportError(`Import was verified, but the cloud project list could not refresh: ${(error as Error).message}`)
@@ -1035,11 +1076,15 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
     try {
       const summary = await inspectProjectBackup(archive)
       const existing = await projectRepository.loadProjectSnapshot(summary.projectId)
+      const currentProjects = await listProjects()
+      setProjects(currentProjects)
       setRestoreCandidate({
         archive, summary, existingRevision: existing?.record.recordRevision ?? null,
         existingName: existing?.record.projectName ?? null,
         existingFileIds: existing?.files.map(file => file.fileId) ?? [],
       })
+      setRestoreName(suggestUniqueProjectName(`${summary.projectName} (Restored)`,
+        currentProjects.map(project => project.projectName)))
       setReplaceRequested(false)
       setReplacePhrase('')
     } catch (error) {
@@ -1052,7 +1097,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
   const handleRestore = async (mode: RestoreOptions['mode']) => {
     if (!restoreCandidate || restoreBusy) return
     const options: RestoreOptions = mode === 'new'
-      ? { mode: 'new' }
+      ? { mode: 'new', newName: normalizeProjectName(restoreName) }
       : { mode: 'replace', expectedRevision: restoreCandidate.existingRevision!,
           expectedFileIds: restoreCandidate.existingFileIds }
     setRestoreBusy(true)
@@ -1080,6 +1125,9 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
       setRestoreBusy(false)
     }
   }
+
+  const restoreNameConflict = restoreName.trim() !== ''
+    && projects.some(project => projectNameKey(project.projectName) === projectNameKey(restoreName))
 
   const fmt = (ts: number) => {
     const d = new Date(ts), now = new Date()
@@ -1141,7 +1189,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
             ? <p className="text-[12px] text-[#9898AB]">No local projects are available in this browser.</p>
             : localProjects.map(project => <div key={project.projectId} className="flex items-center justify-between gap-3 rounded-lg bg-[#F8F7F5] px-3 py-2">
               <span className="truncate text-[12px] text-[#33333F]">{project.projectName}</span>
-              <button type="button" disabled={!!localImportBusy} onClick={() => void handleLocalProjectImport(project)}
+              <button type="button" disabled={!!localImportBusy} onClick={() => beginLocalProjectImport(project)}
                 className="shrink-0 rounded-md bg-[#5B5BD6] px-3 py-1.5 text-[11px] font-medium text-white disabled:opacity-50">
                 {localImportBusy === project.projectId ? 'Validating and importing…' : 'Import copy'}
               </button>
@@ -1188,7 +1236,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
                 <button onClick={() => handleOpen(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] bg-[#EEEEFF] hover:bg-[#E0DEFF] rounded-lg transition-colors disabled:opacity-50">
                   {actionLoading === p.projectId ? '…' : 'Open'}
                 </button>
-                {!readOnlyViewer && <button onClick={() => handleDuplicate(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Duplicate</button>}
+                {!readOnlyViewer && <button onClick={() => beginDuplicate(p)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Duplicate</button>}
                 <button onClick={() => void handleBackup(p)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Backup</button>
                 {!readOnlyViewer && getAccessContext().membership.role !== 'editor' && <button onClick={() => setDeleteConfirm(p.projectId)} className="px-3 py-1.5 text-[11px] font-medium text-[#DC2626] bg-[#FEF2F2] hover:bg-[#FEE2E2] rounded-lg transition-colors">Delete</button>}
               </div>
@@ -1219,6 +1267,13 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
                 Existing project: <strong>{restoreCandidate.existingName}</strong>. Restoring as new leaves it unchanged; replacement requires explicit confirmation.
               </p>
             )}
+            <div className="mt-4">
+              <label className="text-[12px] text-[#4B4B5B]" htmlFor="backup-restore-name">Name for restored project</label>
+              <input id="backup-restore-name" value={restoreName} onChange={event => setRestoreName(event.target.value)}
+                aria-invalid={restoreNameConflict}
+                className="mt-1 w-full px-3 py-2 text-[13px] border border-[#D8D4CE] rounded-lg" />
+              {restoreNameConflict && <p role="alert" className="mt-1 text-[12px] text-[#B91C1C]">A project with this name already exists in the workspace.</p>}
+            </div>
             {restoreError && <p role="alert" className="text-[12px] text-[#B91C1C] mt-3">{restoreError}</p>}
             {replaceRequested && (
               <div className="mt-4">
@@ -1243,9 +1298,62 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
                   {restoreBusy ? 'Replacing…' : 'Confirm replacement'}
                 </button>
               )}
-              <button disabled={restoreBusy} onClick={() => void handleRestore('new')}
+              <button disabled={restoreBusy || !normalizeProjectName(restoreName) || restoreNameConflict}
+                onClick={() => void handleRestore('new')}
+                aria-label="Restore as new"
                 className="px-3 py-2 text-[12px] text-white bg-[#5B5BD6] rounded-lg disabled:opacity-50">
-                {restoreBusy ? 'Restoring…' : 'Restore as new'}
+                {restoreBusy ? 'Restoring…' : `Restore as “${normalizeProjectName(restoreName) || 'new project'}”`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {duplicateCandidate && (
+        <div role="dialog" aria-modal="true" aria-label="Duplicate project"
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => { if (!actionLoading) setDuplicateCandidate(null) }}>
+          <div className="bg-white rounded-2xl border border-[#E2DED7] shadow-xl p-6 w-full max-w-[470px]"
+            onClick={event => event.stopPropagation()}>
+            <h2 className="text-[17px] font-semibold text-[#111218] mb-2">Duplicate project</h2>
+            <p className="text-[13px] text-[#4B4B5B]">Create a separate copy of <strong>{duplicateCandidate.sourceName}</strong>.</p>
+            <label className="block mt-4 text-[12px] text-[#4B4B5B]" htmlFor="duplicate-project-name">Name for copy</label>
+            <input id="duplicate-project-name" value={duplicateCandidate.name}
+              onChange={event => setDuplicateCandidate({ ...duplicateCandidate, name: event.target.value })}
+              className="mt-1 w-full px-3 py-2 text-[13px] border border-[#D8D4CE] rounded-lg" />
+            {duplicateError && <p role="alert" className="mt-2 text-[12px] text-[#B91C1C]">{duplicateError}</p>}
+            <div className="flex justify-end gap-2 mt-6">
+              <button disabled={!!actionLoading} onClick={() => setDuplicateCandidate(null)}
+                className="px-3 py-2 text-[12px] border border-[#D8D4CE] rounded-lg disabled:opacity-50">Cancel</button>
+              <button disabled={!!actionLoading || !normalizeProjectName(duplicateCandidate.name)}
+                onClick={() => void handleDuplicate()}
+                className="px-3 py-2 text-[12px] text-white bg-[#5B5BD6] rounded-lg disabled:opacity-50">
+                {actionLoading ? 'Duplicating…' : `Create copy as “${normalizeProjectName(duplicateCandidate.name) || '…'}”`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {localImportCandidate && (
+        <div role="dialog" aria-modal="true" aria-label="Import local project"
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => { if (!localImportBusy) setLocalImportCandidate(null) }}>
+          <div className="bg-white rounded-2xl border border-[#E2DED7] shadow-xl p-6 w-full max-w-[470px]"
+            onClick={event => event.stopPropagation()}>
+            <h2 className="text-[17px] font-semibold text-[#111218] mb-2">Import project copy</h2>
+            <p className="text-[13px] text-[#4B4B5B]">The local project and its files will remain unchanged.</p>
+            <label className="block mt-4 text-[12px] text-[#4B4B5B]" htmlFor="import-project-name">Name for imported copy</label>
+            <input id="import-project-name" value={localImportName} onChange={event => setLocalImportName(event.target.value)}
+              className="mt-1 w-full px-3 py-2 text-[13px] border border-[#D8D4CE] rounded-lg" />
+            {localImportError && <p role="alert" className="mt-2 text-[12px] text-[#B91C1C]">{localImportError}</p>}
+            <div className="flex justify-end gap-2 mt-6">
+              <button disabled={!!localImportBusy} onClick={() => setLocalImportCandidate(null)}
+                className="px-3 py-2 text-[12px] border border-[#D8D4CE] rounded-lg disabled:opacity-50">Cancel</button>
+              <button disabled={!!localImportBusy || !normalizeProjectName(localImportName)}
+                onClick={() => void handleLocalProjectImport()}
+                className="px-3 py-2 text-[12px] text-white bg-[#5B5BD6] rounded-lg disabled:opacity-50">
+                {localImportBusy ? 'Importing…' : `Import as “${normalizeProjectName(localImportName) || '…'}”`}
               </button>
             </div>
           </div>
@@ -1272,10 +1380,11 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
 }
 
 // ── Screen: Create ────────────────────────────────────────────────────────────
-function CreateScreen({ onNav, projectName, onProjectNameChange, themes, projectMeta, onProjectMetaChange, onAddTheme, onContinue }: {
+function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProjectName, themes, projectMeta, onProjectMetaChange, onAddTheme, onContinue }: {
   onNav: (s: Screen) => void
   projectName: string
   onProjectNameChange: (n: string) => void
+  onValidateProjectName: (name: string) => Promise<string | null>
   themes: Theme[]
   projectMeta: ProjectMeta
   onProjectMetaChange: (m: Partial<ProjectMeta>) => void
@@ -1285,6 +1394,23 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, themes, project
   const [selected, setSelected] = useState(projectMeta?.contentType || 'user-guide')
   const [continuing, setContinuing] = useState(false)
   const [continueError, setContinueError] = useState<string | null>(null)
+  const [nameError, setNameError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const candidate = normalizeProjectName(projectName || 'Untitled Project')
+    let active = true
+    const timer = setTimeout(() => {
+      void onValidateProjectName(candidate).then(message => {
+        if (active) setNameError(message)
+      }).catch(error => {
+        if (active) setNameError(`Could not validate project name: ${(error as Error).message}`)
+      })
+    }, 250)
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [projectName, onValidateProjectName])
 
   return (
     <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
@@ -1316,8 +1442,10 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, themes, project
       <div className="bg-white border border-[#E2DED7] rounded-xl p-5 mb-4">
         <label className="block text-[12px] font-semibold text-[#111218] mb-2 uppercase tracking-wide">Project Name</label>
         <input value={projectName} placeholder="e.g. Nexus Platform v3.2 — User Guide"
-          onChange={e => onProjectNameChange(e.target.value)}
+          aria-invalid={!!nameError} aria-describedby={nameError ? 'project-name-error' : undefined}
+          onChange={e => { onProjectNameChange(e.target.value); setNameError(null) }}
           className="w-full text-[15px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#5B5BD6] transition-colors" />
+        {nameError && <p id="project-name-error" role="alert" className="mt-2 text-[12px] text-red-700">{nameError}</p>}
       </div>
 
 
@@ -1334,10 +1462,21 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, themes, project
           setContinuing(true)
           setContinueError(null)
           try {
+            const validationError = await onValidateProjectName(normalizeProjectName(projectName || 'Untitled Project'))
+            if (validationError) {
+              setNameError(validationError)
+              return
+            }
             await onContinue()
             onNav('branding')
           } catch (error) {
-            setContinueError(`Could not create project: ${(error as Error).message}`)
+            const failure = error as Error & { code?: string }
+            if (failure.code === 'PROJECT_NAME_CONFLICT'
+              || failure.message.toLowerCase().includes('project with this name')) {
+              setNameError(failure.message)
+            } else {
+              setContinueError(`Could not create project: ${failure.message}`)
+            }
           } finally {
             setContinuing(false)
           }
@@ -14531,6 +14670,16 @@ export default function App() {
   const handlePublishConfigChange = (pc: PublishConfig) => { setPublishConfig(pc); triggerAutosave() }
 
   // Create persisted project record when user clicks Continue on CreateScreen
+  const validateWorkspaceProjectName = useCallback(async (candidate: string): Promise<string | null> => {
+    const normalized = normalizeProjectName(candidate)
+    if (!normalized) return 'Enter a project name.'
+    const existing = await listProjects()
+    const conflict = existing.find(project => projectNameKey(project.projectName) === projectNameKey(normalized))
+    return conflict
+      ? `A project named “${normalized}” already exists in this workspace. Choose a different name.`
+      : null
+  }, [])
+
   const handleCreateProjectPersist = useCallback(async () => {
     const newId = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const emptyReviewModel = createEmptyReviewModel(newId)
@@ -15933,10 +16082,8 @@ export default function App() {
     }
   }
 
-  const handleDuplicateProject = async (pid: string) => {
-    const source = await loadProject(pid)
-    if (!source) return
-    await duplicateProject(pid, `${source.projectName} Copy`)
+  const handleDuplicateProject = async (pid: string, confirmedName: string) => {
+    await duplicateProject(pid, confirmedName)
   }
 
   const handleRestoredProject = (record: ProjectRecord, mode: RestoreOptions['mode']) => {
@@ -15964,7 +16111,7 @@ export default function App() {
     }
     switch (screen) {
       case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
-      case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
+      case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={setProjectName} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={handleCreateProjectPersist} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
       case 'analysis':  return isDemoMode

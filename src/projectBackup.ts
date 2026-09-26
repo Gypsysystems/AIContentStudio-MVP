@@ -41,7 +41,7 @@ export type BackupSummary = Pick<BackupManifest,
   'projectId' | 'projectName' | 'projectSchemaVersion' | 'recordRevision' | 'createdAt' | 'modifiedAt' | 'exportedAt'
 > & { fileCount: number; backupVersion: number }
 
-export type RestoreOptions = { mode: 'new' } | {
+export type RestoreOptions = { mode: 'new'; newName: string } | {
   mode: 'replace'; expectedRevision: number; expectedFileIds: string[]
 }
 

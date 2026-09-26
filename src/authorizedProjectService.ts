@@ -196,7 +196,7 @@ const authorizedLocalProjectRepository: ProjectRepository = {
     const newId = requireServerId(allocation)
     requireLocalOwnership(allocation)
     try {
-      return await local.restoreProjectSnapshot(snapshot, { mode: 'new', newProjectId: newId })
+      return await local.restoreProjectSnapshot(snapshot, { mode: 'new', newName: options.newName, newProjectId: newId })
     } catch (error) {
       await releaseUnwrittenProject(newId)
       throw error

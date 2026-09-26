@@ -13,16 +13,47 @@ import {
 import { LOCAL_ACCESS_CONTEXT, authorizeWorkspace, type ProjectAccessContext, type ProjectPermission } from './ownership'
 import { getAccessContext } from './authSession'
 import { validateRestorableProjectRecord } from './projectMigrations'
+import { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from './projectNames'
 
 type CloudAction = 'ready' | 'list' | 'create' | 'read' | 'backup' | 'save' | 'delete'
   | 'duplicate' | 'load-files' | 'load-file' | 'remove-file'
   | 'restore-new' | 'restore-replace' | 'finalize-restore' | 'abandon-restore'
 
 export class CloudProjectApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(readonly status: number, readonly code: string, message: string, readonly suggestedName?: string) {
     super(message)
     this.name = 'CloudProjectApiError'
   }
+}
+
+const knownProjectNames = new Map<string, string>()
+
+function projectNameConflictError(name: string, existingNames: readonly string[]): CloudProjectApiError {
+  const suggestedName = suggestUniqueProjectName(name, [...existingNames, name])
+  return new CloudProjectApiError(409, 'PROJECT_NAME_CONFLICT',
+    `A project with this name already exists in the workspace. Choose a different name. Suggested name: “${suggestedName}”.`,
+    suggestedName)
+}
+
+function isProjectNameConflict(error: unknown): error is CloudProjectApiError {
+  return error instanceof CloudProjectApiError
+    && error.status === 409 && error.code === 'PROJECT_NAME_CONFLICT'
+}
+
+async function workspaceProjectRecords(): Promise<ProjectRecord[]> {
+  const reply = await cloudRequest('list')
+  if (!Array.isArray(reply.projects)) throw new Error('Cloud project server returned an invalid project list.')
+  return reply.projects.map(value => validateCloudRecord(value))
+}
+
+async function assertUniqueProjectName(name: string, exceptProjectId?: string): Promise<void> {
+  const key = projectNameKey(normalizeProjectName(name))
+  if (!key) throw new Error('Project name is required.')
+  const records = await workspaceProjectRecords()
+  for (const record of records) knownProjectNames.set(record.projectId, record.projectName)
+  const existingNames = records.filter(record => record.projectId !== exceptProjectId).map(record => record.projectName)
+  if (existingNames.some(existing => projectNameKey(existing) === key))
+    throw projectNameConflictError(name, existingNames)
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -67,7 +98,9 @@ async function cloudRequest(action: CloudAction, fields: Record<string, unknown>
   }
   if (!response.ok)
     throw new CloudProjectApiError(response.status, String(body.code ?? 'CLOUD_REQUEST_FAILED'),
-      String(body.error ?? body.message ?? 'Cloud project request failed.'))
+      String(body.code === 'PROJECT_NAME_CONFLICT' && typeof body.suggestedName === 'string'
+        ? `${String(body.error ?? body.message ?? 'A project with this name already exists in the workspace.')} Try “${body.suggestedName}”.`
+        : body.error ?? body.message ?? 'Cloud project request failed.'))
   return body
 }
 
@@ -167,6 +200,7 @@ async function stageSnapshot(snapshot: ProjectSnapshot, options:
   if (new TextEncoder().encode(JSON.stringify(snapshot.record)).byteLength > 16 * 1024 * 1024)
     throw new Error('Cloud project record exceeds the 16 MiB cloud storage limit.')
   const { record } = snapshot
+  if (options.mode === 'new') await assertUniqueProjectName(record.projectName)
   const staged = options.mode === 'new'
     ? await cloudRequest('restore-new', { record, fileIds: snapshot.files.map(file => file.fileId), projectId: record.projectId })
     : await cloudRequest('restore-replace', {
@@ -235,7 +269,10 @@ export const cloudProjectRepository = {
     void context
     requireClientPermission('create')
     const record = createProjectRecord(partial, getAccessContext())
-    return validateCloudRecord((await cloudRequest('create', { projectId: record.projectId, record })).record)
+    await assertUniqueProjectName(record.projectName)
+    const created = validateCloudRecord((await cloudRequest('create', { projectId: record.projectId, record })).record)
+    knownProjectNames.set(created.projectId, created.projectName)
+    return created
   },
   async saveProject(record: ProjectRecord, context?: ProjectAccessContext) {
     void context
@@ -245,11 +282,18 @@ export const cloudProjectRepository = {
   async saveProjectIfCurrent(record: ProjectRecord, expectedRevision: number, context?: ProjectAccessContext) {
     void context
     requireClientPermission('write')
+    const normalizedName = normalizeProjectName(record.projectName)
+    if (!normalizedName) throw new Error('Project name is required.')
+    const knownName = knownProjectNames.get(record.projectId)
+    if (knownName === undefined || projectNameKey(knownName) !== projectNameKey(normalizedName))
+      await assertUniqueProjectName(normalizedName, record.projectId)
     let reply: Record<string, unknown>
     try {
       reply = await cloudRequest('save', { projectId: record.projectId, expectedRevision, record })
     } catch (error) {
+      if (isProjectNameConflict(error)) throw error
       if (error instanceof CloudProjectApiError && error.status === 409) {
+        if (error.code !== 'PROJECT_CONFLICT') throw error
         let actual: number
         try {
           actual = validateCloudRecord((await cloudRequest('read', { projectId: record.projectId })).record).recordRevision
@@ -264,6 +308,7 @@ export const cloudProjectRepository = {
     const saved = validateCloudRecord(reply.record)
     if (saved.recordRevision !== expectedRevision + 1)
       throw new Error('Cloud project server returned an unexpected project revision.')
+    knownProjectNames.set(saved.projectId, saved.projectName)
     return saved
   },
   async loadProject(projectId: string, context?: ProjectAccessContext) {
@@ -272,6 +317,7 @@ export const cloudProjectRepository = {
       const reply = await cloudRequest('read', { projectId })
       const record = validateCloudRecord(reply.record)
       if (record.projectId !== projectId) throw new Error('Cloud project server returned a mismatched project ID.')
+      knownProjectNames.set(record.projectId, record.projectName)
       return record
     } catch (error) {
       if (error instanceof CloudProjectApiError && error.status === 404) return null
@@ -284,10 +330,8 @@ export const cloudProjectRepository = {
   },
   async listProjects(context?: ProjectAccessContext): Promise<ProjectSummary[]> {
     void context
-    const reply = await cloudRequest('list')
-    if (!Array.isArray(reply.projects)) throw new Error('Cloud project server returned an invalid project list.')
-    return reply.projects.map(value => {
-      const record = validateCloudRecord(value)
+    const records = await workspaceProjectRecords()
+    return records.map(record => {
       return {
         projectId: record.projectId, ownerUserId: record.ownerUserId, workspaceId: record.workspaceId,
         projectName: record.projectName, documentType: record.documentType, version: record.version,
@@ -307,7 +351,9 @@ export const cloudProjectRepository = {
     if (!source) return null
     const newId = `project-${crypto.randomUUID()}`
     const copy = createProjectCopySnapshot(source, newId, newName, Date.now(), makeFileMap(source.files), cloudOwnership())
-    return stageSnapshot(copy, { mode: 'new' })
+    const created = await stageSnapshot(copy, { mode: 'new' })
+    knownProjectNames.set(created.projectId, created.projectName)
+    return created
   },
   async restoreProjectSnapshot(input: ProjectSnapshot, options: RestoreProjectSnapshotOptions, context?: ProjectAccessContext) {
     void context
@@ -340,9 +386,13 @@ export const cloudProjectRepository = {
     }
     requireClientPermission('restore-new')
     const newId = `project-${crypto.randomUUID()}`
-    const copy = createProjectCopySnapshot(snapshot, newId, `${snapshot.record.projectName} (Restored)`,
+    const requestedName = (options as RestoreProjectSnapshotOptions & { newName?: string }).newName
+    const defaultName = `${snapshot.record.projectName} (Restored)`
+    const copy = createProjectCopySnapshot(snapshot, newId, requestedName ?? defaultName,
       Date.now(), makeFileMap(snapshot.files), cloudOwnership())
-    return stageSnapshot(copy, { mode: 'new' })
+    const created = await stageSnapshot(copy, { mode: 'new' })
+    knownProjectNames.set(created.projectId, created.projectName)
+    return created
   },
   async saveFile(projectId: string, file: File, context?: ProjectAccessContext): Promise<StoredFile> {
     void context
@@ -389,7 +439,7 @@ function activeKey(): string {
   return `docflow-active-project:${workspaceId}`
 }
 
-export async function importLocalProjectToCloud(projectId: string): Promise<ProjectRecord> {
+export async function importLocalProjectToCloud(projectId: string, confirmedName?: string): Promise<ProjectRecord> {
   const { indexedDbProjectRepository: local } = await import('./projectService')
   const snapshot = await local.loadProjectSnapshot(projectId, LOCAL_ACCESS_CONTEXT)
   if (!snapshot) throw new Error('Selected local project no longer exists.')
@@ -400,9 +450,12 @@ export async function importLocalProjectToCloud(projectId: string): Promise<Proj
     || validated.record.sourceFileIds.some(id => !localFileIds.has(id)))
     throw new Error('Local project validation failed: a project blob is missing or inconsistent.')
   const cloudId = `project-${crypto.randomUUID()}`
-  const copy = createProjectCopySnapshot(validated, cloudId, validated.record.projectName,
+  const copy = createProjectCopySnapshot(validated, cloudId,
+    confirmedName ?? validated.record.projectName,
     Date.now(), makeFileMap(validated.files), cloudOwnership())
-  return stageSnapshot(copy, { mode: 'new' })
+  const created = await stageSnapshot(copy, { mode: 'new' })
+  knownProjectNames.set(created.projectId, created.projectName)
+  return created
 }
 
 export async function isCloudProjectStorageReady(): Promise<boolean> {

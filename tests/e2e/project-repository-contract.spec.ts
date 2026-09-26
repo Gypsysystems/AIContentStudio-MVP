@@ -20,7 +20,7 @@ async function seedRawRecord(page: Page, record: Record<string, unknown>) {
     // Initialize the application's current DB version before inserting a legacy record.
     await projectRepository.createProject({
       projectId: `db-initializer-${Date.now()}`,
-      projectName: 'Database initializer',
+      projectName: `Database initializer ${crypto.randomUUID()}`,
     })
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('docflow-db')

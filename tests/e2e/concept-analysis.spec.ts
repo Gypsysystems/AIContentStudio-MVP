@@ -623,6 +623,9 @@ test("duplicates grounded analysis with copied source references and stable anal
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
+  await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
+  await page.getByLabel("Name for copy").fill(duplicateName)
+  await page.getByRole("button", { name: `Create copy as “${duplicateName}”` }).click()
   await expect(page.getByText(duplicateName, { exact: true })).toBeVisible()
 
   const projects = await readProjects(page)

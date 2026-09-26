@@ -36,6 +36,11 @@ import {
   authorizeProject, authorizeWorkspace, LOCAL_WORKSPACE_ID,
   type ProjectAccessContext, type ProjectOwnership,
 } from './ownership'
+import {
+  normalizeProjectName, projectNameKey, suggestUniqueProjectName,
+} from './projectNames'
+
+export { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from './projectNames'
 
 export const SCHEMA_VERSION = CURRENT_PROJECT_SCHEMA_VERSION
 export { migrateProjectRecord, UnsupportedProjectSchemaError } from './projectMigrations'
@@ -62,7 +67,7 @@ export type ProjectSnapshot = {
 }
 
 export type RestoreProjectSnapshotOptions =
-  | { mode: 'new'; newProjectId?: string }
+  | { mode: 'new'; newName: string; newProjectId?: string }
   | { mode: 'replace'; expectedRevision: number; expectedFileIds: string[] }
 
 export type ProjectRecord = ProjectOwnership & {
@@ -208,6 +213,34 @@ function getAll<T>(store: IDBObjectStore): Promise<T[]> {
   })
 }
 
+async function assertUniqueProjectName(
+  store: IDBObjectStore,
+  workspaceId: string,
+  name: string,
+  excludingProjectId?: string,
+): Promise<void> {
+  const normalizedName = normalizeProjectName(name)
+  if (!normalizedName)
+    throw new Error('Project name cannot be empty.')
+
+  const records = await getAll<ProjectRecord>(store)
+  const existing = records
+    .filter(record => {
+      const legacy = record as Partial<ProjectRecord>
+      return legacy.workspaceId === workspaceId
+        || (legacy.workspaceId === undefined && legacy.ownerUserId === undefined
+          && workspaceId === LOCAL_WORKSPACE_ID)
+    })
+    .map(raw => migrateProjectRecord(raw).record)
+    .filter(record => record.workspaceId === workspaceId && record.projectId !== excludingProjectId)
+  const key = projectNameKey(normalizedName)
+  const conflict = existing.find(record => projectNameKey(record.projectName) === key)
+  if (conflict) {
+    const suggestedName = suggestUniqueProjectName(normalizedName, existing.map(record => record.projectName))
+    throw new ProjectNameConflictError(normalizedName, suggestedName, conflict.projectId)
+  }
+}
+
 function getByKey<T>(store: IDBObjectStore, key: IDBValidKey): Promise<T | undefined> {
   return new Promise((resolve, reject) => {
     const req = store.get(key)
@@ -248,6 +281,7 @@ export async function createProject(
   await tx(db, STORE_PROJECTS, 'readwrite', async ([s]) => {
     if (await getByKey<ProjectRecord>(s, record.projectId))
       throw new Error(`Project "${record.projectId}" already exists.`)
+    await assertUniqueProjectName(s, record.workspaceId, record.projectName)
     await put(s, record)
   })
   return record
@@ -329,6 +363,10 @@ export async function saveProject(
     const incoming = migrateProjectRecord(record).record
     if (incoming.ownerUserId !== current.ownerUserId || incoming.workspaceId !== current.workspaceId)
       throw new Error('Project ownership cannot be changed by a content save.')
+    if (!normalizeProjectName(incoming.projectName))
+      throw new Error('Project name cannot be empty.')
+    if (projectNameKey(incoming.projectName) !== projectNameKey(current.projectName))
+      await assertUniqueProjectName(s, current.workspaceId, incoming.projectName, current.projectId)
     const revision = current.recordRevision
     saved = { ...migrateProjectRecord(record).record,
       ownerUserId: current.ownerUserId, workspaceId: current.workspaceId,
@@ -342,6 +380,17 @@ export class ProjectConflictError extends Error {
   constructor(readonly projectId: string, readonly expectedRevision: number, readonly actualRevision: number) {
     super(`Project "${projectId}" changed: expected revision ${expectedRevision}, found ${actualRevision}.`)
     this.name = 'ProjectConflictError'
+  }
+}
+
+export class ProjectNameConflictError extends Error {
+  constructor(
+    readonly projectName: string,
+    readonly suggestedName: string,
+    readonly conflictingProjectId?: string,
+  ) {
+    super(`A project named "${normalizeProjectName(projectName)}" already exists in this workspace. Confirm a different name, such as "${suggestedName}".`)
+    this.name = 'ProjectNameConflictError'
   }
 }
 
@@ -363,6 +412,10 @@ export async function saveProjectIfCurrent(
     const incoming = migrateProjectRecord(record).record
     if (incoming.ownerUserId !== current.ownerUserId || incoming.workspaceId !== current.workspaceId)
       throw new Error('Project ownership cannot be changed by a content save.')
+    if (!normalizeProjectName(incoming.projectName))
+      throw new Error('Project name cannot be empty.')
+    if (projectNameKey(incoming.projectName) !== projectNameKey(current.projectName))
+      await assertUniqueProjectName(s, current.workspaceId, incoming.projectName, current.projectId)
     saved = { ...incoming, ownerUserId: current.ownerUserId, workspaceId: current.workspaceId,
       schemaVersion: SCHEMA_VERSION,
       recordRevision: current.recordRevision + 1, modifiedAt: Date.now() }
@@ -648,7 +701,7 @@ export async function restoreProjectSnapshot(
     const restored = createProjectCopySnapshot(
       snapshot,
       newId,
-      `${snapshot.record.projectName} (Restored)`,
+      options.newName,
       now,
       newFileIdMap,
       { ownerUserId: context.user.id, workspaceId: context.workspace.id },
@@ -656,6 +709,7 @@ export async function restoreProjectSnapshot(
     await tx(db, [STORE_PROJECTS, STORE_FILES], 'readwrite', async ([ps, fs]) => {
       if (await getByKey<ProjectRecord>(ps, restored.record.projectId))
         throw new Error(`A project with generated ID "${restored.record.projectId}" already exists.`)
+      await assertUniqueProjectName(ps, restored.record.workspaceId, restored.record.projectName)
       for (const file of restored.files) {
         if (await getByKey<StoredFile>(fs, file.fileId))
           throw new Error(`A file with generated ID "${file.fileId}" already exists.`)
@@ -686,6 +740,10 @@ export async function restoreProjectSnapshot(
       throw new Error('A backup from another workspace cannot replace this project; restore it as new.')
     if (current.recordRevision !== options.expectedRevision)
       throw new ProjectConflictError(snapshot.record.projectId, options.expectedRevision, current.recordRevision)
+    if (!normalizeProjectName(snapshot.record.projectName))
+      throw new Error('Project name cannot be empty.')
+    if (projectNameKey(snapshot.record.projectName) !== projectNameKey(current.projectName))
+      await assertUniqueProjectName(ps, current.workspaceId, snapshot.record.projectName, current.projectId)
 
     const existingFiles = await getAllByIndex<StoredFile>(fs, 'projectId', current.projectId)
     const existingFileIds = new Set(existingFiles.map(file => file.fileId))
@@ -760,6 +818,7 @@ export async function duplicateProject(
       throw new Error(`Source files changed during duplication of project "${sourceId}".`)
     if (await getByKey<ProjectRecord>(ps, copy.projectId))
       throw new Error(`Duplicate project ID "${copy.projectId}" already exists.`)
+    await assertUniqueProjectName(ps, copy.workspaceId, copy.projectName)
     for (const file of newFiles) {
       if (await getByKey<StoredFile>(fs, file.fileId))
         throw new Error(`Duplicate file ID "${file.fileId}" already exists.`)

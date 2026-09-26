@@ -348,6 +348,9 @@ test("committing evidence-backed topics opens editable initial drafts without fi
   await page.getByRole("button", { name: /Content Studio/ }).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
   const duplicateName = `${projectName} Copy`
+  await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
+  await page.getByLabel("Name for copy").fill(duplicateName)
+  await page.getByRole("button", { name: `Create copy as “${duplicateName}”` }).click()
   await expect.poll(async () => {
     try {
       return (await readProject(page, duplicateName)).authorTopicMetadata[topicId]?.generatedFreshness
@@ -455,6 +458,9 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
+  await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
+  await page.getByLabel("Name for copy").fill(duplicateName)
+  await page.getByRole("button", { name: `Create copy as “${duplicateName}”` }).click()
   await expect(page.getByText(duplicateName, { exact: true })).toBeVisible()
   const duplicate = await readProject(page, duplicateName)
   if (!duplicate.tocProposal || !duplicate.evidenceIndex) throw new Error("Expected copied proposal and evidence")

@@ -432,6 +432,9 @@ test('remaps a persisted Review input snapshot when its project and source are d
   await page.reload()
   await page.getByRole('button', { name: /Content Studio/ }).click()
   await page.getByRole('button', { name: 'Duplicate', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Duplicate project' })).toBeVisible()
+  await page.getByLabel('Name for copy').fill(duplicateName)
+  await page.getByRole('button', { name: `Create copy as “${duplicateName}”` }).click()
   await expect(page.getByText(duplicateName, { exact: true })).toBeVisible()
 
   const duplicate = await readProject(page, duplicateName)

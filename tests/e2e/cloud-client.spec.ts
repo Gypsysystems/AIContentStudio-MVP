@@ -223,6 +223,7 @@ test('failed staged upload abandons the stage, retains the local source, and sur
   const abandonedStages: string[] = []
   await page.route('**/api/cloud-projects', async route => {
     const input = route.request().postDataJSON() as Record<string, unknown>
+    if (input.action === 'list') return route.fulfill({ json: { projects: [] } })
     if (input.action === 'restore-new') {
       const stageId = `failing-stage-${++stageSequence}`
       activeStages.add(stageId)
@@ -260,7 +261,7 @@ test('failed staged upload abandons the stage, retains the local source, and sur
     await local.createProject({ projectId: id, projectName: 'Preserve source' }, LOCAL_ACCESS_CONTEXT)
     await local.saveFile(id, new File(['source remains'], 'source.txt'), LOCAL_ACCESS_CONTEXT)
     try {
-      await importLocalProjectToCloud(id)
+      await importLocalProjectToCloud(id, 'Preserve source Copy')
       return { error: 'Unexpected import success.', retained: false }
     } catch (error) {
       return {
@@ -283,7 +284,7 @@ test('failed staged upload abandons the stage, retains the local source, and sur
     await local.createProject({ projectId: id, projectName: 'Retain after cleanup error' }, LOCAL_ACCESS_CONTEXT)
     await local.saveFile(id, new File(['still local'], 'local.txt'), LOCAL_ACCESS_CONTEXT)
     try {
-      await importLocalProjectToCloud(id)
+      await importLocalProjectToCloud(id, 'Retain after cleanup error Copy')
       return { error: 'Unexpected import success.', retained: false }
     } catch (error) {
       return {
@@ -586,6 +587,7 @@ test('stale cloud saves surface an optimistic revision conflict', async ({ page 
       records.set(String(input.projectId), record)
       return route.fulfill({ json: { record } })
     }
+    if (input.action === 'list') return route.fulfill({ json: { projects: [...records.values()] } })
     if (input.action === 'save') {
       const current = records.get(String(input.projectId))
       if (!current || current.recordRevision !== input.expectedRevision)
