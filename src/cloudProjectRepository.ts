@@ -538,6 +538,20 @@ export const cloudProjectRepository = {
     }
     return { checkpoint, files }
   },
+  async getProjectCheckpointRecord(projectId: string, checkpointId: string, context?: ProjectAccessContext): Promise<ProjectCheckpoint | null> {
+    void context
+    let reply: Record<string, unknown>
+    try {
+      reply = await cloudRequest('get-checkpoint', { projectId, checkpointId })
+    } catch (error) {
+      if (error instanceof CloudProjectApiError && error.status === 404) return null
+      throw error
+    }
+    const checkpoint = checkpointFromApi(reply.checkpoint)
+    if (checkpoint.projectId !== projectId || checkpoint.checkpointId !== checkpointId)
+      throw new Error('Cloud checkpoint server returned a mismatched checkpoint scope.')
+    return checkpoint
+  },
   async verifyProjectCheckpoint(projectId: string, checkpointId: string, context?: ProjectAccessContext): Promise<CheckpointVerification> {
     try {
       const read = await cloudProjectRepository.getProjectCheckpoint(projectId, checkpointId, context)

@@ -325,7 +325,7 @@ test('History panel accepts a reason, refreshes the checkpoint list, and verifie
 
   await expect(page.getByTestId('topbar-project-history')).toBeVisible()
   await page.getByTestId('topbar-project-history').click()
-  await expect(page.getByRole('heading', { name: 'History' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'History', exact: true })).toBeVisible()
   await expect(page.getByText('No checkpoints yet')).toBeVisible()
   await page.getByLabel(/Checkpoint note/).fill('Approved before publication')
   await page.getByRole('button', { name: 'Create checkpoint' }).click()

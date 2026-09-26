@@ -27,3 +27,4 @@
 - [Responsive cloud navigation](responsive-cloud-navigation.md) — cloud sections can change before queued writes settle; keep local barriers and explicit save failures.
 - [Project Home entry boundary](project-home-entry-boundary.md) — opening from Projects lands on Home, while active-project reload retains the earlier Sources destination.
 - [Cloud naming migration safety](cloud-naming-migration-safety.md) — normalize SQL and client names identically; backfills must advance revision guards on renamed records.
+- [Topic history from checkpoints](topic-history-checkpoints.md) — derive authored topic history only from committed checkpoints; missing records break change comparisons.

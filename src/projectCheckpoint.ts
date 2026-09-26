@@ -70,6 +70,30 @@ export async function checkpointIntegrityDigest(
   return checkpointSha256(canonicalCheckpointJson(checkpoint))
 }
 
+/** Validates the saved record and manifest, but does not read or verify archive bytes. */
+export async function verifyCheckpointRecord(checkpoint: ProjectCheckpoint): Promise<CheckpointVerification> {
+  const issues: string[] = []
+  const record = checkpoint.record
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { valid: false, issues: ['Checkpoint record is missing or malformed.'] }
+  }
+  if (checkpoint.projectId !== record.projectId
+    || checkpoint.workspaceId !== record.workspaceId
+    || checkpoint.originatingRecordRevision !== record.recordRevision
+    || checkpoint.recordSchemaVersion !== record.schemaVersion)
+    issues.push('Checkpoint identity does not match its record.')
+  if (await checkpointSha256(canonicalCheckpointJson(record)) !== checkpoint.recordDigest)
+    issues.push('Project record digest does not match.')
+  const { integrityDigest, ...content } = checkpoint
+  if (await checkpointIntegrityDigest(content) !== integrityDigest)
+    issues.push('Checkpoint integrity digest does not match.')
+  const manifest = [...checkpoint.files].sort((a, b) => a.fileId.localeCompare(b.fileId))
+  if (new Set(manifest.map(file => file.fileId)).size !== manifest.length
+    || canonicalCheckpointJson(manifest) !== canonicalCheckpointJson(checkpoint.files))
+    issues.push('File manifest has duplicate or unsorted IDs.')
+  return { valid: issues.length === 0, issues }
+}
+
 export async function verifyCheckpointRead(read: ProjectCheckpointRead): Promise<CheckpointVerification> {
   const { checkpoint, files } = read
   const issues: string[] = []

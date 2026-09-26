@@ -1173,6 +1173,31 @@ export async function getProjectCheckpoint(
   return readAuthorizedCheckpoint(projectId, checkpointId, context)
 }
 
+/** Read the committed checkpoint row and manifest without touching archived blobs. */
+export async function getProjectCheckpointRecord(
+  projectId: string,
+  checkpointId: string,
+  context: ProjectAccessContext = getAccessContext(),
+): Promise<ProjectCheckpoint | null> {
+  authorizeWorkspace(context, 'read')
+  const db = await openDB()
+  let result: ProjectCheckpoint | null = null
+  await tx(db, [STORE_PROJECTS, STORE_CHECKPOINTS], 'readonly', async ([ps, cs]) => {
+    const rawProject = await getByKey<ProjectRecord>(ps, projectId)
+    if (!rawProject) return
+    const project = migrateProjectRecord(rawProject).record
+    authorizeProject(context, project, 'read')
+    const checkpoint = await getByKey<ProjectCheckpoint>(cs, checkpointId)
+    if (!checkpoint || checkpoint.projectId !== projectId) return
+    if (checkpoint.workspaceId !== project.workspaceId
+      || checkpoint.record.projectId !== projectId
+      || checkpoint.record.workspaceId !== project.workspaceId)
+      throw new Error('Checkpoint record does not match its project scope.')
+    result = checkpoint
+  })
+  return result
+}
+
 export async function verifyProjectCheckpoint(
   projectId: string,
   checkpointId: string,

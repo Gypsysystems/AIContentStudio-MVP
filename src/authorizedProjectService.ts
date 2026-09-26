@@ -242,6 +242,16 @@ const authorizedLocalProjectRepository: ProjectRepository = {
     await guard('read', projectId)
     return local.listProjectCheckpoints(projectId)
   },
+  async getProjectCheckpointRecord(projectId, checkpointId, context) {
+    noClientClaims(context)
+    try {
+      await guard('read', projectId)
+    } catch (error) {
+      if (error instanceof ProjectAccessApiError && error.status === 404) return null
+      throw error
+    }
+    return local.getProjectCheckpointRecord(projectId, checkpointId)
+  },
   async getProjectCheckpoint(projectId, checkpointId, context) {
     noClientClaims(context)
     try {
@@ -295,6 +305,7 @@ export const authorizedProjectRepository: ProjectRepository = {
   removeFile: (...args) => selected().removeFile(...args),
   captureProjectCheckpoint: (...args) => selected().captureProjectCheckpoint(...args),
   listProjectCheckpoints: (...args) => selected().listProjectCheckpoints(...args),
+  getProjectCheckpointRecord: (...args) => selected().getProjectCheckpointRecord(...args),
   getProjectCheckpoint: (...args) => selected().getProjectCheckpoint(...args),
   verifyProjectCheckpoint: (...args) => selected().verifyProjectCheckpoint(...args),
   getActiveProjectId: (...args) => selected().getActiveProjectId(...args),

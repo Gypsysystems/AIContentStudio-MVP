@@ -17007,9 +17007,11 @@ export default function App() {
       />
       case 'history': return projectId ? <ProjectHistoryPanel
         projectId={projectId}
+        currentToc={appToc}
         onBack={() => { void navigate(historyReturnTo) }}
         onCreateCheckpoint={createProjectCheckpoint}
         listCheckpoints={projectRepository.listProjectCheckpoints}
+        getCheckpointRecord={projectRepository.getProjectCheckpointRecord}
         verifyCheckpoint={projectRepository.verifyProjectCheckpoint}
       /> : <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
       case 'create':    return <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} settingsMode={!!projectId} returnTo={settingsReturnTo} />

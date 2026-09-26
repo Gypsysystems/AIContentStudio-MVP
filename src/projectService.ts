@@ -20,6 +20,7 @@ export interface ProjectRepository {
   removeFile: typeof indexedDb.removeFile
   captureProjectCheckpoint: typeof indexedDb.captureProjectCheckpoint
   listProjectCheckpoints: typeof indexedDb.listProjectCheckpoints
+  getProjectCheckpointRecord: typeof indexedDb.getProjectCheckpointRecord
   getProjectCheckpoint: typeof indexedDb.getProjectCheckpoint
   verifyProjectCheckpoint: typeof indexedDb.verifyProjectCheckpoint
   getActiveProjectId: typeof indexedDb.getActiveProjectId
@@ -42,6 +43,7 @@ export const indexedDbProjectRepository: ProjectRepository = {
   removeFile: indexedDb.removeFile,
   captureProjectCheckpoint: indexedDb.captureProjectCheckpoint,
   listProjectCheckpoints: indexedDb.listProjectCheckpoints,
+  getProjectCheckpointRecord: indexedDb.getProjectCheckpointRecord,
   getProjectCheckpoint: indexedDb.getProjectCheckpoint,
   verifyProjectCheckpoint: indexedDb.verifyProjectCheckpoint,
   getActiveProjectId: indexedDb.getActiveProjectId,
