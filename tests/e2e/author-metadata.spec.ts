@@ -474,6 +474,9 @@ test("uses only persisted project sources and evidence in Author and reloads sou
     mimeType: "text/markdown",
     buffer: Buffer.from("# Access Control\n\nAdministrators must review privileged access every quarter."),
   })
+  await expect(page.getByText("access-control.md", { exact: true }).first()).toBeVisible()
+  await expect(page.locator("header").getByText("All changes saved", { exact: true }))
+    .toBeVisible({ timeout: 20_000 })
   await expect.poll(async () => (await readProject(page, projectName)).sourceFileIds.length)
     .toBe(1)
   await page.getByRole("button", { name: "Analyze Sources" }).click()

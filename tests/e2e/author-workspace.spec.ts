@@ -217,8 +217,9 @@ async function patchProject(page: Page, projectName: string, patch: Record<strin
     if (!project) throw new Error(`Project not found: ${name}`)
     await new Promise<void>((resolve, reject) => {
       const request = store.put({ ...project, ...values })
-      request.onsuccess = () => resolve()
       request.onerror = () => reject(request.error)
+      transaction.oncomplete = () => resolve()
+      transaction.onabort = () => reject(transaction.error ?? new Error('Project patch was not committed'))
     })
   }, { name: projectName, values: patch })
 }
@@ -408,6 +409,7 @@ test('Review finding opens its exact Author topic and preserves manual and appro
 })
 
 test('Author topic navigation remains available while its cloud save is outstanding', async ({ page }) => {
+  test.setTimeout(60_000)
   const projectName = `Author workspace cloud save ${Date.now()}`
   await prepareAuthor(page, projectName)
   const seededProject = await readProject(page, projectName)

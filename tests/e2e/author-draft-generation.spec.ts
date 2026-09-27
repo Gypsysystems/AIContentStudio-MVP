@@ -208,8 +208,9 @@ async function patchProject(page: Page, projectName: string, patch: Record<strin
     if (!project) throw new Error(`Project not found: ${name}`)
     await new Promise<void>((resolve, reject) => {
       const request = store.put({ ...project, ...values })
-      request.onsuccess = () => resolve()
       request.onerror = () => reject(request.error)
+      transaction.oncomplete = () => resolve()
+      transaction.onabort = () => reject(transaction.error ?? new Error("Project patch was not committed"))
     })
   }, { name: projectName, values: patch })
 }
