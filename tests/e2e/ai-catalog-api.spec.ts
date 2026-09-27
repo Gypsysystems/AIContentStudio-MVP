@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handleAiCatalog, sendAiCatalogError } from '../../server/aiCatalogApi'
+import { encryptCredential } from '../../server/aiConnectionsApi'
 import { isSameOriginRequest } from '../../server/projectAccessPlugin'
 
 const workspaceId = 'api-workspace-alpha'
@@ -210,6 +211,273 @@ test('cookie session is mandatory and secret or service-role keys fail closed', 
     expect(JSON.parse(unavailable.response.body)).toMatchObject({ code: 'AI_CATALOG_UNAVAILABLE' })
     expect(fetchCount).toBe(0)
   }), 'sb_secret_not-a-public-key')
+})
+
+test('readiness is same-workspace, owner/admin-only, read-only, and omits workflow source content', async () => {
+  const workflowV1 = asset({
+    id: 'api-workflow',
+    kind: 'workflow',
+    version: 1,
+    state: 'draft',
+    name: 'Safe workflow metadata',
+    description: '',
+    definition: {
+      capability: 'draft',
+      model: { mode: 'auto' },
+      promptPack: null,
+      referenceSet: null,
+      blueprint: null,
+      steps: [],
+    },
+  })
+  const workflow = asset({
+    id: 'api-workflow',
+    kind: 'workflow',
+    version: 2,
+    state: 'published',
+    name: 'Safe workflow metadata',
+    description: '',
+    definition: {
+      capability: 'draft',
+      model: { mode: 'auto' },
+      promptPack: null,
+      referenceSet: null,
+      blueprint: null,
+      steps: [],
+    },
+  })
+  for (const role of ['owner', 'admin'] as const) {
+    const actions: string[] = []
+    const response = await withSupabaseConfig(() => withMockFetch(async (url, init) => {
+      if (url.endsWith('/auth/v1/user')) return Response.json({ id: userId })
+      if (url.includes('/rest/v1/workspace_memberships?')) {
+        expect(url).toContain(`workspace_id=eq.${workspaceId}`)
+        return Response.json([{ workspace_id: workspaceId, role }])
+      }
+      if (url.endsWith('/rest/v1/rpc/ai_catalog_command')) {
+        const rpc = JSON.parse(String(init?.body))
+        actions.push(rpc.p_action)
+        return Response.json({ versions: [workflowV1, workflow] })
+      }
+      throw new Error(`Unexpected API request: ${url}`)
+    }, async () => {
+      const recorded = responseRecorder()
+      await handleAiCatalog(requestFor({
+        action: 'readiness', id: 'api-workflow', version: 2, workspaceId,
+      }), recorded.response)
+      return { statusCode: recorded.response.statusCode, body: JSON.parse(recorded.response.body) }
+    }))
+    expect(response.statusCode).toBe(200)
+    expect(response.body.readiness).toMatchObject({
+      status: 'blocked',
+      workflow: { id: 'api-workflow', version: 2 },
+      dependencies: { promptPack: null, referenceSet: null, blueprint: null },
+      model: null,
+    })
+    expect(response.body.readiness.blockers.map((item: { code: string }) => item.code)).toEqual(
+      expect.arrayContaining(['MODEL_NOT_PINNED', 'DEPENDENCY_REFERENCE_MISSING']),
+    )
+    expect(response.body.readiness.blockers.filter(
+      (item: { code: string }) => item.code === 'DEPENDENCY_REFERENCE_MISSING',
+    )).toHaveLength(3)
+    expect(JSON.stringify(response.body)).not.toContain('definition')
+    expect(actions).toEqual(['history'])
+  }
+
+  await withSupabaseConfig(() => withMockFetch(async url => {
+    if (url.endsWith('/auth/v1/user')) return Response.json({ id: userId })
+    if (url.includes('/rest/v1/workspace_memberships?'))
+      return Response.json([{ workspace_id: workspaceId, role: 'editor' }])
+    throw new Error(`Unexpected API request: ${url}`)
+  }, async () => {
+    const denied = await invokeApiError({
+      action: 'readiness', id: 'api-workflow', version: 1, workspaceId,
+    })
+    expect(denied.statusCode).toBe(403)
+    expect(denied.body).toMatchObject({ code: 'FORBIDDEN' })
+  }))
+})
+
+test('publishing a workflow runs readiness preflight and never sends a blocked transition', async () => {
+  const workflowV1 = asset({
+    id: 'api-workflow',
+    kind: 'workflow',
+    version: 1,
+    state: 'draft',
+    definition: {
+      capability: 'draft',
+      model: { mode: 'auto' },
+      promptPack: null,
+      referenceSet: null,
+      blueprint: null,
+      steps: [],
+    },
+  })
+  const workflow = asset({
+    id: 'api-workflow',
+    kind: 'workflow',
+    version: 2,
+    state: 'test',
+    definition: {
+      capability: 'draft',
+      model: { mode: 'auto' },
+      promptPack: null,
+      referenceSet: null,
+      blueprint: null,
+      steps: [],
+    },
+  })
+  const actions: string[] = []
+  await withSupabaseConfig(() => withMockFetch(async (url, init) => {
+    if (url.endsWith('/auth/v1/user')) return Response.json({ id: userId })
+    if (url.includes('/rest/v1/workspace_memberships?'))
+      return Response.json([{ workspace_id: workspaceId, role: 'owner' }])
+    if (url.endsWith('/rest/v1/rpc/ai_catalog_command')) {
+      const rpc = JSON.parse(String(init?.body))
+      actions.push(rpc.p_action)
+      return Response.json({ versions: [workflowV1, workflow] })
+    }
+    throw new Error(`Unexpected API request: ${url}`)
+  }, async () => {
+    const recorded = responseRecorder()
+    const error = await handleAiCatalog(requestFor({
+      action: 'transition', id: 'api-workflow', expectedVersion: 2, state: 'published',
+    }), recorded.response, {
+      key: Buffer.alloc(32),
+      connectionMetadata: async () => null,
+    }).then(() => null, value => value)
+    sendAiCatalogError(recorded.response, error)
+    expect(recorded.response.statusCode).toBe(409)
+    const errorBody = JSON.parse(recorded.response.body)
+    expect(errorBody).toMatchObject({ code: 'WORKFLOW_NOT_READY' })
+    expect(errorBody.blockers.map((item: { code: string }) => item.code)).toEqual(expect.arrayContaining([
+      'MODEL_NOT_PINNED', 'DEPENDENCY_REFERENCE_MISSING',
+    ]))
+    expect(errorBody.blockers.filter(
+      (item: { code: string }) => item.code === 'DEPENDENCY_REFERENCE_MISSING',
+    )).toHaveLength(3)
+  }))
+  expect(actions).toEqual(['history', 'history'])
+})
+
+test('pinned readiness uses injected encrypted storage and provider discovery without leaking credentials', async () => {
+  const credential = 'test-only-provider-credential'
+  const key = Buffer.alloc(32, 7)
+  const encrypted = encryptCredential(key, workspaceId, 'openai', 3, credential)
+  const packV1 = asset({
+    id: 'api-pack', kind: 'prompt-pack', version: 1, state: 'draft',
+    name: 'API pack',
+    definition: { prompts: [{
+      id: 'api-prompt', version: 1, state: 'draft', name: 'Prompt', template: 'Internal prompt source.',
+      variables: [],
+    }] },
+  })
+  const packV2 = asset({
+    id: 'api-pack', kind: 'prompt-pack', version: 2, state: 'published',
+    name: 'API pack',
+    definition: { prompts: [{
+      id: 'api-prompt', version: 2, state: 'published', name: 'Prompt', template: 'Internal prompt source.',
+      variables: [],
+    }] },
+  })
+  const references = [
+    asset({ id: 'api-references', kind: 'reference-set', version: 1, state: 'draft',
+      definition: { entries: [] } }),
+    asset({ id: 'api-references', kind: 'reference-set', version: 2, state: 'published',
+      definition: { entries: [] } }),
+  ]
+  const blueprints = [
+    asset({ id: 'api-blueprints', kind: 'blueprint', version: 1, state: 'draft',
+      definition: { contentType: 'SOP', sections: [] } }),
+    asset({ id: 'api-blueprints', kind: 'blueprint', version: 2, state: 'published',
+      definition: { contentType: 'SOP', sections: [] } }),
+  ]
+  const workflowV1 = asset({
+    id: 'api-pinned-workflow',
+    kind: 'workflow',
+    version: 1,
+    state: 'draft',
+    definition: {
+      capability: 'draft',
+      model: { mode: 'auto' },
+      promptPack: null,
+      referenceSet: null,
+      blueprint: null,
+      steps: [],
+    },
+  })
+  const workflow = asset({
+    id: 'api-pinned-workflow',
+    kind: 'workflow',
+    version: 2,
+    state: 'published',
+    definition: {
+      capability: 'draft',
+      model: { mode: 'pinned', providerId: 'openai', modelId: 'gpt-test' },
+      promptPack: { id: 'api-pack', version: 2 },
+      referenceSet: { id: 'api-references', version: 2 },
+      blueprint: { id: 'api-blueprints', version: 2 },
+      steps: [],
+    },
+  })
+  let discoveryCalls = 0
+  await withSupabaseConfig(() => withMockFetch(async (url, init) => {
+    if (url.endsWith('/auth/v1/user')) return Response.json({ id: userId })
+    if (url.includes('/rest/v1/workspace_memberships?'))
+      return Response.json([{ workspace_id: workspaceId, role: 'admin' }])
+    if (url.endsWith('/rest/v1/rpc/ai_catalog_command')) {
+      const rpc = JSON.parse(String(init?.body))
+      expect(rpc.p_action).toBe('history')
+      const versions = rpc.p_asset_id === workflow.id ? [workflowV1, workflow]
+        : rpc.p_asset_id === 'api-pack' ? [packV1, packV2]
+          : rpc.p_asset_id === 'api-references' ? references
+            : rpc.p_asset_id === 'api-blueprints' ? blueprints : null
+      if (!versions) return Response.json({ code: 'P0002', message: 'missing' }, { status: 404 })
+      return Response.json({ versions })
+    }
+    throw new Error(`Unexpected API request: ${url}`)
+  }, async () => {
+    const recorded = responseRecorder()
+    await handleAiCatalog(requestFor({
+      action: 'readiness', id: workflow.id, version: 2, workspaceId,
+    }), recorded.response, {
+      key,
+      connectionMetadata: async (_client, selectedWorkspace, role, _key, providerId) => {
+        expect(selectedWorkspace).toBe(workspaceId)
+        expect(role).toBe('admin')
+        return { providerId, revision: 3, state: 'verified' }
+      },
+      readEncrypted: async (selectedWorkspace, providerId) => ({
+        workspaceId: selectedWorkspace,
+        providerId,
+        revision: 3,
+        ciphertext: Buffer.from(encrypted.ciphertext, 'base64'),
+        nonce: Buffer.from(encrypted.nonce, 'base64'),
+        tag: Buffer.from(encrypted.tag, 'base64'),
+        keyVersion: 'v1',
+      }),
+      discover: async (providerId, receivedCredential) => {
+        discoveryCalls++
+        expect(providerId).toBe('openai')
+        expect(receivedCredential).toBe(credential)
+        return { state: 'available', models: [{ providerId, id: 'gpt-test', label: 'Test model' }] }
+      },
+    })
+    const body = JSON.parse(recorded.response.body)
+    expect(recorded.response.statusCode).toBe(200)
+    expect(body.readiness).toMatchObject({
+      status: 'ready',
+      model: { providerId: 'openai', modelId: 'gpt-test' },
+      dependencies: {
+        promptPack: { id: 'api-pack', version: 2, state: 'published' },
+        referenceSet: { id: 'api-references', version: 2, state: 'published' },
+        blueprint: { id: 'api-blueprints', version: 2, state: 'published' },
+      },
+    })
+    expect(recorded.response.body).not.toContain(credential)
+    expect(recorded.response.body).not.toContain('Internal prompt source')
+  }))
+  expect(discoveryCalls).toBe(1)
 })
 
 test('workspace membership role is sent to authoritative storage and denied writes never report success', async () => {

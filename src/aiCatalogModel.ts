@@ -73,6 +73,9 @@ function text(value: unknown, max: number, allowEmpty = false): value is string 
 function stableId(value: unknown): value is string {
   return text(value, 90) && /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value)
 }
+function modelId(value: unknown): value is string {
+  return text(value, 200) && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value)
+}
 function ref(value: unknown): value is AiVersionRef {
   return object(value) && exact(value, ['id', 'version']) && stableId(value.id)
     && Number.isSafeInteger(value.version) && (value.version as number) > 0
@@ -106,7 +109,7 @@ export function validateAiAssetInput(value: unknown): value is AiAssetInput {
         || !text(data.capability, 100) || !object(data.model)
         || !(data.model.mode === 'auto' && exact(data.model, ['mode'])
           || data.model.mode === 'pinned' && exact(data.model, ['mode', 'providerId', 'modelId'])
-          && stableId(data.model.providerId) && stableId(data.model.modelId))
+          && stableId(data.model.providerId) && modelId(data.model.modelId))
         || !['promptPack', 'referenceSet', 'blueprint'].every(key => data[key] === null || ref(data[key]))
         || !Array.isArray(data.steps) || data.steps.length > 30) return false
       const steps = data.steps as unknown[]

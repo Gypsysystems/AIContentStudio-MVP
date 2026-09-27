@@ -10,6 +10,10 @@ const migration = await readFile(
   new URL('../../supabase/migrations/20260926000300_ai_catalog.sql', import.meta.url),
   'utf8',
 )
+const modelPublishMigration = await readFile(
+  new URL('../../supabase/migrations/20260926000700_ai_catalog_model_publish.sql', import.meta.url),
+  'utf8',
+)
 const connectionMigration = await readFile(
   new URL('../../supabase/migrations/20260926000400_ai_connections.sql', import.meta.url),
   'utf8',
@@ -21,6 +25,7 @@ const connectionVersionMigration = await readFile(
 const api = await readFile(new URL('../../server/aiCatalogApi.ts', import.meta.url), 'utf8')
 const plugin = await readFile(new URL('../../server/projectAccessPlugin.ts', import.meta.url), 'utf8')
 const sql = migration.replace(/--.*$/gm, '').replace(/\s+/g, ' ').toLowerCase()
+const modelPublishSql = modelPublishMigration.replace(/--.*$/gm, '').replace(/\s+/g, ' ').toLowerCase()
 const execFileAsync = promisify(execFile)
 
 test('AI catalog schema is immutable and has narrowly scoped writes', () => {
@@ -77,6 +82,18 @@ test('AI catalog RPC creates immutable versions and guards transitions and tombs
   expect(sql).toContain('ai_catalog_workflow_references_exist(p_workspace_id, p_payload->\'definition\')')
   expect(sql).toContain('target.workspace_id = p_workspace_id')
   expect(sql).toContain('target.kind = expected.kind')
+})
+
+test('pinned model IDs and workflow publication use the conservative catalog rules', () => {
+  expect(modelPublishSql).toContain("p_definition->'model'->>'modelid', '') !~ '^[a-za-z0-9][a-za-z0-9._:/-]{0,199}$'")
+  expect(modelPublishSql).toContain("new.definition->'model'->>'mode' <> 'pinned'")
+  expect(modelPublishSql).toContain("new.definition->'promptpack' = 'null'::jsonb")
+  expect(modelPublishSql).toContain("new.definition->'referenceset' = 'null'::jsonb")
+  expect(modelPublishSql).toContain("new.definition->'blueprint' = 'null'::jsonb")
+  expect(modelPublishSql).toContain("target.state <> 'published'")
+  expect(modelPublishSql).toContain("latest_state = 'archived'")
+  expect(modelPublishSql).toContain("prompt.value->>'state' <> 'published'")
+  expect(modelPublishSql).toContain('values (\'ai-catalog\', 2)')
 })
 
 test('same-origin endpoint verifies server identity and delegates validation to shared model', () => {

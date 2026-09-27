@@ -83,6 +83,7 @@ insert into public.workspace_memberships values
   ('10000000-0000-0000-0000-000000000002','20000000-0000-0000-0000-000000000005','owner');
 
 \i supabase/migrations/20260926000300_ai_catalog.sql
+\i supabase/migrations/20260926000700_ai_catalog_model_publish.sql
 
 create function public.ai_catalog_pause_test_insert()
 returns trigger
@@ -234,6 +235,124 @@ begin
   end;
   if not caught then raise exception 'Workflow accepted a reference of the wrong kind'; end if;
 
+  result := public.ai_catalog_command(
+    'create', '10000000-0000-0000-0000-000000000001', 'published-pack', null,
+    '{"kind":"prompt-pack","name":"Published pack","description":"","definition":{"prompts":[{"id":"published-prompt","version":1,"state":"draft","name":"Prompt","template":"Write.","variables":[]}]}}',
+    null
+  );
+  caught := false;
+  begin
+    perform public.ai_catalog_command(
+      'transition', '10000000-0000-0000-0000-000000000001', 'published-pack', 1, null, 'published'
+    );
+  exception when sqlstate '22023' then caught := true;
+  end;
+  if not caught then raise exception 'Prompt pack published with an unpublished prompt'; end if;
+  result := public.ai_catalog_command(
+    'revise', '10000000-0000-0000-0000-000000000001', 'published-pack', 1,
+    '{"kind":"prompt-pack","name":"Published pack","description":"","definition":{"prompts":[{"id":"published-prompt","version":2,"state":"published","name":"Prompt","template":"Write.","variables":[]}]}}',
+    null
+  );
+  result := public.ai_catalog_command(
+    'transition', '10000000-0000-0000-0000-000000000001', 'published-pack', 2, null, 'published'
+  );
+  result := public.ai_catalog_command(
+    'create', '10000000-0000-0000-0000-000000000001', 'published-reference', null,
+    '{"kind":"reference-set","name":"Published reference","description":"","definition":{"entries":[]}}',
+    null
+  );
+  result := public.ai_catalog_command(
+    'transition', '10000000-0000-0000-0000-000000000001', 'published-reference', 1, null, 'published'
+  );
+  result := public.ai_catalog_command(
+    'create', '10000000-0000-0000-0000-000000000001', 'published-blueprint', null,
+    '{"kind":"blueprint","name":"Published blueprint","description":"","definition":{"contentType":"SOP","sections":[]}}',
+    null
+  );
+  result := public.ai_catalog_command(
+    'transition', '10000000-0000-0000-0000-000000000001', 'published-blueprint', 1, null, 'published'
+  );
+
+  result := public.ai_catalog_command(
+    'create', '10000000-0000-0000-0000-000000000001', 'unpublishable-workflow', null,
+    '{"kind":"workflow","name":"Unpublishable","description":"","definition":{"capability":"draft","model":{"mode":"auto"},"promptPack":null,"referenceSet":null,"blueprint":null,"steps":[]}}',
+    null
+  );
+  caught := false;
+  begin
+    perform public.ai_catalog_command(
+      'transition', '10000000-0000-0000-0000-000000000001', 'unpublishable-workflow', 1, null, 'published'
+    );
+  exception when sqlstate '22023' then caught := true;
+  end;
+  if not caught then raise exception 'Workflow published without pinned model and all references'; end if;
+
+  result := public.ai_catalog_command(
+    'create', '10000000-0000-0000-0000-000000000001', 'draft-reference', null,
+    '{"kind":"reference-set","name":"Draft reference","description":"","definition":{"entries":[]}}',
+    null
+  );
+  result := public.ai_catalog_command(
+    'create', '10000000-0000-0000-0000-000000000001', 'draft-reference-workflow', null,
+    '{"kind":"workflow","name":"Draft reference","description":"","definition":{"capability":"draft","model":{"mode":"pinned","providerId":"provider_1","modelId":"model:latest"},"promptPack":{"id":"published-pack","version":3},"referenceSet":{"id":"draft-reference","version":1},"blueprint":{"id":"published-blueprint","version":2},"steps":[]}}',
+    null
+  );
+  caught := false;
+  begin
+    perform public.ai_catalog_command(
+      'transition', '10000000-0000-0000-0000-000000000001', 'draft-reference-workflow', 1, null, 'published'
+    );
+  exception when sqlstate '22023' then caught := true;
+  end;
+  if not caught then raise exception 'Workflow published with an unpublished exact reference version'; end if;
+
+  result := public.ai_catalog_command(
+    'create', '10000000-0000-0000-0000-000000000001', 'pinned-model-workflow', null,
+    jsonb_build_object(
+      'kind','workflow','name','Pinned model','description','',
+      'definition', jsonb_build_object(
+        'capability','draft',
+        'model', jsonb_build_object('mode','pinned','providerId','provider_1','modelId','gpt-4.1/preview:2026.09'),
+        'promptPack', jsonb_build_object('id','published-pack','version',3),
+        'referenceSet', jsonb_build_object('id','published-reference','version',2),
+        'blueprint', jsonb_build_object('id','published-blueprint','version',2),
+        'steps','[]'::jsonb
+      )
+    ), null
+  );
+  result := public.ai_catalog_command(
+    'transition', '10000000-0000-0000-0000-000000000001', 'pinned-model-workflow', 1, null, 'published'
+  );
+  if result->'asset'->>'state' <> 'published' then raise exception 'Valid pinned workflow did not publish'; end if;
+
+  result := public.ai_catalog_command(
+    'transition', '10000000-0000-0000-0000-000000000001', 'published-reference', 2, null, 'archived'
+  );
+  result := public.ai_catalog_command(
+    'create', '10000000-0000-0000-0000-000000000001', 'archived-reference-workflow', null,
+    '{"kind":"workflow","name":"Archived reference","description":"","definition":{"capability":"draft","model":{"mode":"pinned","providerId":"provider_1","modelId":"model:latest"},"promptPack":{"id":"published-pack","version":3},"referenceSet":{"id":"published-reference","version":2},"blueprint":{"id":"published-blueprint","version":2},"steps":[]}}',
+    null
+  );
+  caught := false;
+  begin
+    perform public.ai_catalog_command(
+      'transition', '10000000-0000-0000-0000-000000000001', 'archived-reference-workflow', 1, null, 'published'
+    );
+  exception when sqlstate '22023' then caught := true;
+  end;
+  if not caught then raise exception 'Workflow published with an archived latest referenced version'; end if;
+
+  caught := false;
+  begin
+    perform public.ai_catalog_command(
+      'create', '10000000-0000-0000-0000-000000000001', 'invalid-model-id-workflow', null,
+      '{"kind":"workflow","name":"Invalid model ID","description":"","definition":{"capability":"draft","model":{"mode":"pinned","providerId":"provider_1","modelId":"model name"},"promptPack":null,"referenceSet":null,"blueprint":null,"steps":[]}}',
+      null
+    );
+  exception when sqlstate '22023' then caught := true;
+  end;
+  if not caught then raise exception 'Pinned model ID accepted whitespace'; end if;
+
   perform set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000002', true);
   result := public.ai_catalog_command(
     'create', '10000000-0000-0000-0000-000000000001', 'admin-asset', null,
@@ -301,7 +420,7 @@ do $registry$
 begin
   if (select version from public.cloud_schema_versions where component = 'ai-connections') is distinct from 1
     or (select count(*) from public.cloud_schema_versions where component = 'ai-connections') <> 1
-    or (select version from public.cloud_schema_versions where component = 'ai-catalog') is distinct from 1 then
+    or (select version from public.cloud_schema_versions where component = 'ai-catalog') is distinct from 2 then
     raise exception 'AI Connections registry correction is not idempotent or changed the AI catalog marker';
   end if;
 end;

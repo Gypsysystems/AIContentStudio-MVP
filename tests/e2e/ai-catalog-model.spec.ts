@@ -61,3 +61,32 @@ test('definition payloads reject arbitrary credential fields and oversized embed
     },
   })).toBe(true)
 })
+
+test('pinned model IDs allow conservative provider model syntax up to 200 characters', () => {
+  const workflow = (modelId: string): AiAssetInput => ({
+    kind: 'workflow',
+    name: 'Pinned workflow',
+    description: '',
+    definition: {
+      capability: 'draft',
+      model: { mode: 'pinned', providerId: 'provider_1', modelId },
+      promptPack: null,
+      referenceSet: null,
+      blueprint: null,
+      steps: [],
+    },
+  })
+
+  expect(validateAiAssetInput(workflow('gpt-4.1/preview:2026.09'))).toBe(true)
+  expect(validateAiAssetInput(workflow(`m${'x'.repeat(199)}`))).toBe(true)
+  expect(validateAiAssetInput(workflow(`m${'x'.repeat(200)}`))).toBe(false)
+  expect(validateAiAssetInput(workflow('-invalid'))).toBe(false)
+  expect(validateAiAssetInput(workflow('model name'))).toBe(false)
+  expect(validateAiAssetInput({
+    ...workflow('valid-model'),
+    definition: {
+      ...workflow('valid-model').definition,
+      model: { mode: 'pinned', providerId: 'provider/id', modelId: 'valid-model' },
+    },
+  })).toBe(false)
+})

@@ -11,6 +11,15 @@ import {
   type AiCatalogCommand,
   type AiVersionState,
 } from '../src/aiCatalogModel'
+import { resolveWorkflowReadiness, type WorkflowReadiness, type WorkflowReadinessConnection } from '../src/workflowReadiness'
+import {
+  decryptCredential,
+  discoveryTestState,
+  encryptionKey,
+  executeConnections,
+  readEncryptedFromDatabase,
+} from './aiConnectionsApi'
+import { discoverProviderModels } from './aiProviderDiscovery'
 
 const ACCESS_COOKIE = 'sb_access_token'
 const MAX_TOKEN_LENGTH = 8192
@@ -20,9 +29,27 @@ const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,89}$/
 type Json = Record<string, unknown>
 type Config = { url: string; anonKey: string }
 type Membership = { workspace_id: string; role: string }
+type ReadinessDependencies = {
+  key?: Buffer
+  readEncrypted?: typeof readEncryptedFromDatabase
+  connectionMetadata?: (
+    client: SupabaseClient,
+    workspaceId: string,
+    role: string,
+    key: Buffer,
+    providerId: string,
+  ) => Promise<{ providerId: string; revision: number; state: string } | null>
+  discover?: typeof discoverProviderModels
+}
+type ReadinessRequest = { action: 'readiness'; id: string; version: number; workspaceId: string }
 
 export class AiCatalogApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+    readonly readinessBlockers?: WorkflowReadiness['blockers'],
+  ) {
     super(message)
     this.name = 'AiCatalogApiError'
   }
@@ -110,14 +137,13 @@ class SupabaseClient {
     return body
   }
 
-  async identity(): Promise<{ userId: string; membership: Membership }> {
+  async identity(workspaceId?: string): Promise<{ userId: string; membership: Membership }> {
     const userResponse = await this.request('/auth/v1/user')
     const user = await userResponse.json().catch(() => null) as unknown
     if (!userResponse.ok || !isObject(user) || typeof user.id !== 'string' || !user.id)
       throw new AiCatalogApiError(401, 'UNAUTHENTICATED', 'A valid authenticated session is required')
-    const query = new URLSearchParams({
-      select: 'workspace_id,role', user_id: `eq.${user.id}`, order: 'workspace_id.asc',
-    })
+    const query = new URLSearchParams({ select: 'workspace_id,role', user_id: `eq.${user.id}`, order: 'workspace_id.asc' })
+    if (workspaceId) query.set('workspace_id', `eq.${workspaceId}`)
     let rows: unknown
     try {
       rows = await this.json(`/rest/v1/workspace_memberships?${query}`)
@@ -163,6 +189,14 @@ class SupabaseClient {
       body: JSON.stringify(rpc),
     })
   }
+
+  async connectionCommand(args: Json): Promise<unknown> {
+    return this.json('/rest/v1/rpc/ai_connection_command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
+    })
+  }
 }
 
 function assertKeys(value: Json, keys: string[]): void {
@@ -187,10 +221,16 @@ function assertNoSensitiveKeys(value: unknown): void {
   }
 }
 
-function validateCommand(value: unknown): asserts value is Json & AiCatalogCommand {
+function validateCommand(value: unknown): asserts value is Json & (AiCatalogCommand | ReadinessRequest) {
   if (!isObject(value) || typeof value.action !== 'string')
     throw new AiCatalogApiError(400, 'INVALID_REQUEST', 'A JSON AI catalog command is required')
   switch (value.action) {
+    case 'readiness':
+      assertKeys(value, ['action', 'id', 'version', 'workspaceId'])
+      if (!stableId(value.id) || !stableId(value.workspaceId))
+        throw new AiCatalogApiError(400, 'INVALID_ID', 'id and workspaceId must be valid stable IDs')
+      assertVersion(value.version)
+      break
     case 'list':
       assertKeys(value, ['action'])
       break
@@ -274,9 +314,168 @@ function validateHistory(values: unknown[], workspaceId: string, expectedId?: st
   return items
 }
 
-export async function executeAiCatalog(value: unknown, client: SupabaseClient, workspaceId: string): Promise<Json> {
+async function defaultConnectionMetadata(
+  client: SupabaseClient,
+  workspaceId: string,
+  role: string,
+  key: Buffer,
+  providerId: string,
+): Promise<{ providerId: string; revision: number; state: string } | null> {
+  const result = await executeConnections({ action: 'list' }, workspaceId, role, key, {
+    command: args => client.connectionCommand(args),
+    readEncrypted: readEncryptedFromDatabase,
+    discover: discoverProviderModels,
+    verify: async (provider, credential) => discoveryTestState(await discoverProviderModels(provider, credential)),
+  })
+  if (!isObject(result) || !Array.isArray(result.connections))
+    throw new AiCatalogApiError(503, 'CONNECTIONS_UNAVAILABLE', 'Provider connection metadata could not be verified')
+  const matches = result.connections.filter(item => isObject(item) && item.providerId === providerId)
+  if (matches.length > 1)
+    throw new AiCatalogApiError(503, 'CONNECTIONS_UNAVAILABLE', 'Provider connection metadata could not be verified')
+  if (!matches.length) return null
+  const connection = matches[0] as Json
+  if (!Number.isSafeInteger(connection.revision) || typeof connection.state !== 'string')
+    throw new AiCatalogApiError(503, 'CONNECTIONS_UNAVAILABLE', 'Provider connection metadata could not be verified')
+  return { providerId, revision: connection.revision as number, state: connection.state }
+}
+
+async function readinessForWorkflow(
+  id: string,
+  version: number,
+  client: SupabaseClient,
+  workspaceId: string,
+  role: string,
+  dependencies: ReadinessDependencies,
+  publishCandidate = false,
+): Promise<WorkflowReadiness> {
+  const history = async (assetId: string): Promise<unknown[]> => {
+    const result = await client.command({ action: 'history', id: assetId }, workspaceId)
+    if (!isObject(result) || !Array.isArray(result.versions))
+      throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage returned invalid asset history')
+    return result.versions
+  }
+  let workflows: unknown[]
+  try {
+    workflows = await history(id)
+  } catch (error) {
+    if (error instanceof AiCatalogApiError && error.status === 404) workflows = []
+    else throw error
+  }
+  const selected = workflows.find(asset => isObject(asset) && asset.id === id && asset.version === version
+    && asset.kind === 'workflow')
+  const definition = isObject(selected) && isObject(selected.definition)
+    ? selected.definition : undefined
+  const dependencyHistories: {
+    promptPack: unknown[] | null
+    referenceSet: unknown[] | null
+    blueprint: unknown[] | null
+  } = { promptPack: [], referenceSet: [], blueprint: [] }
+  if (definition) {
+    const refs = {
+      promptPack: definition.promptPack,
+      referenceSet: definition.referenceSet,
+      blueprint: definition.blueprint,
+    }
+    for (const key of Object.keys(refs) as (keyof typeof refs)[]) {
+      const ref = refs[key]
+      if (ref === null || ref === undefined) continue
+      if (!isObject(ref) || !stableId(ref.id) || !Number.isSafeInteger(ref.version) || Number(ref.version) < 1) {
+        dependencyHistories[key] = null
+        continue
+      }
+      try {
+        dependencyHistories[key] = await history(ref.id)
+      } catch (error) {
+        if (error instanceof AiCatalogApiError && error.status === 404) dependencyHistories[key] = []
+        else throw error
+      }
+    }
+  }
+
+  let connection: WorkflowReadinessConnection = null
+  const model = definition?.model
+  if (isObject(model) && model.mode === 'pinned' && stableId(model.providerId)) {
+    const providerId = model.providerId
+    const key = dependencies.key ?? encryptionKey()
+    const connectionMetadata = await (dependencies.connectionMetadata ?? defaultConnectionMetadata)(
+      client, workspaceId, role, key, providerId,
+    )
+    if (connectionMetadata) {
+      let credentialRevision: number | null = null
+      let safeDiscovery: { state: string; models: { providerId: string; id: string }[] } | null = null
+      try {
+        const encrypted = await (dependencies.readEncrypted ?? readEncryptedFromDatabase)(
+          workspaceId, providerId,
+        )
+        if (encrypted) {
+          credentialRevision = encrypted.revision
+          if (encrypted.workspaceId === workspaceId && encrypted.providerId === providerId
+            && encrypted.revision === connectionMetadata.revision) {
+            const credential = decryptCredential(key, encrypted)
+            try {
+              const result: unknown = await (dependencies.discover ?? discoverProviderModels)(providerId, credential)
+              if (isObject(result) && result.state === 'available' && Array.isArray(result.models)
+                && result.models.length <= 1000
+                && result.models.every(item => isObject(item)
+                  && Object.keys(item).sort().join(',') === 'id,label,providerId'
+                  && item.providerId === providerId
+                  && typeof item.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(item.id)
+                  && typeof item.label === 'string' && item.label.trim().length > 0
+                  && item.label.length <= 200 && !/[\x00-\x1f\x7f]/.test(item.label)
+                  && !item.id.includes(credential) && !item.label.includes(credential))
+                && new Set(result.models.map(item => isObject(item) ? item.id : null)).size === result.models.length) {
+                safeDiscovery = {
+                  state: 'available',
+                  models: result.models.map(item => ({
+                    providerId: (item as Json).providerId as string,
+                    id: (item as Json).id as string,
+                  })),
+                }
+              } else if (isObject(result) && ['unsupported', 'unavailable', 'auth-failed'].includes(String(result.state))
+                && Array.isArray(result.models) && result.models.length === 0) {
+                safeDiscovery = { state: String(result.state), models: [] }
+              } else {
+                safeDiscovery = { state: 'malformed', models: [] }
+              }
+            } catch {
+              safeDiscovery = { state: 'unavailable', models: [] }
+            }
+          }
+        }
+      } catch {
+        credentialRevision = null
+      }
+      connection = {
+        providerId: connectionMetadata.providerId,
+        revision: connectionMetadata.revision,
+        state: connectionMetadata.state,
+        credentialRevision,
+        discovery: safeDiscovery,
+      }
+    }
+  }
+  return resolveWorkflowReadiness({
+    workspaceId, id, version, workflowHistory: workflows, dependencyHistories, connection,
+    publishCandidate,
+  })
+}
+
+export async function executeAiCatalog(
+  value: unknown,
+  client: SupabaseClient,
+  workspaceId: string,
+  role = 'owner',
+  readinessDependencies: ReadinessDependencies = {},
+): Promise<Json> {
   validateCommand(value)
-  const input = value as Json & AiCatalogCommand
+  const input = value as Json & (AiCatalogCommand | ReadinessRequest)
+  if (input.action === 'readiness') {
+    if (role !== 'owner' && role !== 'admin')
+      throw new AiCatalogApiError(403, 'FORBIDDEN', 'Owner or admin role required to check workflow readiness')
+    if (input.workspaceId !== workspaceId)
+      throw new AiCatalogApiError(403, 'FORBIDDEN', 'Readiness can only be checked in the active workspace')
+    return { readiness: await readinessForWorkflow(input.id, input.version, client, workspaceId, role, readinessDependencies) }
+  }
   if (input.action === 'revise' || input.action === 'transition' || input.action === 'delete') {
     const historyResult = await client.command({ action: 'history', id: input.id }, workspaceId)
     const history = isObject(historyResult) && Array.isArray(historyResult.versions) ? historyResult.versions : null
@@ -292,6 +491,17 @@ export async function executeAiCatalog(value: unknown, client: SupabaseClient, w
     } else if (input.action === 'transition') {
       if (!validateAiTransition(latest, input.state as AiVersionState))
         throw new AiCatalogApiError(400, 'INVALID_TRANSITION', 'Asset cannot transition from its current state')
+      if (input.state === 'published' && latest.kind === 'workflow') {
+        if (role !== 'owner' && role !== 'admin')
+          throw new AiCatalogApiError(403, 'FORBIDDEN', 'Owner or admin role required to publish a workflow')
+        const readiness = await readinessForWorkflow(
+          latest.id, latest.version, client, workspaceId, role, readinessDependencies, true,
+        )
+        if (readiness.status !== 'ready')
+          throw new AiCatalogApiError(
+            409, 'WORKFLOW_NOT_READY', 'Workflow readiness checks must pass before publishing', readiness.blockers,
+          )
+      }
     } else if (latest.state === 'archived' || !canTransitionAiVersion(latest.state, 'archived')) {
       throw new AiCatalogApiError(400, 'INVALID_TRANSITION', 'Asset cannot be archived from its current state')
     }
@@ -333,14 +543,17 @@ export async function executeAiCatalog(value: unknown, client: SupabaseClient, w
   return { asset }
 }
 
-export async function handleAiCatalog(request: IncomingMessage, response: ServerResponse): Promise<void> {
+export async function handleAiCatalog(
+  request: IncomingMessage,
+  response: ServerResponse,
+  readinessDependencies: ReadinessDependencies = {},
+): Promise<void> {
   response.setHeader('Cache-Control', 'no-store')
   const settings = config()
   if (!settings) throw new AiCatalogApiError(503, 'AI_CATALOG_UNAVAILABLE', 'Cloud AI catalog storage is not configured')
   const token = cookieToken(request)
   if (!token) throw new AiCatalogApiError(401, 'UNAUTHENTICATED', 'A valid authenticated session is required')
   const client = new SupabaseClient(settings, token)
-  const { membership } = await client.identity()
   const chunks: Buffer[] = []
   let size = 0
   const body = await new Promise<unknown>((resolve, reject) => {
@@ -360,7 +573,10 @@ export async function handleAiCatalog(request: IncomingMessage, response: Server
     })
     request.on('error', () => reject(new AiCatalogApiError(400, 'REQUEST_READ_FAILED', 'Could not read request body')))
   })
-  const result = await executeAiCatalog(body, client, membership.workspace_id)
+  const routeWorkspaceId = isObject(body) && body.action === 'readiness' && stableId(body.workspaceId)
+    ? body.workspaceId : undefined
+  const { membership } = await client.identity(routeWorkspaceId)
+  const result = await executeAiCatalog(body, client, membership.workspace_id, membership.role, readinessDependencies)
   response.statusCode = 200
   response.setHeader('Content-Type', 'application/json; charset=utf-8')
   response.end(JSON.stringify(result))
@@ -373,5 +589,9 @@ export function sendAiCatalogError(response: ServerResponse, error: unknown): vo
   response.statusCode = apiError.status
   response.setHeader('Content-Type', 'application/json; charset=utf-8')
   response.setHeader('Cache-Control', 'no-store')
-  response.end(JSON.stringify({ error: apiError.message, code: apiError.code }))
+  response.end(JSON.stringify({
+    error: apiError.message,
+    code: apiError.code,
+    ...(apiError.readinessBlockers ? { blockers: apiError.readinessBlockers } : {}),
+  }))
 }

@@ -17,14 +17,21 @@ import {
   type ReferenceSetDefinition,
   type WorkflowDefinition,
 } from '../aiCatalogModel'
-import { AiCatalogApiError, executeAiCatalog, historyAiAsset, listAiAssets } from '../aiCatalogRepository'
+import { AiCatalogApiError, checkAiWorkflowReadiness, executeAiCatalog, historyAiAsset, listAiAssets } from '../aiCatalogRepository'
+import type { WorkflowReadiness } from '../workflowReadiness'
+import type { ConnectionMetadata, ModelDiscovery } from '../aiConnectionModel'
+import { ConnectionApiError, discoverModels, listConnections } from '../aiConnectionRepository'
 import type { ProjectAccessContext } from '../ownership'
 import Connections from './Connections'
 
 type Props = { mode: 'local-dev' | 'cloud'; context: ProjectAccessContext }
 type Area = 'connections' | AiAssetKind
 type EditorDraft = { kind: AiAssetKind; name: string; description: string; definition: AiDefinition }
-type Notice = { type: 'success' | 'error' | 'info'; text: string }
+type Notice = {
+  type: 'success' | 'error' | 'info'
+  text: string
+  blockers?: WorkflowReadiness['blockers']
+}
 
 function catalogErrorMessage(error: unknown, fallback: string) {
   const code = (error instanceof AiCatalogApiError ? error.code
@@ -98,10 +105,11 @@ const kindTitles: Record<AiAssetKind, string> = {
 }
 const kindDescriptions: Record<AiAssetKind, string> = {
   workflow: 'Define a documentation capability and its grounded inputs.',
-  'prompt-pack': 'Maintain reusable prompts with explicit versions and variables.',
-  'reference-set': 'Keep approved-example and terminology metadata traceable.',
-  blueprint: 'Set content types, section structure, and editorial rules.',
+  'prompt-pack': 'Version reusable prompts and their declared template variables.',
+  'reference-set': 'Track approved examples and terminology by locator; never store source documents or excerpts.',
+  blueprint: 'Define section order, required sections, and concise editorial rules.',
 }
+const BUILT_IN_PROVIDERS = new Set(['openai', 'anthropic', 'google'])
 const stateLabels: Record<AiVersionState, string> = {
   draft: 'Draft',
   test: 'Test / review',
@@ -176,11 +184,19 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 const inputClass = 'min-h-10 w-full rounded-lg border border-[#DCDAD4] bg-white px-3 text-[12px] text-[#33323E] placeholder:text-[#AAA8B0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]'
 const textAreaClass = 'w-full rounded-lg border border-[#DCDAD4] bg-white px-3 py-2.5 text-[12px] leading-5 text-[#33323E] placeholder:text-[#AAA8B0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]'
 
-function DefinitionEditor({ draft, update, assets, promptBaseVersions }: {
+function DefinitionEditor({ draft, update, assets, promptBaseVersions, publishedVersions, versionsLoading, versionsError,
+  modelOptions, modelsLoading, modelsError, onRefreshModels }: {
   draft: EditorDraft
   update: (definition: AiDefinition) => void
   assets: AiAssetVersion[]
   promptBaseVersions: Record<string, number>
+  publishedVersions: AiAssetVersion[]
+  versionsLoading: boolean
+  versionsError: string
+  modelOptions: { providerId: string; modelId: string; label: string }[]
+  modelsLoading: boolean
+  modelsError: string
+  onRefreshModels: () => void
 }) {
   const { kind, definition } = draft
   if (kind === 'workflow') {
@@ -190,30 +206,36 @@ function DefinitionEditor({ draft, update, assets, promptBaseVersions }: {
         <input className={inputClass} value={data.capability} maxLength={100} placeholder="For example, release notes"
           onChange={event => update({ ...data, capability: event.target.value })} />
       </Field>
-      <Field label="Model selection" hint="Auto is the only available mode until a real connection exists">
-        <div className="flex min-h-10 items-center justify-between rounded-lg border border-[#E5E3DD] bg-[#F7F6F3] px-3">
-          <span className="text-[12px] font-medium text-[#454450]">Auto — selected at execution time</span>
-          <span className="rounded-full bg-[#ECEBE7] px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-[#898792]">No model pinned</span>
-        </div>
-      </Field>
+      <WorkflowModelPicker definition={data} update={update} modelOptions={modelOptions}
+        loading={modelsLoading} error={modelsError} onRefresh={onRefreshModels} />
       <div className="grid gap-3 sm:grid-cols-3">
         {([
           ['promptPack', 'Prompt pack', 'prompt-pack'],
           ['referenceSet', 'Reference set', 'reference-set'],
           ['blueprint', 'Blueprint', 'blueprint'],
         ] as const).map(([key, label, kindValue]) => {
-          return <Field key={key} label={label}>
-            <select className={inputClass} value={data[key]?.id ?? ''} onChange={event => {
-              const selected = assets.find(item => item.kind === kindValue && item.id === event.target.value)
+          const pinned = data[key]
+          const current = pinned ? (assets.find(item => item.id === pinned.id && item.version === pinned.version)
+            ?? publishedVersions.find(item => item.id === pinned.id && item.version === pinned.version)) : null
+          const offered = publishedVersions.filter(item => item.kind === kindValue)
+          const isAvailable = !!current && current.state === 'published' && offered.some(item => item.id === current.id && item.version === current.version)
+          const value = pinned ? `${pinned.id}:${pinned.version}` : ''
+          return <Field key={key} label={label} hint="Published exact version">
+            <select aria-label={`${label} published exact version`} className={inputClass} value={value} onChange={event => {
+              const [id, versionText] = event.target.value.split(':')
+              const selected = offered.find(item => item.id === id && item.version === Number(versionText))
               update({ ...data, [key]: selected ? { id: selected.id, version: selected.version } : null })
             }}>
               <option value="">Not linked</option>
-              {assets.filter(item => item.kind === kindValue && item.state !== 'archived').map(item =>
-                <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}
+              {!isAvailable && pinned && <option value={value}>{current ? `${current.name} · v${pinned.version} · unavailable (${stateLabels[current.state]})` : `Unavailable pinned version · ${pinned.id} · v${pinned.version}`}</option>}
+              {offered.map(item =>
+                <option key={`${item.id}:${item.version}`} value={`${item.id}:${item.version}`}>{item.name} · v{item.version} · Published</option>)}
             </select>
+            {pinned && !isAvailable && <span className="mt-1 block text-[10px] text-[#945442]">Pinned version is unavailable; choose a published version.</span>}
           </Field>
         })}
       </div>
+      {(versionsLoading || versionsError) && <p role={versionsError ? 'alert' : 'status'} className="text-[10px] text-[#8A6258]">{versionsError || 'Loading published exact versions…'}</p>}
       <WorkflowSteps data={data} update={update} />
     </div>
   }
@@ -222,7 +244,7 @@ function DefinitionEditor({ draft, update, assets, promptBaseVersions }: {
     const change = (index: number, value: PromptDefinition) => update({ prompts: data.prompts.map((item, i) => i === index ? value : item) })
     return <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div><p className="text-[11px] font-semibold text-[#393844]">Prompts</p><p className="text-[10px] text-[#898793]">Each prompt carries its own version and review state.</p></div>
+        <div><p className="text-[11px] font-semibold text-[#393844]">Prompts</p><p className="text-[10px] text-[#898793]">Each prompt has its own review state and declared template variables.</p></div>
         <Button disabled={data.prompts.length >= 50} onClick={() => update({ prompts: [...data.prompts, {
           id: newId('prompt'), version: 1, state: 'draft', name: '', template: '', variables: [],
         }] })}>Add prompt</Button>
@@ -249,7 +271,7 @@ function DefinitionEditor({ draft, update, assets, promptBaseVersions }: {
           <div className="sm:col-span-2"><Field label="Prompt template" hint="Keep provenance instructions explicit; no document source text belongs here.">
             <textarea disabled={locked} className={`${textAreaClass} min-h-28 disabled:bg-[#F0EFEB] disabled:text-[#8D8B95]`} maxLength={8000} value={prompt.template} onChange={event => change(index, { ...prompt, template: event.target.value })} placeholder="Write the reusable prompt template…" />
           </Field></div>
-          <div className="sm:col-span-2"><Field label="Variables" hint="Comma-separated identifiers, for example audience, tone">
+          <div className="sm:col-span-2"><Field label="Variables" hint="Template identifiers, comma-separated; for example audience, tone">
             <input disabled={locked} className={`${inputClass} disabled:bg-[#F0EFEB] disabled:text-[#8D8B95]`} value={prompt.variables.join(', ')} onChange={event => change(index, { ...prompt, variables: event.target.value.split(',').map(value => value.trim()).filter(Boolean) })} />
           </Field></div>
         </div>
@@ -259,7 +281,7 @@ function DefinitionEditor({ draft, update, assets, promptBaseVersions }: {
   if (kind === 'reference-set') {
     const data = definition as ReferenceSetDefinition
     return <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[11px] font-semibold text-[#393844]">Reference metadata</p><p className="text-[10px] text-[#898793]">Record provenance pointers and editorial context only—not document content or files.</p></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[11px] font-semibold text-[#393844]">Reference metadata</p><p className="text-[10px] text-[#898793]">Record source locators and editorial context only—never source documents, excerpts, or files.</p></div>
         <Button disabled={data.entries.length >= 100} onClick={() => update({ entries: [...data.entries, { id: newId('ref'), type: 'approved-example', title: '', locator: '', note: '' }] })}>Add reference</Button>
       </div>
       {data.entries.length === 0 && <EmptyInset title="No reference metadata" text="Add a locator for an approved example or terminology source." />}
@@ -283,7 +305,7 @@ function DefinitionEditor({ draft, update, assets, promptBaseVersions }: {
     <Field label="Content type"><select className={inputClass} value={data.contentType} onChange={event => update({ ...data, contentType: event.target.value as BlueprintContentType })}>
       {BLUEPRINT_CONTENT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
     </select></Field>
-    <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[11px] font-semibold text-[#393844]">Sections & rules</p><p className="text-[10px] text-[#898793]">Use rules to make expected evidence and structure clear.</p></div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[11px] font-semibold text-[#393844]">Sections & rules</p><p className="text-[10px] text-[#898793]">Arrange sections in document order; mark required sections and define concise rules.</p></div>
       <Button disabled={data.sections.length >= 100} onClick={() => update({ ...data, sections: [...data.sections, { id: newId('section'), title: '', required: true, rules: [] }] })}>Add section</Button>
     </div>
     {data.sections.length === 0 && <EmptyInset title="Blueprint has no sections" text="Add a section to describe the required content structure." />}
@@ -301,6 +323,44 @@ function DefinitionEditor({ draft, update, assets, promptBaseVersions }: {
       </div>
     </div>)}
   </div>
+}
+
+function WorkflowModelPicker({ definition, update, modelOptions, loading, error, onRefresh }: {
+  definition: WorkflowDefinition
+  update: (definition: AiDefinition) => void
+  modelOptions: { providerId: string; modelId: string; label: string }[]
+  loading: boolean
+  error: string
+  onRefresh: () => void
+}) {
+  const pin = definition.model.mode === 'pinned' ? definition.model : null
+  const selected = pin ? `${pin.providerId}:${pin.modelId}` : ''
+  const hasCurrent = !!pin && modelOptions.some(item => item.providerId === pin.providerId && item.modelId === pin.modelId)
+  return <Field label="Model selection" hint="Auto is selected at execution unless pinned">
+    <div className="space-y-2">
+      <select aria-label="Workflow model" className={inputClass} value={selected} disabled={loading}
+        onChange={event => {
+          const option = modelOptions.find(item => `${item.providerId}:${item.modelId}` === event.target.value)
+          update({ ...definition, model: option
+            ? { mode: 'pinned', providerId: option.providerId, modelId: option.modelId }
+            : { mode: 'auto' } })
+        }}>
+        <option value="">Auto — rechecked at execution</option>
+        {definition.model.mode === 'pinned' && !hasCurrent && <option value={selected}>
+          Unavailable pin · {definition.model.providerId} / {definition.model.modelId}
+        </option>}
+        {modelOptions.map(item => <option key={`${item.providerId}:${item.modelId}`} value={`${item.providerId}:${item.modelId}`}>
+          {item.providerId} · {item.label}
+        </option>)}
+      </select>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] leading-4 text-[#898793]">Only discovered models from configured built-in providers appear. Credentials are never shown.</p>
+        <Button onClick={onRefresh} disabled={loading}>{loading ? 'Discovering…' : 'Discover models'}</Button>
+      </div>
+      {error && <p role="alert" className="text-[10px] text-[#945442]">{error}</p>}
+      {definition.model.mode === 'pinned' && !hasCurrent && <p className="text-[10px] text-[#945442]">The pinned model is no longer in discovery results. Select Auto or rediscover.</p>}
+    </div>
+  </Field>
 }
 
 function WorkflowSteps({ data, update }: { data: WorkflowDefinition; update: (definition: AiDefinition) => void }) {
@@ -344,8 +404,21 @@ export default function AiControlCenter({ mode, context }: Props) {
   const [draft, setDraft] = useState<EditorDraft | null>(null)
   const [isRevising, setIsRevising] = useState(false)
   const [confirmArchive, setConfirmArchive] = useState(false)
+  const [publishedVersions, setPublishedVersions] = useState<AiAssetVersion[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versionsError, setVersionsError] = useState('')
+  const [modelOptions, setModelOptions] = useState<{ providerId: string; modelId: string; label: string }[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [modelsError, setModelsError] = useState('')
+  const [transitionReadinessBlockers, setTransitionReadinessBlockers] = useState<{
+    assetKey: string
+    blockers: WorkflowReadiness['blockers']
+  } | null>(null)
+  const [readinessAttemptRevision, setReadinessAttemptRevision] = useState(0)
   const requestSequence = useRef(0)
   const historyRequestSequence = useRef(0)
+  const editorVersionsSequence = useRef(0)
+  const modelDiscoverySequence = useRef(0)
   const selectedAssetKey = useRef<string | null>(null)
   const kind = area === 'connections' ? null : area
 
@@ -396,6 +469,66 @@ export default function AiControlCenter({ mode, context }: Props) {
   }, [assets])
   const visibleAssets = useMemo(() => latestAssets.filter(asset => asset.kind === kind && asset.state !== 'archived')
     .sort((a, b) => a.name.localeCompare(b.name)), [latestAssets, kind])
+
+  const loadPublishedVersions = useCallback(async () => {
+    const requestId = ++editorVersionsSequence.current
+    setVersionsLoading(true)
+    setVersionsError('')
+    try {
+      const histories = await Promise.all(latestAssets.filter(item => item.state !== 'archived')
+        .map(item => historyAiAsset(item.id)))
+      if (requestId !== editorVersionsSequence.current) return
+      const versions = histories.flat().filter(item => item.workspaceId === context.workspace.id
+        && item.state === 'published' && latestAssets.some(latest => latest.id === item.id && latest.state !== 'archived'))
+      setPublishedVersions(versions.sort((a, b) => a.name.localeCompare(b.name) || a.version - b.version))
+    } catch (error) {
+      if (requestId === editorVersionsSequence.current)
+        setVersionsError(catalogErrorMessage(error, 'Published versions could not be loaded.'))
+    } finally {
+      if (requestId === editorVersionsSequence.current) setVersionsLoading(false)
+    }
+  }, [context.workspace.id, latestAssets])
+
+  const discoverWorkflowModels = useCallback(async () => {
+    if (!canManage) return
+    const requestId = ++modelDiscoverySequence.current
+    setModelsLoading(true)
+    setModelsError('')
+    setModelOptions([])
+    try {
+      const connections: ConnectionMetadata[] = await listConnections()
+      const eligible = connections.filter(item => BUILT_IN_PROVIDERS.has(item.providerId))
+      if (eligible.length === 0 && requestId === modelDiscoverySequence.current)
+        setModelsError('No configured built-in provider connections are available for model discovery.')
+      const results: { providerId: string; modelId: string; label: string }[] = []
+      const outcomes = await Promise.all(eligible.map(async item => {
+        const result = await discoverModels(item.providerId, item.revision)
+        return result.discovery
+      }))
+      let unavailableMessage = ''
+      outcomes.forEach((result, index) => {
+        if (result.state === 'available') results.push(...result.models.map(model => ({
+          providerId: model.providerId, modelId: model.id, label: model.label,
+        })))
+        else if (eligible[index]) unavailableMessage ||= `Model discovery is ${result.state} for ${eligible[index].providerId}.`
+      })
+      if (requestId === modelDiscoverySequence.current) {
+        setModelOptions(results.sort((a, b) => a.providerId.localeCompare(b.providerId) || a.label.localeCompare(b.label)))
+        if (unavailableMessage) setModelsError(unavailableMessage)
+      }
+    } catch (error) {
+      if (requestId === modelDiscoverySequence.current)
+        setModelsError(error instanceof ConnectionApiError ? error.message : 'Configured provider models could not be discovered.')
+    } finally {
+      if (requestId === modelDiscoverySequence.current) setModelsLoading(false)
+    }
+  }, [canManage])
+
+  useEffect(() => {
+    if (!draft || draft.kind !== 'workflow' || !canManage) return
+    void loadPublishedVersions()
+    void discoverWorkflowModels()
+  }, [draft?.kind, canManage, loadPublishedVersions, discoverWorkflowModels])
 
   function openCreate() {
     if (!kind || !canManage) return
@@ -453,8 +586,9 @@ export default function AiControlCenter({ mode, context }: Props) {
       closeEditor()
       await refresh()
     } catch (error) {
-      const conflict = (error instanceof AiCatalogApiError && (error.code === 'VERSION_CONFLICT' || error.status === 409))
-        || (error instanceof Error && /conflict|version|409/i.test(error.message))
+      const conflict = error instanceof AiCatalogApiError
+        ? error.code === 'VERSION_CONFLICT'
+        : error instanceof Error && /conflict|version|409/i.test(error.message)
       setNotice({ type: 'error', text: conflict
         ? catalogErrorMessage(error, 'This definition changed elsewhere. Your draft is still here.')
         : catalogErrorMessage(error, 'The definition could not be saved.') })
@@ -464,6 +598,8 @@ export default function AiControlCenter({ mode, context }: Props) {
   }
   async function transition(asset: AiAssetVersion, state: AiVersionState) {
     if (!canManage || busy || loading || loadError) return
+    setReadinessAttemptRevision(value => value + 1)
+    setTransitionReadinessBlockers(null)
     setBusy(true)
     setNotice(null)
     setConfirmArchive(false)
@@ -474,14 +610,27 @@ export default function AiControlCenter({ mode, context }: Props) {
         throw new AiCatalogApiError(0, 'INVALID_RESPONSE', 'The catalog did not confirm the requested state change.')
       selectAsset(result)
       invalidateHistory()
+      setTransitionReadinessBlockers(null)
       setNotice({ type: 'success', text: `${kindTitles[result.kind]} moved to ${stateLabels[result.state].toLowerCase()}.` })
       await refresh()
     } catch (error) {
-      const conflict = (error instanceof AiCatalogApiError && (error.code === 'VERSION_CONFLICT' || error.status === 409))
-        || (error instanceof Error && /conflict|version|409/i.test(error.message))
-      setNotice({ type: 'error', text: conflict
-        ? catalogErrorMessage(error, 'A newer version exists. Refresh the catalog, then review the latest version before changing state.')
-        : catalogErrorMessage(error, 'The state change could not be saved.') })
+      const readinessBlocked = error instanceof AiCatalogApiError && error.code === 'WORKFLOW_NOT_READY'
+      const blockers = readinessBlocked ? error.readinessBlockers : []
+      const conflict = error instanceof AiCatalogApiError
+        ? error.code === 'VERSION_CONFLICT'
+        : error instanceof Error && /conflict|version|409/i.test(error.message)
+      if (readinessBlocked) {
+        setTransitionReadinessBlockers({ assetKey: assetKey(asset)!, blockers })
+        setNotice({ type: 'error', text: blockers.length
+          ? 'Workflow publish blocked by readiness. Resolve the blockers before publishing.'
+          : 'Workflow publish blocked by readiness, but no safe blocker details were returned. Check readiness for this saved version.',
+          blockers })
+      } else {
+        setTransitionReadinessBlockers(null)
+        setNotice({ type: 'error', text: conflict
+          ? catalogErrorMessage(error, 'A newer version exists. Refresh the catalog, then review the latest version before changing state.')
+          : catalogErrorMessage(error, 'The state change could not be saved.') })
+      }
       if (conflict) await refresh()
     } finally { setBusy(false) }
   }
@@ -580,6 +729,10 @@ export default function AiControlCenter({ mode, context }: Props) {
           </div>}
           {!loading && !loadError && selected && selected.kind === kind && <AssetDetail asset={selected}
              canManage={canManage && !loading && !loadError && latestAssets.some(item => item.id === selected.id && item.version === selected.version)}
+             canCheckReadiness={canManage}
+             readinessTransitionBlockers={transitionReadinessBlockers?.assetKey === assetKey(selected) ? transitionReadinessBlockers.blockers : []}
+             readinessAttemptRevision={readinessAttemptRevision}
+             onClearReadinessTransitionBlockers={() => setTransitionReadinessBlockers(null)}
              isCurrentVersion={latestAssets.some(item => item.id === selected.id && item.version === selected.version)} busy={busy || loading || !!loadError}
             onRevise={() => openRevise(selected)} onTransition={state => { if (state === 'archived') setConfirmArchive(true); else void transition(selected, state) }}
              onHistory={() => { void loadHistory(selected) }} history={history} historyBusy={historyBusy} historyError={historyError}
@@ -590,7 +743,9 @@ export default function AiControlCenter({ mode, context }: Props) {
             <div className="mt-3 flex flex-wrap gap-2"><Button kind="danger" disabled={busy} onClick={() => { void transition(selected, 'archived') }}>Archive definition</Button><Button disabled={busy} onClick={() => setConfirmArchive(false)}>Keep active</Button></div>
           </div>}
           {draft && <EditorDialog draft={draft} isRevising={isRevising} baseVersion={selected?.version} busy={busy}
-            assets={latestAssets} originalAsset={isRevising ? selected : null}
+            assets={latestAssets} publishedVersions={publishedVersions} versionsLoading={versionsLoading} versionsError={versionsError}
+            modelOptions={modelOptions} modelsLoading={modelsLoading} modelsError={modelsError}
+            onRefreshModels={() => { void discoverWorkflowModels() }} originalAsset={isRevising ? selected : null}
             notice={notice?.type === 'error' ? notice : null} onDismissNotice={() => setNotice(null)}
             onChange={setDraft} onSubmit={saveDraft} onClose={closeEditor} />}
         </>}
@@ -613,9 +768,14 @@ function AssetRow({ asset, active, onSelect }: { asset: AiAssetVersion; active: 
   </button>
 }
 
-function AssetDetail({ asset, canManage, isCurrentVersion, busy, onRevise, onTransition, onHistory, history, historyBusy, historyError, onSelectVersion, allowedTransitions }: {
+function AssetDetail({ asset, canManage, canCheckReadiness, readinessTransitionBlockers, readinessAttemptRevision, onClearReadinessTransitionBlockers,
+  isCurrentVersion, busy, onRevise, onTransition, onHistory, history, historyBusy, historyError, onSelectVersion, allowedTransitions }: {
   asset: AiAssetVersion
   canManage: boolean
+  canCheckReadiness: boolean
+  readinessTransitionBlockers: WorkflowReadiness['blockers']
+  readinessAttemptRevision: number
+  onClearReadinessTransitionBlockers: () => void
   isCurrentVersion: boolean
   busy: boolean
   onRevise: () => void
@@ -652,6 +812,9 @@ function AssetDetail({ asset, canManage, isCurrentVersion, busy, onRevise, onTra
         </dl>
       </div>
     </div>
+    {asset.kind === 'workflow' && <WorkflowReadinessPanel
+      key={`${asset.id}:${asset.version}:${readinessAttemptRevision}`} asset={asset} canCheck={canCheckReadiness}
+      transitionBlockers={readinessTransitionBlockers} onCheck={onClearReadinessTransitionBlockers} />}
     <div className="border-t border-[#ECEAE5] pt-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><p className="text-[11px] font-semibold text-[#4A4955]">Version history</p><p className="text-[10px] text-[#92909A]">Review prior snapshots without changing them.</p></div>
@@ -677,11 +840,14 @@ function AssetDetail({ asset, canManage, isCurrentVersion, busy, onRevise, onTra
 
 function DefinitionSummary({ asset }: { asset: AiAssetVersion }) {
   const data = asset.definition
+  const workflowModel = asset.kind === 'workflow' ? (data as WorkflowDefinition).model : null
   return <div className="min-w-0 rounded-xl border border-[#E8E6E0] bg-white p-3.5">
     <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-[#8B8994]">Definition snapshot</p>
     {asset.kind === 'workflow' && <div className="mt-3 space-y-3 text-[10px]">
       <SummaryLine label="Capability" value={(data as WorkflowDefinition).capability || 'Not set'} />
-      <SummaryLine label="Model mode" value="Auto · no pinned model" />
+      <SummaryLine label="Model mode" value={workflowModel?.mode === 'auto'
+        ? 'Auto · rechecked at execution'
+        : workflowModel?.mode === 'pinned' ? `Pinned · ${workflowModel.providerId} / ${workflowModel.modelId}` : 'Unknown'} />
       <SummaryLine label="Linked records" value={['promptPack', 'referenceSet', 'blueprint'].map(key => {
         const ref = (data as WorkflowDefinition)[key as 'promptPack' | 'referenceSet' | 'blueprint']
         return ref ? `${key}: v${ref.version}` : null
@@ -709,6 +875,86 @@ function DefinitionSummary({ asset }: { asset: AiAssetVersion }) {
   </div>
 }
 
+function WorkflowReadinessPanel({ asset, canCheck, transitionBlockers, onCheck }: {
+  asset: AiAssetVersion
+  canCheck: boolean
+  transitionBlockers: WorkflowReadiness['blockers']
+  onCheck: () => void
+}) {
+  const [result, setResult] = useState<WorkflowReadiness | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [error, setError] = useState('')
+  const workflow = asset.definition as WorkflowDefinition
+  async function check() {
+    if (!canCheck || checking) return
+    onCheck()
+    setChecking(true)
+    setError('')
+    setResult(null)
+    try {
+      setResult(await checkAiWorkflowReadiness(asset.id, asset.version))
+    } catch (cause) {
+      setResult(null)
+      setError(catalogErrorMessage(cause, 'Workflow readiness could not be checked.'))
+    } finally { setChecking(false) }
+  }
+  const dependencies = result?.dependencies
+  const displayBlockers = transitionBlockers.length ? transitionBlockers : result?.blockers ?? []
+  const nonPublishedVersion = asset.state !== 'published'
+  const inconsistentReadyResponse = result?.status === 'ready' && nonPublishedVersion
+  const isBlocked = transitionBlockers.length > 0 || result?.status === 'blocked' || inconsistentReadyResponse
+  const hasReadiness = result !== null || transitionBlockers.length > 0
+  return <section aria-label="Workflow operational readiness" className="mb-4 rounded-xl border border-[#E2E0DA] bg-[#F8F7F4] p-3.5">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#77758B]">Operational readiness</p>
+        <p className="mt-1 text-[10px] leading-4 text-[#777685]">Readiness is checked against this saved version. The model and provider are rechecked at execution.</p>
+      </div>
+      {canCheck && <Button onClick={() => { void check() }} disabled={checking}>{checking ? 'Checking…' : 'Check readiness'}</Button>}
+    </div>
+    {!canCheck && <p className="mt-2 text-[10px] text-[#898793]">Readiness checks are available to workspace owners and administrators.</p>}
+    {error && <p role="alert" className="mt-3 rounded-lg border border-[#E9C9C2] bg-[#FFF7F4] p-2.5 text-[10px] text-[#854F42]">{error}</p>}
+    {hasReadiness && <div className="mt-3 space-y-3">
+      <div className={`rounded-lg border px-3 py-2 ${isBlocked
+        ? 'border-[#E9C9C2] bg-[#FFF7F4] text-[#854F42]'
+        : 'border-[#D8E6DC] bg-[#EFF5F0] text-[#52715C]'}`}>
+        <p className="text-[11px] font-semibold">{isBlocked
+          ? nonPublishedVersion && !transitionBlockers.length ? 'Not published' : 'Blocked'
+          : 'Ready for execution'}</p>
+        <p className="mt-0.5 text-[9px] opacity-80">{result
+          ? `Checked ${formatDate(result.checkedAt)} · saved v${result.workflow?.version ?? asset.version}`
+          : `Publish blocked · saved v${asset.version}`}</p>
+      </div>
+      {inconsistentReadyResponse && <p role="alert" className="rounded-md border border-[#E9C9C2] bg-white px-2.5 py-2 text-[10px] text-[#854F42]">
+        Only a published workflow version can be marked ready for execution. This non-published version remains blocked.
+      </p>}
+      {result && <div className="grid gap-2 sm:grid-cols-4">
+        {([
+          ['Prompt pack', dependencies?.promptPack],
+          ['Reference set', dependencies?.referenceSet],
+          ['Blueprint', dependencies?.blueprint],
+        ] as const).map(([label, dependency]) => <div key={label} className="rounded-lg border border-[#E8E6E0] bg-white px-2.5 py-2 text-[9px]">
+          <p className="text-[#92909A]">{label}</p>
+          <p className="mt-0.5 font-medium text-[#4E4D59]">{dependency ? `${dependency.name} · v${dependency.version} · ${dependency.state}` : 'Not linked'}</p>
+        </div>)}
+        <div className="rounded-lg border border-[#E8E6E0] bg-white px-2.5 py-2 text-[9px]">
+          <p className="text-[#92909A]">Model</p>
+          <p className="mt-0.5 font-medium text-[#4E4D59]">{result.model
+            ? `${result.model.providerId} / ${result.model.modelId}`
+            : workflow.model.mode === 'auto' ? 'Auto · resolved at execution' : `${workflow.model.providerId} / ${workflow.model.modelId}`}</p>
+        </div>
+      </div>}
+      {displayBlockers.length > 0 && <div>
+        <p className="mb-1 text-[10px] font-semibold text-[#75483C]">Blockers</p>
+        <ul className="space-y-1">{displayBlockers.map((blocker, index) => <li key={`${blocker.code}:${index}`} className="rounded-md border border-[#E9C9C2] bg-white px-2.5 py-2 text-[10px] text-[#854F42]">
+          <span className="mr-1.5 font-mono text-[9px]">{blocker.code}</span>{blocker.message}
+        </li>)}</ul>
+      </div>}
+      <p className="text-[9px] text-[#92909A]">Linked dependencies use published exact versions; newer drafts do not change these pins.</p>
+    </div>}
+  </section>
+}
+
 function SummaryLine({ label, value }: { label: string; value: string }) {
   return <div><p className="text-[9px] text-[#9795A0]">{label}</p><p className="mt-0.5 break-words font-medium text-[#4E4D59]">{value}</p></div>
 }
@@ -718,7 +964,15 @@ function NoticeBanner({ notice, onDismiss }: { notice: Notice; onDismiss: () => 
     : notice.type === 'success' ? 'border-[#D9E4DD] bg-[#F0F5F1] text-[#4D6B56]'
       : 'border-[#DEDCE9] bg-[#F4F3FA] text-[#5F5C83]'
   return <div role={notice.type === 'error' ? 'alert' : 'status'} className={`mb-3 flex items-start justify-between gap-3 rounded-xl border px-3.5 py-3 text-[11px] leading-5 ${color}`}>
-    <p>{notice.text}</p><button type="button" onClick={onDismiss} aria-label="Dismiss message" className="rounded px-1 font-semibold hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">×</button>
+    <div className="min-w-0">
+      <p>{notice.text}</p>
+      {notice.blockers && notice.blockers.length > 0 && <ul className="mt-2 space-y-1">
+        {notice.blockers.map((blocker, index) => <li key={`${blocker.code}:${index}`} className="rounded-md border border-current/15 bg-white/70 px-2.5 py-1.5 text-[10px]">
+          <span className="mr-1.5 font-mono text-[9px]">{blocker.code}</span>{blocker.message}
+        </li>)}
+      </ul>}
+    </div>
+    <button type="button" onClick={onDismiss} aria-label="Dismiss message" className="rounded px-1 font-semibold hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">×</button>
   </div>
 }
 
@@ -730,12 +984,20 @@ function CatalogSkeleton() {
   </div>
 }
 
-function EditorDialog({ draft, isRevising, baseVersion, busy, assets, originalAsset, notice, onDismissNotice, onChange, onSubmit, onClose }: {
+function EditorDialog({ draft, isRevising, baseVersion, busy, assets, publishedVersions, versionsLoading, versionsError,
+  modelOptions, modelsLoading, modelsError, onRefreshModels, originalAsset, notice, onDismissNotice, onChange, onSubmit, onClose }: {
   draft: EditorDraft
   isRevising: boolean
   baseVersion?: number
   busy: boolean
   assets: AiAssetVersion[]
+  publishedVersions: AiAssetVersion[]
+  versionsLoading: boolean
+  versionsError: string
+  modelOptions: { providerId: string; modelId: string; label: string }[]
+  modelsLoading: boolean
+  modelsError: string
+  onRefreshModels: () => void
   originalAsset: AiAssetVersion | null
   notice: Notice | null
   onDismissNotice: () => void
@@ -755,11 +1017,14 @@ function EditorDialog({ draft, isRevising, baseVersion, busy, assets, originalAs
         </header>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4 sm:px-6">
           {notice && <NoticeBanner notice={notice} onDismiss={onDismissNotice} />}
+          {draft.kind === 'workflow' && <LocalWorkflowReadiness draft={draft} publishedVersions={publishedVersions} assets={assets} />}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name"><input autoFocus required className={inputClass} value={draft.name} maxLength={120} onChange={event => onChange({ ...draft, name: event.target.value })} placeholder={`Untitled ${kindTitles[draft.kind].toLowerCase()}`} /></Field>
             <Field label="Description" hint={`${draft.description.length}/1000`}><input className={inputClass} value={draft.description} maxLength={1000} onChange={event => onChange({ ...draft, description: event.target.value })} placeholder="Purpose and scope" /></Field>
           </div>
           <div className="border-t border-[#ECEAE5] pt-4"><DefinitionEditor draft={draft} assets={assets}
+            publishedVersions={publishedVersions} versionsLoading={versionsLoading} versionsError={versionsError}
+            modelOptions={modelOptions} modelsLoading={modelsLoading} modelsError={modelsError} onRefreshModels={onRefreshModels}
             promptBaseVersions={Object.fromEntries(originalAsset?.kind === 'prompt-pack'
               ? (originalAsset.definition as PromptPackDefinition).prompts.map(prompt => [prompt.id, prompt.version])
               : [])}
@@ -772,4 +1037,33 @@ function EditorDialog({ draft, isRevising, baseVersion, busy, assets, originalAs
       </form>
     </section>
   </div>
+}
+
+function LocalWorkflowReadiness({ draft, publishedVersions, assets }: {
+  draft: EditorDraft
+  publishedVersions: AiAssetVersion[]
+  assets: AiAssetVersion[]
+}) {
+  const data = draft.definition as WorkflowDefinition
+  const blockers: string[] = []
+  if (!data.capability.trim()) blockers.push('Add a workflow capability.')
+  if (!validateAiAssetInput({ kind: 'workflow', name: draft.name.trim() || 'Unsaved workflow',
+    description: draft.description, definition: data })) blockers.push('Resolve structural validation issues before saving.')
+  for (const key of ['promptPack', 'referenceSet', 'blueprint'] as const) {
+    const pin = data[key]
+    if (!pin) continue
+    const latest = assets.find(item => item.id === pin.id)
+    if (!latest || latest.state === 'archived'
+      || !publishedVersions.some(item => item.id === pin.id && item.version === pin.version))
+      blockers.push(`${key === 'promptPack' ? 'Prompt pack' : key === 'referenceSet' ? 'Reference set' : 'Blueprint'} pin ${pin.id} · v${pin.version} is not an available published version.`)
+  }
+  return <section aria-label="Local workflow readiness" className="rounded-xl border border-[#E2E0DA] bg-[#F8F7F4] p-3">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div><p className="text-[10px] font-semibold text-[#4A4955]">Local structural check · unsaved</p>
+        <p className="text-[9px] text-[#898793]">Save this workflow before a server readiness check. This is not an execution-ready result.</p></div>
+      <span className="rounded-full border border-[#E5E3DD] bg-white px-2 py-1 text-[9px] font-semibold text-[#777581]">Save first</span>
+    </div>
+    {blockers.length ? <ul className="mt-2 list-disc space-y-1 pl-4 text-[10px] text-[#854F42]">{blockers.map((message, index) => <li key={index}>{message}</li>)}</ul>
+      : <p className="mt-2 text-[10px] text-[#52715C]">No local structural blockers detected. Server readiness has not been checked.</p>}
+  </section>
 }

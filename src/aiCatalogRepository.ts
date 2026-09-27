@@ -13,6 +13,11 @@ import {
 } from './aiCatalogModel'
 import { getAccessContext } from './authSession'
 import { isCloudProjectMode } from './authorizedProjectService'
+import {
+  WORKFLOW_READINESS_BLOCKER_CODES,
+  type WorkflowReadiness,
+  type WorkflowReadinessBlockerCode,
+} from './workflowReadiness'
 
 const DB_NAME = 'docflow-ai-catalog'
 const DB_VERSION = 1
@@ -53,9 +58,18 @@ export type AiCatalogApiErrorCode =
   | 'INVALID_ACTION'
   | 'INVALID_JSON'
   | 'REQUEST_READ_FAILED'
+  | 'WORKFLOW_NOT_READY'
+  | 'CONNECTIONS_UNAVAILABLE'
+  | 'ENCRYPTION_UNAVAILABLE'
+  | 'READER_UNAVAILABLE'
 
 export class AiCatalogApiError extends Error {
-  constructor(readonly status: number, readonly code: AiCatalogApiErrorCode, message: string) {
+  constructor(
+    readonly status: number,
+    readonly code: AiCatalogApiErrorCode,
+    message: string,
+    readonly readinessBlockers: WorkflowReadiness['blockers'] = [],
+  ) {
     super(message)
     this.name = 'AiCatalogApiError'
   }
@@ -255,6 +269,8 @@ function mutationVersion(
   if (command.action === 'transition') {
     if (!validateAiTransition(current, command.state))
       throw new Error(`AI asset cannot transition from "${current.state}" to "${command.state}".`)
+    if (command.state === 'published' && current.kind === 'workflow')
+      throw new Error('Workflow publishing requires server-verified readiness; local catalog storage cannot verify provider connections.')
     return { ...current, version, state: command.state, createdAt, createdBy: userId, deleted: false }
   }
   if (!canTransitionAiVersion(current.state, 'archived'))
@@ -317,6 +333,10 @@ const SERVER_ERROR_MESSAGES: Partial<Record<AiCatalogApiErrorCode, string>> = {
   INVALID_ACTION: 'AI catalog action is not supported.',
   INVALID_JSON: 'AI catalog request must be valid JSON.',
   REQUEST_READ_FAILED: 'AI catalog request body could not be read.',
+  WORKFLOW_NOT_READY: 'Workflow readiness checks must pass before publishing.',
+  CONNECTIONS_UNAVAILABLE: 'Provider connection metadata could not be verified.',
+  ENCRYPTION_UNAVAILABLE: 'Connection encryption is not configured.',
+  READER_UNAVAILABLE: 'Secure provider connection storage is unavailable.',
   INVALID_ASSET: 'AI catalog asset definition is invalid.',
   INVALID_ID: 'AI asset ID is invalid.',
   INVALID_VERSION: 'Expected AI asset version is invalid.',
@@ -328,7 +348,9 @@ const SERVER_ERROR_MESSAGES: Partial<Record<AiCatalogApiErrorCode, string>> = {
   REQUEST_TOO_LARGE: 'AI catalog request exceeds the supported size limit.',
 }
 
-async function cloudRequest(command: AiCatalogCommand): Promise<Record<string, unknown>> {
+type WorkflowReadinessCommand = { action: 'readiness'; id: string; version: number; workspaceId: string }
+
+async function cloudRequest(command: AiCatalogCommand | WorkflowReadinessCommand): Promise<Record<string, unknown>> {
   let response: Response
   try {
     response = await fetch('/api/ai-catalog', {
@@ -353,9 +375,109 @@ async function cloudRequest(command: AiCatalogCommand): Promise<Record<string, u
       ? body.code as AiCatalogApiErrorCode
       : 'AI_CATALOG_UNAVAILABLE'
     throw new AiCatalogApiError(response.status, code,
-      SERVER_ERROR_MESSAGES[code] ?? 'AI catalog request failed.')
+      SERVER_ERROR_MESSAGES[code] ?? 'AI catalog request failed.', readSafeBlockers(body.blockers))
   }
   return body
+}
+
+function readSafeBlockers(value: unknown): WorkflowReadiness['blockers'] {
+  if (!Array.isArray(value) || value.length > 30) return []
+  const allowed = new Set<string>(WORKFLOW_READINESS_BLOCKER_CODES)
+  const blockers: WorkflowReadiness['blockers'] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const blocker = item as Record<string, unknown>
+    if (Object.keys(blocker).sort().join(',') !== 'code,message'
+      || typeof blocker.code !== 'string' || !allowed.has(blocker.code)
+      || typeof blocker.message !== 'string' || blocker.message.length > 240
+      || /[\x00-\x1f\x7f]/.test(blocker.message)) return []
+    blockers.push({ code: blocker.code as WorkflowReadinessBlockerCode, message: blocker.message })
+  }
+  return blockers
+}
+
+function readWorkflowReadiness(value: unknown): WorkflowReadiness {
+  const invalid = () => new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog server returned invalid workflow readiness.')
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalid()
+  const result = value as Record<string, unknown>
+  if (Object.keys(result).sort().join(',') !== 'blockers,checkedAt,dependencies,model,status,workflow'
+    || !['ready', 'blocked'].includes(String(result.status))
+    || typeof result.checkedAt !== 'string' || Number.isNaN(Date.parse(result.checkedAt))
+    || !Array.isArray(result.blockers)) throw invalid()
+  const readAssetMetadata = (item: unknown) => {
+    if (item === null) return true
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+    const metadata = item as Record<string, unknown>
+    return Object.keys(metadata).sort().join(',') === 'id,name,state,version'
+      && typeof metadata.id === 'string' && SAFE_ID.test(metadata.id)
+      && Number.isSafeInteger(metadata.version) && Number(metadata.version) > 0
+      && typeof metadata.name === 'string' && metadata.name.length <= 120
+      && ['draft', 'test', 'published', 'archived'].includes(String(metadata.state))
+  }
+  const dependencies = result.dependencies
+  if (!dependencies || typeof dependencies !== 'object' || Array.isArray(dependencies)
+    || Object.keys(dependencies).sort().join(',') !== 'blueprint,promptPack,referenceSet') throw invalid()
+  const deps = dependencies as Record<string, unknown>
+  if (!['promptPack', 'referenceSet', 'blueprint'].every(key => readAssetMetadata(deps[key]))) throw invalid()
+  let workflow: WorkflowReadiness['workflow'] = null
+  if (result.workflow !== null) {
+    if (!result.workflow || typeof result.workflow !== 'object' || Array.isArray(result.workflow)) throw invalid()
+    const item = result.workflow as Record<string, unknown>
+    if (Object.keys(item).sort().join(',') !== 'id,version'
+      || typeof item.id !== 'string' || !SAFE_ID.test(item.id)
+      || !Number.isSafeInteger(item.version) || Number(item.version) < 1) throw invalid()
+    workflow = { id: item.id, version: item.version as number }
+  }
+  let model: WorkflowReadiness['model'] = null
+  if (result.model !== null) {
+    if (!result.model || typeof result.model !== 'object' || Array.isArray(result.model)) throw invalid()
+    const item = result.model as Record<string, unknown>
+    if (Object.keys(item).sort().join(',') !== 'modelId,providerId'
+      || typeof item.providerId !== 'string' || !SAFE_ID.test(item.providerId)
+      || typeof item.modelId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(item.modelId)) throw invalid()
+    model = { providerId: item.providerId, modelId: item.modelId }
+  }
+  const blockers = result.blockers.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw invalid()
+    const blocker = item as Record<string, unknown>
+    if (Object.keys(blocker).sort().join(',') !== 'code,message'
+      || typeof blocker.code !== 'string' || !/^[A-Z0-9_]{1,80}$/.test(blocker.code)
+      || typeof blocker.message !== 'string' || blocker.message.length > 240
+      || /[\x00-\x1f\x7f]/.test(blocker.message)) throw invalid()
+    return { code: blocker.code as WorkflowReadinessBlockerCode, message: blocker.message }
+  })
+  if ((result.status === 'ready') !== (blockers.length === 0)) throw invalid()
+  if (result.status === 'ready'
+    && (!workflow || !model
+      || !['promptPack', 'referenceSet', 'blueprint'].every(key => {
+        const item = deps[key] as Record<string, unknown> | null
+        return item?.state === 'published'
+      }))) throw invalid()
+  return {
+    status: result.status as WorkflowReadiness['status'],
+    workflow,
+    dependencies: {
+      promptPack: deps.promptPack as WorkflowReadiness['dependencies']['promptPack'],
+      referenceSet: deps.referenceSet as WorkflowReadiness['dependencies']['referenceSet'],
+      blueprint: deps.blueprint as WorkflowReadiness['dependencies']['blueprint'],
+    },
+    model,
+    checkedAt: new Date(result.checkedAt).toISOString(),
+    blockers,
+  }
+}
+
+/** Requests a server-side, read-only evaluation for the exact workflow snapshot. */
+export async function checkAiWorkflowReadiness(id: string, version: number): Promise<WorkflowReadiness> {
+  const { workspaceId } = assertValidContext()
+  if (!SAFE_ID.test(id) || !Number.isSafeInteger(version) || version < 1)
+    throw new AiCatalogApiError(400, 'INVALID_REQUEST', 'Workflow ID and version are invalid.')
+  if (!isCloudProjectMode())
+    throw new Error('Workflow readiness requires the cloud catalog; no local fallback was used.')
+  const body = await cloudRequest({ action: 'readiness', id, version, workspaceId })
+  if (Object.keys(body).length !== 1 || !Object.prototype.hasOwnProperty.call(body, 'readiness'))
+    throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog server returned invalid workflow readiness.')
+  return readWorkflowReadiness(body.readiness)
 }
 
 async function cloudList(): Promise<AiAssetVersion[]> {
