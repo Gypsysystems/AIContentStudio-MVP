@@ -914,15 +914,13 @@ function WorkflowSteps({
 }
 
 // ── Top Bar ───────────────────────────────────────────────────────────────────
-function TopBar({ screen, onNav, onAdministration, onNewProject, projectName, contentType, isProject, canCreateProject, canEditProjectSettings, settingsReturnTo, onSettingsReturn, onDiagnostics, onHistory, saveStatus, onRetrySave, stageStatuses }: {
+function TopBar({ screen, onNav, onAdministration, projectName, contentType, isProject, canEditProjectSettings, settingsReturnTo, onSettingsReturn, onDiagnostics, onHistory, saveStatus, onRetrySave, stageStatuses }: {
   screen: Screen
   onNav: (s: Screen) => void
   onAdministration: () => void
-  onNewProject: () => void
   projectName: string
   contentType: string
   isProject: boolean
-  canCreateProject: boolean
   canEditProjectSettings: boolean
   settingsReturnTo: Screen
   onSettingsReturn: () => Promise<unknown>
@@ -1029,13 +1027,6 @@ function TopBar({ screen, onNav, onAdministration, onNewProject, projectName, co
           {screen === 'create' && !hasProject && (
             <button type="button" onClick={() => onNav('dashboard')} className="min-h-8 rounded-md border border-[#E2DED7] px-3 text-[11px] font-medium text-[#585866] hover:bg-[#F4F2EE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
               All projects
-            </button>
-          )}
-          {screen === 'dashboard' && (
-            <button type="button" onClick={onNewProject} disabled={!canCreateProject}
-              title={!canCreateProject ? 'Workspace create access is required' : undefined}
-              className="min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
-              New project
             </button>
           )}
           {cloudAccount && (
@@ -1301,7 +1292,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
               {restoreBusy && !restoreCandidate ? 'Checking backup…' : 'Restore backup'}
             </button>
           </>}
-          {!readOnlyViewer && <button
+          {!readOnlyViewer && !loading && projects.length > 0 && <button
             onClick={onNewProject}
             className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-4 py-2 rounded-lg transition-colors"
           >
@@ -17124,11 +17115,9 @@ export default function App() {
         screen={screen}
         onNav={navigate}
         onAdministration={openAdministration}
-        onNewProject={startNewProject}
         projectName={displayName}
         contentType={projectMeta.contentType}
         isProject={!!projectId}
-        canCreateProject={getAdministrationAccess(getAccessContext()).workspace.create}
         canEditProjectSettings={getAdministrationAccess(getAccessContext(), projectId ? projectOwnershipRef.current : null).project?.write === true}
         onHistory={openHistory}
         settingsReturnTo={settingsReturnTo}

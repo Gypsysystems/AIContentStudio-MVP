@@ -250,7 +250,7 @@ test('dashboard New project starts a new project even when an older project rema
   await page.getByTestId('topbar-administration').click()
   await page.getByTestId('administration-workspace').getByRole('button', { name: 'Back to workspace' }).click()
   await page.getByRole('button', { name: 'Content Studio home' }).click()
-  await page.getByRole('button', { name: 'New project', exact: true }).click()
+  await page.getByRole('button', { name: 'New Project', exact: true }).click()
   await expect(page.getByText('Step 1 — Project Details')).toBeVisible()
   await expect(page.getByText('Update this project’s name and document details.')).toHaveCount(0)
   expect(await page.evaluate(async () => {
