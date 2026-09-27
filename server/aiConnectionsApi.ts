@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto'
 import { Client } from 'pg'
 import type { ConnectionCommand, ConnectionMetadata, ConnectionState } from '../src/aiConnectionModel'
 
@@ -221,6 +221,19 @@ async function session(url: string, anonKey: string, token: string, workspaceId:
     return fail(503, 'STORAGE_RESPONSE_INVALID', 'Membership lookup failed')
   return { userId: user.id, workspaceId: first.workspace_id, role: String(first.role) }
 }
+export function readerSslConfig(raw: string | undefined): { rejectUnauthorized: true; ca?: string } {
+  if (raw === undefined) return { rejectUnauthorized: true }
+  const ca = raw.trim()
+  if (!/^-----BEGIN CERTIFICATE-----\r?\n(?:[A-Za-z0-9+/=]+\r?\n)+-----END CERTIFICATE-----$/.test(ca))
+    return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
+  try {
+    if (!new X509Certificate(ca).ca)
+      return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
+  } catch {
+    return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
+  }
+  return { rejectUnauthorized: true, ca }
+}
 export async function readEncryptedFromDatabase(workspaceId: string, providerId: string): Promise<Encrypted | null> {
   const raw = process.env.AI_CONNECTION_DATABASE_URL
   if (!raw) return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
@@ -233,7 +246,7 @@ export async function readEncryptedFromDatabase(workspaceId: string, providerId:
       || !/^ai_connection_reader(?:\.[a-z0-9]+)?$/.test(url.username))
       return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
   } catch { return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured') }
-  const client = new Client({ connectionString: raw, ssl: { rejectUnauthorized: true }, connectionTimeoutMillis: 5000,
+  const client = new Client({ connectionString: raw, ssl: readerSslConfig(process.env.AI_CONNECTION_DATABASE_CA), connectionTimeoutMillis: 5000,
     query_timeout: 5000, statement_timeout: 5000 })
   try {
     await client.connect()

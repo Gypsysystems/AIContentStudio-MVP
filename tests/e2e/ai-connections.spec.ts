@@ -1,10 +1,12 @@
 import { expect, test } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
+import { rootCertificates } from 'node:tls'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { Client } from 'pg'
 import {
   ConnectionError, decryptCredential, encryptCredential, encryptionKey, executeConnections,
-  handleAiConnections, readEncryptedFromDatabase, sendConnectionError, type ConnectionDependencies,
+  handleAiConnections, readEncryptedFromDatabase, readerSslConfig, sendConnectionError, type ConnectionDependencies,
 } from '../../server/aiConnectionsApi'
 
 const workspaceId = 'workspace-one'
@@ -88,6 +90,55 @@ test('restricted database reader rejects TLS downgrade URL options before connec
   } finally {
     if (original === undefined) delete process.env.AI_CONNECTION_DATABASE_URL
     else process.env.AI_CONNECTION_DATABASE_URL = original
+  }
+})
+
+test('reader trusts a valid PEM CA without disabling TLS verification and defaults to verified system trust', () => {
+  const fixtureCa = rootCertificates[0]
+  const configured = readerSslConfig(fixtureCa)
+  expect(configured.rejectUnauthorized).toBe(true)
+  expect(configured.ca === fixtureCa.trim()).toBe(true)
+  const client = new Client({ connectionString: 'postgresql://ai_connection_reader:fixture-password@localhost:5432/fixture',
+    ssl: configured })
+  const effectiveSsl = client.connectionParameters.ssl as { rejectUnauthorized: boolean; ca: string }
+  expect(effectiveSsl.rejectUnauthorized).toBe(true)
+  expect(effectiveSsl.ca === fixtureCa.trim()).toBe(true)
+  const defaultTrust = readerSslConfig(undefined)
+  expect(defaultTrust.rejectUnauthorized).toBe(true)
+  expect(Object.hasOwn(defaultTrust, 'ca')).toBe(false)
+})
+
+test('malformed or non-certificate CA fails closed without disclosing secret material', async () => {
+  const fixtureCa = rootCertificates[0]
+  for (const invalid of ['', 'not-a-certificate', `${fixtureCa}\nextra`, fixtureCa.replace('CERTIFICATE', 'PRIVATE KEY')]) {
+    expect(() => readerSslConfig(invalid)).toThrowError(ConnectionError)
+    try { readerSslConfig(invalid) } catch (error) {
+      expect(error).toMatchObject({ status: 503, code: 'READER_UNAVAILABLE' })
+    }
+  }
+
+  const previousUrl = process.env.AI_CONNECTION_DATABASE_URL
+  const previousCa = process.env.AI_CONNECTION_DATABASE_CA
+  const fixtureUrl = 'postgresql://ai_connection_reader:fixture-password@localhost:5432/fixture'
+  const fixtureSecret = 'fixture-private-material'
+  process.env.AI_CONNECTION_DATABASE_URL = fixtureUrl
+  process.env.AI_CONNECTION_DATABASE_CA = fixtureSecret
+  const response = {
+    statusCode: 200, headersSent: false, body: '',
+    setHeader() {},
+    end(body: string) { this.body = body; this.headersSent = true },
+  } as unknown as ServerResponse & { body: string }
+  try {
+    await readEncryptedFromDatabase(workspaceId, providerId).catch(error => sendConnectionError(response, error))
+    expect(response.statusCode).toBe(503)
+    expect(JSON.parse(response.body)).toMatchObject({ code: 'READER_UNAVAILABLE' })
+    for (const secret of [fixtureUrl, 'fixture-password', fixtureSecret])
+      expect(response.body.includes(secret)).toBe(false)
+  } finally {
+    if (previousUrl === undefined) delete process.env.AI_CONNECTION_DATABASE_URL
+    else process.env.AI_CONNECTION_DATABASE_URL = previousUrl
+    if (previousCa === undefined) delete process.env.AI_CONNECTION_DATABASE_CA
+    else process.env.AI_CONNECTION_DATABASE_CA = previousCa
   }
 })
 
