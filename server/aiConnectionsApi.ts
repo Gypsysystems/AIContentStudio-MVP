@@ -223,11 +223,22 @@ async function session(url: string, anonKey: string, token: string, workspaceId:
 }
 export function readerSslConfig(raw: string | undefined): { rejectUnauthorized: true; ca?: string } {
   if (raw === undefined) return { rejectUnauthorized: true }
-  const ca = raw.trim()
-  if (!/^-----BEGIN CERTIFICATE-----\r?\n(?:[A-Za-z0-9+/=]+\r?\n)+-----END CERTIFICATE-----$/.test(ca))
+  const begin = '-----BEGIN CERTIFICATE-----'
+  const end = '-----END CERTIFICATE-----'
+  const match = raw.match(/^\s*-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----\s*$/)
+  if (!match || raw.indexOf(begin) !== raw.lastIndexOf(begin) || raw.indexOf(end) !== raw.lastIndexOf(end)
+    || !/^[A-Za-z0-9+/=\s]+$/.test(match[1]))
     return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
+  const encoded = match[1].replace(/\s/g, '')
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))
+    return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
+  const bytes = Buffer.from(encoded, 'base64')
+  if (bytes.toString('base64') !== encoded)
+    return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
+  const ca = `${begin}\n${encoded.match(/.{1,64}/g)!.join('\n')}\n${end}`
   try {
-    if (!new X509Certificate(ca).ca)
+    const certificate = new X509Certificate(ca)
+    if (!certificate.ca || !certificate.raw.equals(bytes))
       return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')
   } catch {
     return fail(503, 'READER_UNAVAILABLE', 'Secure connection reader is not configured')

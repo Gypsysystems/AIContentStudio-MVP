@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, X509Certificate } from 'node:crypto'
 import { rootCertificates } from 'node:tls'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -93,28 +93,41 @@ test('restricted database reader rejects TLS downgrade URL options before connec
   }
 })
 
-test('reader trusts a valid PEM CA without disabling TLS verification and defaults to verified system trust', () => {
+test('reader normalizes canonical and whitespace-collapsed PEM with strict TLS and defaults to system trust', () => {
   const fixtureCa = rootCertificates[0]
-  const configured = readerSslConfig(fixtureCa)
-  expect(configured.rejectUnauthorized).toBe(true)
-  expect(configured.ca === fixtureCa.trim()).toBe(true)
+  const canonical = readerSslConfig(fixtureCa)
+  const collapsed = readerSslConfig(fixtureCa.replace(/\r?\n/g, ' '))
+  const padded = readerSslConfig(` \n${fixtureCa.replace(/\r?\n/g, ' ')}\t `)
+  for (const configured of [canonical, collapsed, padded]) {
+    expect(configured.rejectUnauthorized).toBe(true)
+    expect(configured.ca !== undefined).toBe(true)
+    expect(new X509Certificate(configured.ca!).fingerprint256 === new X509Certificate(fixtureCa).fingerprint256).toBe(true)
+    expect(configured.ca === canonical.ca).toBe(true)
+  }
   const client = new Client({ connectionString: 'postgresql://ai_connection_reader:fixture-password@localhost:5432/fixture',
-    ssl: configured })
+    ssl: collapsed })
   const effectiveSsl = client.connectionParameters.ssl as { rejectUnauthorized: boolean; ca: string }
   expect(effectiveSsl.rejectUnauthorized).toBe(true)
-  expect(effectiveSsl.ca === fixtureCa.trim()).toBe(true)
+  expect(effectiveSsl.ca === canonical.ca).toBe(true)
   const defaultTrust = readerSslConfig(undefined)
   expect(defaultTrust.rejectUnauthorized).toBe(true)
   expect(Object.hasOwn(defaultTrust, 'ca')).toBe(false)
 })
 
-test('malformed or non-certificate CA fails closed without disclosing secret material', async () => {
+test('malformed, ambiguous and extra-text CA fails closed without disclosing secret material', async () => {
   const fixtureCa = rootCertificates[0]
-  for (const invalid of ['', 'not-a-certificate', `${fixtureCa}\nextra`, fixtureCa.replace('CERTIFICATE', 'PRIVATE KEY')]) {
-    expect(() => readerSslConfig(invalid)).toThrowError(ConnectionError)
-    try { readerSslConfig(invalid) } catch (error) {
-      expect(error).toMatchObject({ status: 503, code: 'READER_UNAVAILABLE' })
-    }
+  const begin = '-----BEGIN CERTIFICATE-----'
+  const end = '-----END CERTIFICATE-----'
+  for (const invalid of [
+    '', 'not-a-certificate', `extra ${fixtureCa}`, `${fixtureCa}\nextra`,
+    `${fixtureCa}\n${fixtureCa}`, fixtureCa.replace('CERTIFICATE', 'PRIVATE KEY'),
+    `${begin}\nnot@base64\n${end}`, `${begin}   ${end}`,
+    fixtureCa.replace(end, `${end}${end}`),
+  ]) {
+    let error: unknown
+    try { readerSslConfig(invalid) } catch (caught) { error = caught }
+    expect(error).toBeInstanceOf(ConnectionError)
+    expect(error).toMatchObject({ status: 503, code: 'READER_UNAVAILABLE' })
   }
 
   const previousUrl = process.env.AI_CONNECTION_DATABASE_URL
