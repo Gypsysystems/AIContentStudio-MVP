@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto'
 import { Client } from 'pg'
 import type { ConnectionCommand, ConnectionMetadata, ConnectionState } from '../src/aiConnectionModel'
+import { discoverProviderModels, type ProviderDiscoveryResult } from './aiProviderDiscovery'
 
 type Json = Record<string, unknown>
 type Encrypted = { workspaceId: string; providerId: string; revision: number; ciphertext: Buffer; nonce: Buffer; tag: Buffer; keyVersion: string }
@@ -76,7 +77,7 @@ function metadata(value: unknown, workspaceId: string, key: Buffer): ConnectionM
   return safe
 }
 function validate(input: unknown): asserts input is ConnectionCommand {
-  if (!object(input) || !['list', 'create', 'replace', 'test', 'delete'].includes(String(input.action)))
+  if (!object(input) || !['list', 'create', 'replace', 'test', 'discover', 'delete'].includes(String(input.action)))
     return fail(400, 'INVALID_REQUEST', 'Invalid connection action')
   const action = input.action
   const allowed = action === 'list' ? ['action']
@@ -96,11 +97,46 @@ export type ConnectionDependencies = {
   command: (args: Json) => Promise<unknown>
   readEncrypted: (workspaceId: string, providerId: string) => Promise<Encrypted | null>
   verify: (providerId: string, credential: string) => Promise<'verified' | 'failed' | 'unavailable'>
+  discover?: (providerId: string, credential: string) => Promise<ProviderDiscoveryResult>
+}
+export function discoveryTestState(result: ProviderDiscoveryResult): 'verified' | 'failed' | 'unavailable' {
+  return result.state === 'available' ? 'verified' : result.state === 'auth-failed' ? 'failed' : 'unavailable'
 }
 export async function executeConnections(input: unknown, workspaceId: string, role: string, key: Buffer, deps: ConnectionDependencies): Promise<Json> {
   validate(input)
   if (input.action !== 'list' && role !== 'owner' && role !== 'admin')
     return fail(403, 'FORBIDDEN', 'Owner or admin role required')
+  if (input.action === 'discover') {
+    const row = await deps.readEncrypted(workspaceId, input.providerId)
+    if (!row) return fail(404, 'NOT_FOUND', 'Connection not found')
+    if (row.workspaceId !== workspaceId || row.providerId !== input.providerId)
+      return fail(503, 'STORAGE_RESPONSE_INVALID', 'Connection storage returned another workspace')
+    if (row.revision !== input.expectedRevision)
+      return fail(409, 'REVISION_CONFLICT', 'Connection changed; reload before retrying')
+    const credential = decryptCredential(key, row)
+    let result: ProviderDiscoveryResult = { state: 'unavailable', models: [] }
+    try {
+      if (deps.discover) result = await deps.discover(input.providerId, credential)
+    } catch { /* Never return a provider error or body to the browser. */ }
+    if (result.state === 'available') {
+      if (!Array.isArray(result.models) || result.models.length > 1000
+        || result.models.some(model => !model || typeof model !== 'object'
+          || Object.keys(model).sort().join(',') !== 'id,label,providerId'
+          || model.providerId !== input.providerId
+          || typeof model.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(model.id)
+          || typeof model.label !== 'string' || !model.label.trim() || model.label.length > 200
+          || /[\x00-\x1f\x7f]/.test(model.label)
+          || model.id.includes(credential) || model.label.includes(credential))
+        || new Set(result.models.map(model => model.id)).size !== result.models.length)
+        return fail(503, 'STORAGE_RESPONSE_INVALID', 'Model discovery returned invalid data')
+      return { providerId: input.providerId, revision: row.revision,
+        discovery: { state: 'available', models: result.models.map(model => ({
+          providerId: model.providerId, id: model.id, label: model.label,
+        })), discoveredAt: new Date().toISOString() } }
+    }
+    return { providerId: input.providerId, revision: row.revision,
+      discovery: { state: result.state === 'unsupported' ? 'unsupported' : 'unavailable', models: [], discoveredAt: null } }
+  }
   const base: Json = { p_action: input.action, p_workspace_id: workspaceId }
   if (input.action !== 'list') base.p_provider_id = input.providerId
   if (input.action !== 'list' && input.action !== 'create') base.p_expected_revision = input.expectedRevision
@@ -312,9 +348,11 @@ export async function handleAiConnections(request: IncomingMessage, response: Se
   const result = await executeConnections(commandInput, workspaceId, role, key, {
     command: args => supabase(url, anonKey, token, '/rest/v1/rpc/ai_connection_command', args),
     readEncrypted: readEncryptedFromDatabase,
-    // No adapter is configured in this provider-neutral batch. Never pretend a key
-    // was verified or call an arbitrary destination supplied by the browser.
-    verify: async () => 'unavailable',
+    discover: discoverProviderModels,
+    verify: async (providerId, credential) => {
+      const result = await discoverProviderModels(providerId, credential)
+      return discoveryTestState(result)
+    },
   })
   response.statusCode = 200
   response.setHeader('Content-Type', 'application/json; charset=utf-8')

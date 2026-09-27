@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import type { ProjectAccessContext } from '../ownership'
-import type { ConnectionMetadata } from '../aiConnectionModel'
-import { ConnectionApiError, createConnection, deleteConnection, listConnections, replaceConnection, testConnection } from '../aiConnectionRepository'
+import type { ConnectionDiscovery, ConnectionMetadata } from '../aiConnectionModel'
+import { ConnectionApiError, createConnection, deleteConnection, discoverModels, listConnections, replaceConnection, testConnection } from '../aiConnectionRepository'
 import { isCloudProjectMode } from '../authorizedProjectService'
 
 type Props = { mode: 'local-dev' | 'cloud'; context: ProjectAccessContext }
@@ -20,6 +20,8 @@ export default function Connections({ mode, context }: Props) {
   const cloudEnabled = mode === 'cloud' || isCloudProjectMode()
   const canManage = context.membership.role === 'owner' || context.membership.role === 'admin'
   const [connections, setConnections] = useState<ConnectionMetadata[]>([])
+  const [discoveries, setDiscoveries] = useState<Record<string, ConnectionDiscovery>>({})
+  const [discovering, setDiscovering] = useState<string | null>(null)
   const [loading, setLoading] = useState(cloudEnabled)
   const [loadError, setLoadError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -34,6 +36,7 @@ export default function Connections({ mode, context }: Props) {
   const refresh = useCallback(async () => {
     if (!cloudEnabled) return
     const request = ++sequence.current
+    setDiscoveries({})
     setLoading(true)
     setLoadError('')
     try {
@@ -62,6 +65,12 @@ export default function Connections({ mode, context }: Props) {
       const result = selected
         ? await replaceConnection(selected.providerId, selected.revision, secret)
         : await createConnection(providerId.trim(), secret)
+      sequence.current += 1
+      setDiscoveries(items => {
+        const next = { ...items }
+        delete next[result.providerId]
+        return next
+      })
       setConnections(items => [...items.filter(item => item.providerId !== result.providerId), result].sort((a, b) => a.providerId.localeCompare(b.providerId)))
       setNotice(`${result.providerId} saved. The credential has not been tested.`)
       setProviderId(''); setReplacing(null)
@@ -77,15 +86,37 @@ export default function Connections({ mode, context }: Props) {
         setConnections(items => items.map(value => value.providerId === item.providerId ? result : value))
         setNotice(result.state === 'verified' ? `${item.providerId} verified.`
           : result.state === 'failed' ? `${item.providerId} failed its credential test.`
-            : `${item.providerId} could not be tested: no provider test adapter is configured.`)
+            : `${item.providerId} could not be tested. The provider may be unsupported or temporarily unavailable.`)
       } else {
         await deleteConnection(item.providerId, item.revision)
+        sequence.current += 1
+        setDiscoveries(items => {
+          const next = { ...items }
+          delete next[item.providerId]
+          return next
+        })
         setConnections(items => items.filter(value => value.providerId !== item.providerId))
         setDeleting(null); setReplacing(null); setCredential('')
         setNotice(`${item.providerId} was removed from this workspace. Revoke the key separately at the provider if needed.`)
       }
     } catch (cause) { setError(message(cause)) }
     finally { setBusy(false) }
+  }
+  async function discover(item: ConnectionMetadata) {
+    if (!canManage || busy || loading || loadError) return
+    const request = sequence.current
+    setBusy(true); setDiscovering(item.providerId); setError('')
+    setDiscoveries(items => {
+      const next = { ...items }
+      delete next[item.providerId]
+      return next
+    })
+    try {
+      const result = await discoverModels(item.providerId, item.revision)
+      if (request === sequence.current) setDiscoveries(items => ({ ...items, [item.providerId]: result }))
+    } catch (cause) {
+      if (request === sequence.current) setError(message(cause))
+    } finally { setBusy(false); setDiscovering(null) }
   }
 
   return <section aria-labelledby="connections-title" className="rounded-2xl border border-[#E2E0DA] bg-[#FCFBF9] p-5 sm:p-7">
@@ -101,7 +132,7 @@ export default function Connections({ mode, context }: Props) {
       <div className="mt-4 flex items-center gap-3">
         <button type="button" className={button} onClick={() => { void refresh() }} disabled={loading || busy}>Refresh connections</button>
         {loading && <span role="status" className="text-[11px] text-[#747381]">Loading connections…</span>}
-        {busy && <span role="status" className="text-[11px] text-[#747381]">Saving connection change…</span>}
+        {busy && <span role="status" className="text-[11px] text-[#747381]">{discovering ? `Discovering models for ${discovering}…` : 'Saving connection change…'}</span>}
       </div>
       {loadError ? <p role="alert" className="mt-4 rounded-lg bg-[#FFF3F0] p-3 text-[11px] text-[#874E42]">Connections could not be loaded: {loadError}. Retry loading before making changes.</p> : <>
         {notice && <p role="status" className="mt-4 rounded-lg bg-[#EFF5F0] p-3 text-[11px] text-[#44674E]">{notice}</p>}
@@ -114,8 +145,22 @@ export default function Connections({ mode, context }: Props) {
           </div>{canManage && <div className="flex flex-wrap gap-2">
             <button className={button} type="button" disabled={busy || loading} onClick={() => { setReplacing(item.providerId); setCredential(''); setDeleting(null) }}>Replace credential</button>
             <button className={button} type="button" disabled={busy || loading} onClick={() => { void act(item, 'test') }}>Test connection</button>
+            <button className={button} type="button" disabled={busy || loading} onClick={() => { void discover(item) }}>Discover models</button>
             <button className={button} type="button" disabled={busy || loading} onClick={() => setDeleting(item.providerId)}>Delete</button>
           </div>}</div>
+          {canManage && discoveries[item.providerId]?.revision === item.revision && (() => {
+            const result = discoveries[item.providerId].discovery
+            return <div className="mt-3 border-t border-[#E8E6E0] pt-3 text-[11px] text-[#555460]">
+              {result.state === 'available' ? <>
+                <p className="font-semibold">{result.models.length} {result.models.length === 1 ? 'model' : 'models'} discovered · {new Date(result.discoveredAt).toLocaleString()}</p>
+                {result.models.length === 0 ? <p className="mt-2">The provider returned no models.</p>
+                  : <ul className="mt-2 max-h-48 space-y-1 overflow-auto">{result.models.map(model =>
+                    <li key={model.id} className="break-all"><span className="font-medium">{model.label}</span> <span className="text-[#777685]">({model.id})</span></li>)}</ul>}
+              </> : <p>{result.state === 'unsupported'
+                ? 'Built-in discovery is not configured for this provider.'
+                : 'Models could not be retrieved. No credential was exposed.'}</p>}
+            </div>
+          })()}
           {canManage && deleting === item.providerId && <div className="mt-3 flex items-center gap-3 text-[11px]">
             <span>Remove the stored credential? Provider-side revocation is separate.</span>
             <button type="button" className={button} disabled={busy} onClick={() => { void act(item, 'delete') }}>Confirm delete</button>
@@ -127,12 +172,13 @@ export default function Connections({ mode, context }: Props) {
           {!replacing && <label className="block text-[11px] text-[#555460]">Provider ID
             <input className="mt-1 block w-full rounded-lg border border-[#DCDAD4] bg-white p-2 text-[12px]" required maxLength={90} pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={providerId} onChange={event => setProviderId(event.target.value)} />
           </label>}
+          {!replacing && <p className="text-[10px] text-[#898793]">Built-in discovery supports openai, anthropic, and google. Custom provider IDs can be stored, but their test and discovery may be unavailable.</p>}
           <label className="block text-[11px] text-[#555460]">Credential
             <input className="mt-1 block w-full rounded-lg border border-[#DCDAD4] bg-white p-2 text-[12px]" type="password" required autoComplete="new-password" maxLength={4096} value={credential} onChange={event => setCredential(event.target.value)} />
           </label>
           <div className="flex gap-2"><button type="submit" className={button} disabled={busy || !credential.trim()}>{replacing ? 'Save replacement' : 'Save connection'}</button>
             {replacing && <button type="button" className={button} onClick={() => { setReplacing(null); setCredential('') }}>Cancel</button>}</div>
-          <p className="text-[10px] text-[#898793]">Saving does not verify a provider. An unsupported test reports unavailable, never connected.</p>
+          <p className="text-[10px] text-[#898793]">Saving does not verify a provider. Discovered models are temporary; rediscover after reloading.</p>
         </form>}
         {!canManage && <p className="mt-5 text-[11px] text-[#747381]">Read-only access. Owners and administrators manage credentials.</p>}
       </>}

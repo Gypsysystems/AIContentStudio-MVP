@@ -70,7 +70,7 @@ test('cloud editor and viewer only see safe metadata; a failed load is not an em
   await page.goto('/')
   await enter(page, 'editor')
   await expect(page.getByText('Configured · untested', { exact: false }).first()).toBeVisible()
-  for (const name of ['Save connection', 'Test connection', 'Replace credential', 'Delete']) {
+  for (const name of ['Save connection', 'Test connection', 'Discover models', 'Replace credential', 'Delete']) {
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
   }
   await expect(page.getByLabel('Credential')).toHaveCount(0)
@@ -81,4 +81,86 @@ test('cloud editor and viewer only see safe metadata; a failed load is not an em
   await page.getByRole('button', { name: 'Refresh connections' }).click()
   await expect(page.getByRole('alert')).toContainText('Connections could not be loaded')
   await expect(page.getByText('No connection record', { exact: false })).toHaveCount(0)
+})
+
+test('owners discover ephemeral models, see loading and safe states, without rendering credentials', async ({ page }) => {
+  const requests: Record<string, unknown>[] = []
+  let state: 'available' | 'unsupported' | 'unavailable' = 'available'
+  let release: (() => void) | undefined
+  let signalStarted: (() => void) | undefined
+  const started = new Promise<void>(resolve => { signalStarted = resolve })
+  let hold = true
+  await page.route('**/api/ai-connections', async route => {
+    const input = route.request().postDataJSON() as Record<string, unknown>
+    requests.push(input)
+    if (input.action === 'list') return route.fulfill({ json: { connections: [metadata('openai', 1, 'untested')] } })
+    if (input.action === 'discover') {
+      if (hold) await new Promise<void>(resolve => { release = resolve; signalStarted?.() })
+      return route.fulfill({ json: { providerId: 'openai', revision: 1, discovery: state === 'available'
+        ? { state, models: [{ providerId: 'openai', id: 'gpt-4.1', label: 'GPT 4.1' }], discoveredAt: '2026-09-26T12:00:00.000Z' }
+        : { state, models: [], discoveredAt: null } } })
+    }
+    return route.abort()
+  })
+  await page.goto('/')
+  await enter(page, 'owner')
+  await page.getByRole('button', { name: 'Discover models' }).click()
+  await started
+  await expect(page.getByText('Discovering models for openai…')).toBeVisible()
+  release?.()
+  await expect(page.getByText('1 model discovered', { exact: false })).toBeVisible()
+  await expect(page.getByText('GPT 4.1')).toBeVisible()
+  await expect(page.getByText('(gpt-4.1)')).toBeVisible()
+  expect(requests.find(request => request.action === 'discover')).toEqual({
+    action: 'discover', workspaceId, providerId: 'openai', expectedRevision: 1,
+  })
+  await expect(page.getByTestId('ai-control-center')).not.toContainText('fixture-private-key')
+  hold = false
+  state = 'unsupported'
+  await page.getByRole('button', { name: 'Discover models' }).click()
+  await expect(page.getByText('Built-in discovery is not configured for this provider.')).toBeVisible()
+  await expect(page.getByText('GPT 4.1')).toHaveCount(0)
+  state = 'unavailable'
+  await page.getByRole('button', { name: 'Discover models' }).click()
+  await expect(page.getByText('Models could not be retrieved. No credential was exposed.')).toBeVisible()
+})
+
+test('browser rejects unsafe, foreign, duplicate and malformed discovery responses', async ({ page }) => {
+  let response: unknown = null
+  await page.route('**/api/ai-connections', route => {
+    const input = route.request().postDataJSON() as { action: string }
+    return route.fulfill({ json: input.action === 'list'
+      ? { connections: [metadata('openai', 1, 'untested')] } : response })
+  })
+  await page.goto('/')
+  await enter(page, 'admin')
+  const valid = { providerId: 'openai', revision: 1, discovery: { state: 'available',
+    discoveredAt: '2026-09-26T12:00:00.000Z',
+    models: [{ providerId: 'openai', id: 'gpt-4.1', label: 'GPT 4.1' }] } }
+  const invalid = [
+    { ...valid, credential: 'fixture-private-key' },
+    { ...valid, providerId: 'anthropic' },
+    { ...valid, revision: 2 },
+    { ...valid, discovery: { ...valid.discovery, discoveredAt: 'invalid' } },
+    { ...valid, discovery: { ...valid.discovery, discoveredAt: '2026-09-26' } },
+    { ...valid, discovery: { ...valid.discovery, models: [
+      { providerId: 'anthropic', id: 'gpt-4.1', label: 'Foreign' }] } },
+    { ...valid, discovery: { ...valid.discovery, models: [
+      valid.discovery.models[0], valid.discovery.models[0] ] } },
+    { ...valid, discovery: { ...valid.discovery, models: [
+      { ...valid.discovery.models[0], rawResponse: 'fixture-private-key' }] } },
+  ]
+  for (const item of invalid) {
+    response = item
+    const result = await page.evaluate(async () => {
+      const { discoverModels } = await import('/src/aiConnectionRepository.ts' as string)
+      return discoverModels('openai', 1).then(() => 'accepted', (error: { code: string }) => error.code)
+    })
+    expect(result).toBe('INVALID_RESPONSE')
+  }
+  response = valid
+  expect(await page.evaluate(async () => {
+    const { discoverModels } = await import('/src/aiConnectionRepository.ts' as string)
+    return discoverModels('openai', 1)
+  })).toEqual(valid)
 })

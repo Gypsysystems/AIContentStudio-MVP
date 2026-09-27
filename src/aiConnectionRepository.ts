@@ -1,6 +1,6 @@
 import { getAccessContext } from './authSession'
 import { isCloudProjectMode } from './authorizedProjectService'
-import type { ConnectionCommand, ConnectionMetadata } from './aiConnectionModel'
+import type { ConnectionCommand, ConnectionDiscovery, ConnectionMetadata, ModelDiscovery } from './aiConnectionModel'
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,89}$/
 
@@ -29,6 +29,37 @@ function record(input: unknown, workspaceId: string): ConnectionMetadata {
     || typeof item.updatedBy !== 'string' || !item.updatedBy)
     throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Connection data could not be verified.')
   return item as ConnectionMetadata
+}
+function discoveryResponse(input: Record<string, unknown>, providerId: string, revision: number): ConnectionDiscovery {
+  if (Object.keys(input).sort().join(',') !== 'discovery,providerId,revision'
+    || input.providerId !== providerId || input.revision !== revision
+    || !input.discovery || typeof input.discovery !== 'object' || Array.isArray(input.discovery))
+    throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Model discovery could not be verified.')
+  const result = input.discovery as Record<string, unknown>
+  if (Object.keys(result).sort().join(',') !== 'discoveredAt,models,state' || !Array.isArray(result.models))
+    throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Model discovery could not be verified.')
+  if (result.state === 'unsupported' || result.state === 'unavailable') {
+    if (result.discoveredAt !== null || result.models.length !== 0)
+      throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Model discovery could not be verified.')
+  } else if (result.state === 'available') {
+    if (typeof result.discoveredAt !== 'string' || Number.isNaN(Date.parse(result.discoveredAt))
+      || new Date(result.discoveredAt).toISOString() !== result.discoveredAt
+      || result.models.length > 1000)
+      throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Model discovery could not be verified.')
+    const ids = new Set<string>()
+    for (const value of result.models) {
+      if (!value || typeof value !== 'object' || Array.isArray(value))
+        throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Model discovery could not be verified.')
+      const model = value as Record<string, unknown>
+      if (Object.keys(model).sort().join(',') !== 'id,label,providerId' || model.providerId !== providerId
+        || typeof model.id !== 'string' || model.id.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model.id)
+        || typeof model.label !== 'string' || !model.label.trim() || model.label.length > 200
+        || /[\x00-\x1f\x7f]/.test(model.label) || ids.has(model.id))
+        throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Model discovery could not be verified.')
+      ids.add(model.id)
+    }
+  } else throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Model discovery could not be verified.')
+  return { providerId, revision, discovery: result as ModelDiscovery }
 }
 async function command(input: ConnectionCommand): Promise<unknown> {
   const workspaceId = context(input.action !== 'list')
@@ -71,6 +102,7 @@ async function command(input: ConnectionCommand): Promise<unknown> {
       throw new ConnectionApiError(503, 'INVALID_RESPONSE', 'Duplicate connections were returned.')
     return values
   }
+  if (input.action === 'discover') return discoveryResponse(data, input.providerId, input.expectedRevision)
   if (input.action === 'delete') {
     if (Object.keys(data).sort().join(',') !== 'deleted,providerId,revision'
       || data.deleted !== true || data.providerId !== input.providerId || data.revision !== input.expectedRevision)
@@ -93,5 +125,7 @@ export const replaceConnection = (providerId: string, expectedRevision: number, 
   command({ action: 'replace', providerId, expectedRevision, credential }) as Promise<ConnectionMetadata>
 export const testConnection = (providerId: string, expectedRevision: number) =>
   command({ action: 'test', providerId, expectedRevision }) as Promise<ConnectionMetadata>
+export const discoverModels = (providerId: string, expectedRevision: number) =>
+  command({ action: 'discover', providerId, expectedRevision }) as Promise<ConnectionDiscovery>
 export const deleteConnection = (providerId: string, expectedRevision: number) =>
   command({ action: 'delete', providerId, expectedRevision }) as Promise<true>

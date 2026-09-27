@@ -5,7 +5,7 @@ import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Client } from 'pg'
 import {
-  ConnectionError, decryptCredential, encryptCredential, encryptionKey, executeConnections,
+  ConnectionError, decryptCredential, discoveryTestState, encryptCredential, encryptionKey, executeConnections,
   handleAiConnections, readEncryptedFromDatabase, readerSslConfig, sendConnectionError, type ConnectionDependencies,
 } from '../../server/aiConnectionsApi'
 
@@ -194,7 +194,7 @@ test('read-only roles, stale versions, foreign rows and malformed confirmations 
   for (const role of ['editor', 'viewer']) {
     expect(await executeConnections({ action: 'list' }, workspaceId, role, key, store.dependencies))
       .toMatchObject({ connections: [{ providerId }] })
-    for (const action of ['test', 'delete', 'replace']) {
+    for (const action of ['test', 'discover', 'delete', 'replace']) {
       await expect(executeConnections(action === 'replace'
         ? { action, providerId, expectedRevision: 1, credential: 'fixture' }
         : { action, providerId, expectedRevision: 1 },
@@ -214,6 +214,54 @@ test('read-only roles, stale versions, foreign rows and malformed confirmations 
   }] }) }
   await expect(executeConnections({ action: 'list' }, workspaceId, 'viewer', key, forged))
     .rejects.toMatchObject({ code: 'STORAGE_RESPONSE_INVALID' })
+})
+
+test('discovery is revision-bound, workspace-scoped, read-only and never returns credentials', async () => {
+  const store = fixture()
+  await executeConnections({ action: 'create', providerId, credential: 'test-only-fixture-key' },
+    workspaceId, 'owner', key, store.dependencies)
+  const discover = async (provider: string, credential: string) => {
+    expect(provider).toBe(providerId)
+    expect(credential).toBe('test-only-fixture-key')
+    return { state: 'available' as const, models: [{ providerId, id: 'models.sample', label: 'Sample model' }] }
+  }
+  const deps: ConnectionDependencies = { ...store.dependencies, discover }
+  const before = store.calls.length
+  const result = await executeConnections({ action: 'discover', providerId, expectedRevision: 1 },
+    workspaceId, 'owner', key, deps)
+  expect(result).toMatchObject({ providerId, revision: 1, discovery: { state: 'available',
+    models: [{ providerId, id: 'models.sample', label: 'Sample model' }] } })
+  expect(Date.parse((result.discovery as { discoveredAt: string }).discoveredAt)).not.toBeNaN()
+  expect(store.calls).toHaveLength(before)
+  expect(store.rows.get(`${workspaceId}:${providerId}`)?.state).toBe('untested')
+  expect(JSON.stringify(result)).not.toMatch(/credential|ciphertext|nonce|tag|proof|test-only-fixture-key/)
+  await expect(executeConnections({ action: 'discover', providerId, expectedRevision: 2 },
+    workspaceId, 'owner', key, deps)).rejects.toMatchObject({ code: 'REVISION_CONFLICT' })
+  await expect(executeConnections({ action: 'discover', providerId, expectedRevision: 1 },
+    'another-workspace', 'owner', key, deps)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  const foreign: ConnectionDependencies = { ...deps, readEncrypted: async () => {
+    const row = await deps.readEncrypted(workspaceId, providerId)
+    return row && { ...row, workspaceId: 'another-workspace' }
+  } }
+  await expect(executeConnections({ action: 'discover', providerId, expectedRevision: 1 },
+    workspaceId, 'owner', key, foreign)).rejects.toMatchObject({ code: 'STORAGE_RESPONSE_INVALID' })
+  expect(await executeConnections({ action: 'discover', providerId, expectedRevision: 1 },
+    workspaceId, 'owner', key, { ...deps, discover: async () => ({ state: 'unsupported', models: [] }) }))
+    .toEqual({ providerId, revision: 1, discovery: { state: 'unsupported', models: [], discoveredAt: null } })
+  expect(await executeConnections({ action: 'discover', providerId, expectedRevision: 1 },
+    workspaceId, 'owner', key, { ...deps, discover: async () => { throw new Error('secret provider response') } }))
+    .toEqual({ providerId, revision: 1, discovery: { state: 'unavailable', models: [], discoveredAt: null } })
+  await expect(executeConnections({ action: 'discover', providerId, expectedRevision: 1 },
+    workspaceId, 'owner', key, { ...deps, discover: async () => ({ state: 'available', models: [
+      { providerId, id: 'safe-id', label: 'Safe label', rawResponse: 'private' },
+    ] } as unknown as Awaited<ReturnType<typeof discover>>) })).rejects.toMatchObject({ code: 'STORAGE_RESPONSE_INVALID' })
+})
+
+test('a valid provider model list verifies; auth rejection fails; other discovery outcomes remain unavailable', () => {
+  expect(discoveryTestState({ state: 'available', models: [] })).toBe('verified')
+  expect(discoveryTestState({ state: 'auth-failed', models: [] })).toBe('failed')
+  expect(discoveryTestState({ state: 'unsupported', models: [] })).toBe('unavailable')
+  expect(discoveryTestState({ state: 'unavailable', models: [] })).toBe('unavailable')
 })
 
 test('server requires its encryption key and forwards only redacted confirmations', async () => {

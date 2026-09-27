@@ -12,10 +12,12 @@ export type ConnectionMetadata = {
 export type ModelDiscovery =
   | { state: 'available'; models: { providerId: string; id: string; label: string }[]; discoveredAt: string }
   | { state: 'unsupported' | 'unavailable'; models: []; discoveredAt: null }
+export type ConnectionDiscovery = { providerId: string; revision: number; discovery: ModelDiscovery }
 
 export type ConnectionCommand =
   | { action: 'list' }
   | { action: 'create'; providerId: string; credential: string }
   | { action: 'replace'; providerId: string; expectedRevision: number; credential: string }
   | { action: 'test'; providerId: string; expectedRevision: number }
+  | { action: 'discover'; providerId: string; expectedRevision: number }
   | { action: 'delete'; providerId: string; expectedRevision: number }
