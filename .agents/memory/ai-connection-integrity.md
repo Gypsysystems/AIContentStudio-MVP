@@ -20,3 +20,9 @@ Reject untrusted database connection-string options when requiring verified TLS 
 **Why:** Some PostgreSQL clients let URL parameters override an explicitly supplied TLS configuration, including disabling encryption or certificate checks. A narrowly privileged login still needs a protected transport.
 
 **How to apply:** Fail closed on connection-string options that can alter TLS, or parse validated fields and enforce verified TLS after parsing; test downgrade attempts without making a network connection.
+
+Replit Secrets' single-line value field can turn pasted PEM line breaks into spaces.
+
+**Why:** A valid Supabase root certificate reached the server as one whitespace-collapsed line, so strict multiline-only parsing rejected it before TLS negotiation.
+
+**How to apply:** Reconstruct PEM in memory only after validating one certificate envelope and base64-plus-whitespace body; then require an actual CA certificate and verified TLS. Never treat normalization as a reason to relax trust or rewrite the stored secret.
