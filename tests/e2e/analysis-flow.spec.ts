@@ -20,7 +20,7 @@ test('Analysis generates a grounded proposal and opens TOC without using the pro
   await page.locator('input[type="file"]').setInputFiles({
     name: 'operations.md',
     mimeType: 'text/markdown',
-    buffer: Buffer.from('# Operations\n\nOperations guide the team.\n\n## Access Control\n\nAccess Control protects the workspace.\n'),
+    buffer: Buffer.from('# Operations\n\nOperations guide the team.\n\n## Access Control\n\nUsers can view their workspace access.\n'),
   })
   await expect(page.getByTestId('evidence-freshness')).toHaveText('Current', { timeout: 15_000 })
   await page.getByRole('button', { name: 'Analyze Sources' }).click()
@@ -30,7 +30,7 @@ test('Analysis generates a grounded proposal and opens TOC without using the pro
   await generate.click()
   await expect(page.getByRole('heading', { name: 'Review TOC proposal' })).toBeVisible()
   await expect(page.getByTestId('generate-grounded-toc')).toHaveCount(0)
-  await expect(page.getByText('Access Control').first()).toBeVisible()
+  await expect(page.getByText('View your workspace access').first()).toBeVisible()
   await openAnalysis(page)
   await expect(page.getByTestId('analysis-generate-toc')).toHaveText(/Review proposed TOC/)
 })

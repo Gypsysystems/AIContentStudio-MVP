@@ -1,6 +1,7 @@
 import type { EvidenceIndex } from '../src/evidenceIndex'
 import { buildTocProposal, type ProposedTopic } from '../src/tocProposal'
 import type { ConceptAnalysis } from '../src/conceptAnalysis'
+import { cleanUserGuideHeading, isUserGuideContentType } from '../src/tocInformationArchitecture'
 
 export type GeneratedTocClassification = 'evidence-backed' | 'optional-structural'
 
@@ -118,10 +119,78 @@ function validateHierarchy(items: GeneratedTocItem[]): void {
   }
 }
 
+function validateUserGuideHierarchy(items: GeneratedTocItem[], candidates: ProposedTopic[]): void {
+  const evidenceCandidates = candidates.filter(candidate =>
+    candidate.proposalKind === 'evidence-backed' && candidate.supportingEvidenceIds.length > 0)
+  const candidateByTitle = new Map(evidenceCandidates.map(candidate =>
+    [normalized(candidate.title), candidate]))
+  const itemByKey = new Map(items.map(item => [item.key, item]))
+  for (const item of items) {
+    if (normalized(cleanUserGuideHeading(item.title)) !== normalized(item.title))
+      throw new GroundedTocOutputError()
+    const candidate = candidateByTitle.get(normalized(item.title))
+    if (!candidate || candidate.level !== item.level)
+      throw new GroundedTocOutputError()
+    if (item.level === 1) {
+      if (candidate.parentTopicId || item.parentKey !== null) throw new GroundedTocOutputError()
+      continue
+    }
+    const parent = item.parentKey ? itemByKey.get(item.parentKey) : undefined
+    const parentCandidate = parent ? candidateByTitle.get(normalized(parent.title)) : undefined
+    if (!parentCandidate || candidate.parentTopicId !== parentCandidate.topicId)
+      throw new GroundedTocOutputError()
+  }
+
+  const availableByLevel = new Map<number, ProposedTopic[]>()
+  for (const candidate of evidenceCandidates) {
+    const levelCandidates = availableByLevel.get(candidate.level) ?? []
+    levelCandidates.push(candidate)
+    availableByLevel.set(candidate.level, levelCandidates)
+  }
+  const includedByLevel = new Map<number, GeneratedTocItem[]>()
+  for (const item of items) {
+    const levelItems = includedByLevel.get(item.level) ?? []
+    levelItems.push(item)
+    includedByLevel.set(item.level, levelItems)
+  }
+  for (const level of [1, 2] as const) {
+    const availableCount = availableByLevel.get(level)?.length ?? 0
+    const includedCount = includedByLevel.get(level)?.length ?? 0
+    if (availableCount > 0 && includedCount < Math.min(availableCount, level === 1 ? 2 : 1))
+      throw new GroundedTocOutputError()
+  }
+
+  const availableRoots = (availableByLevel.get(1) ?? []).length
+  const includedRoots = includedByLevel.get(1) ?? []
+  if (availableRoots >= 2 && includedRoots.length < 2)
+    throw new GroundedTocOutputError()
+  for (const root of includedRoots) {
+    if (!items.some(item => item.level === 2 && item.parentKey === root.key))
+      throw new GroundedTocOutputError()
+  }
+  const availableTasks = availableByLevel.get(2)?.length ?? 0
+  if (availableTasks >= 2 && (includedByLevel.get(2)?.length ?? 0) < 2)
+    throw new GroundedTocOutputError()
+  const availableProcedures = availableByLevel.get(3)?.length ?? 0
+  if (availableTasks >= 2 && availableProcedures > 0 && (includedByLevel.get(3)?.length ?? 0) === 0)
+    throw new GroundedTocOutputError()
+  for (const task of includedByLevel.get(2) ?? []) {
+    const taskCandidate = candidateByTitle.get(normalized(task.title))
+    if (!taskCandidate) throw new GroundedTocOutputError()
+    const hasSupportedProcedures = evidenceCandidates.some(candidate =>
+      candidate.level === 3 && candidate.parentTopicId === taskCandidate.topicId)
+    if (hasSupportedProcedures
+      && !items.some(item => item.level === 3 && item.parentKey === task.key)) {
+      throw new GroundedTocOutputError()
+    }
+  }
+}
+
 function validateGrounding(
   items: GeneratedTocItem[],
   evidenceIndex: EvidenceIndex,
   candidates: ProposedTopic[],
+  contentType: string,
 ): void {
   const evidenceIds = new Set(evidenceIndex.items.map(item => item.id))
   const groundedCandidates = new Map<string, { topicId: string; evidenceIds: Set<string>; rationale: string }>()
@@ -177,6 +246,8 @@ function validateGrounding(
       item.rationale = candidate.rationale
     }
   }
+  if (isUserGuideContentType(contentType))
+    validateUserGuideHierarchy(items, candidates)
 }
 
 export function validateGroundedTocOutput(
@@ -193,7 +264,7 @@ export function validateGroundedTocOutput(
   const items = parsed.items.map(validateItem)
   validateHierarchy(items)
   const candidates = buildTocProposal(evidenceIndex, analysis, contentType).items
-  validateGrounding(items, evidenceIndex, candidates)
+  validateGrounding(items, evidenceIndex, candidates, contentType)
   return { items }
 }
 

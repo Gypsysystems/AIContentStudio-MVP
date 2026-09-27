@@ -218,6 +218,20 @@ async function patchStoredProject(page: Page, name: string, patch: Record<string
   }, { projectName: name, values: patch })
 }
 
+async function clearOneGeneratedTaskTopic(page: Page, name: string) {
+  const project = await readStoredProject(page, name)
+  const target = project.appToc[1]
+  if (!target) throw new Error("The generated outline must contain a non-default task topic")
+  const topicId = target.topicId?.trim() || `legacy-${target.id}`
+  const topicContent = { ...project.topicContent }
+  delete topicContent[topicId]
+  delete topicContent[String(target.id)]
+  await patchStoredProject(page, name, {
+    topicContent,
+    contentRevision: project.contentRevision + 1,
+  })
+}
+
 async function fillMissingAuthorTopics(page: Page, name: string) {
   return page.evaluate(async projectName => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -311,7 +325,7 @@ async function addSource(page: Page) {
     name: "project-home-operations.md",
     mimeType: "text/markdown",
     buffer: Buffer.from(
-      "# Workspace Operations\n\nWorkspace operators configure team access in the dashboard.\n\n## Access Control\n\nOperators manage access to the workspace.\n",
+      "# Workspace Operations\n\nUsers can open the workspace dashboard.\n\n## Review workspace access\n\nUsers can review their workspace access.\n",
     ),
   })
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current", {
@@ -347,6 +361,9 @@ async function createHomeProjectWithEmptyTopics(page: Page, name: string) {
   await proposeAndAcceptToc(page)
   await clearClaimCheck(page)
   await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  await openProjectHome(page, name)
+  await clearOneGeneratedTaskTopic(page, name)
+  await page.reload()
   await openProjectHome(page, name)
 }
 
@@ -538,7 +555,7 @@ test("a topic-content issue opens the exact Author topic named by Home", async (
       && !stored.topicContent[topicId]?.length
       && !stored.topicContent[String(topic.id)]?.length
   })
-  expect(targetIndex, "the generated outline should provide a non-default empty topic").toBeGreaterThan(0)
+  expect(targetIndex, "the setup should preserve a non-default empty task topic").toBeGreaterThan(0)
   const target = stored.appToc[targetIndex]
   const issue = page.getByTestId("project-home-issue")
     .filter({ hasText: "Topic needs content" })
@@ -595,6 +612,7 @@ test("Continue Working follows five real readiness states through Sources, Analy
   // The generated TOC can include topics without authored blocks. Persist
   // content for those topics, as Review's real readiness snapshot requires,
   // then refresh the content-sensitive claim check before Review.
+  await clearOneGeneratedTaskTopic(page, name)
   expect(await fillMissingAuthorTopics(page, name)).toBeGreaterThan(0)
   await page.reload()
   await returnToProjectHome(page)

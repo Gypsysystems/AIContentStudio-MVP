@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
+import type { TocProposal } from "../../src/tocProposal"
 
 test.describe.configure({ mode: "serial" })
 
@@ -48,6 +49,16 @@ type StoredProject = {
   tocRevision: number
 }
 
+type TocArchitectureFixtureResult = {
+  sourceTitles: string[]
+  userGuide: TocProposal
+  adminGuide: TocProposal
+  repeated: TocProposal
+  current: boolean
+  staleType: boolean
+  staleEvidence: boolean
+}
+
 async function openAnalysis(page: Page) {
   await page.locator('header').getByRole("button", { name: /^Analyze & Structure/ }).click()
   await page.locator('header').getByRole("button", { name: /^Analysis/ }).click()
@@ -71,7 +82,7 @@ async function createGroundedProject(page: Page, projectName: string) {
     buffer: Buffer.from([
       "# Flight Operations",
       "",
-      "Flight Operations coordinates orbital launch workspaces.",
+      "Users can open the Flight Operations workspace.",
       "",
       "## Access Control",
       "",
@@ -166,51 +177,42 @@ test("turns the same internal headings into evidence-grounded, content-type-spec
       staleType: isTocProposalFresh(userGuide, evidenceIndex, analysis, "admin-guide"),
       staleEvidence: isTocProposalFresh(userGuide, { ...evidenceIndex, sourcesRevision: 5 }, analysis, "user-guide"),
     }
-  })
+  }) as TocArchitectureFixtureResult
 
   const userTopics = result.userGuide.items
   const adminTopics = result.adminGuide.items
   const userHeadings = userTopics.filter(topic => topic.topicId.startsWith("heading-"))
   const adminHeadings = adminTopics.filter(topic => topic.topicId.startsWith("heading-"))
-  expect(userHeadings).toHaveLength(result.sourceTitles.length)
+  expect(userHeadings.length).toBeLessThan(result.sourceTitles.length)
   expect(userHeadings.map(topic => topic.title).some(title => result.sourceTitles.includes(title))).toBe(false)
   expect(userHeadings.map(topic => topic.title)).toEqual(expect.arrayContaining([
     "Sign in with your account",
     "Navigate workspaces from the dashboard",
     "Search projects by title",
+    "Search projects by ID",
     "Review and approve drafts",
     "Export completed reports",
-    "Understand Export adapter",
   ]))
-  expect(userHeadings.find(topic => topic.title === "Understand Export adapter")?.parentTopicId)
-    .toBe(userTopics.find(topic => topic.title === "Key concepts")?.topicId)
+  expect(userHeadings.some(topic => /internal operating model|export adapter/i.test(topic.title))).toBe(false)
+  const searchByTitle = userHeadings.find(topic => topic.title === "Search projects by title")
+  const searchById = userHeadings.find(topic => topic.title === "Search projects by ID")
+  expect(searchByTitle?.supportingEvidenceIds).toEqual(expect.arrayContaining(["h2", "p2"]))
+  expect(searchById?.supportingEvidenceIds).toEqual(expect.arrayContaining(["h-duplicate", "p-duplicate"]))
   expect(userTopics.filter(topic => topic.level === 1 && topic.proposalKind === "evidence-backed").map(topic => topic.title)).toEqual([
-    "Getting started",
-    "Navigate the product",
-    "Search",
-    "Review and approve",
-    "Export",
-    "Key concepts",
+    "Get started",
+    "Navigate the workspace",
+    "Search and find information",
+    "Complete common workflows",
+    "Reports and exports",
   ])
-  expect(userTopics.some(topic => topic.title === "Troubleshooting" && topic.proposalKind === "evidence-backed")).toBe(false)
-  expect(userTopics.find(topic => topic.title === "Troubleshooting")?.proposalKind).toBe("optional-structural")
+  expect(userTopics.some(topic => topic.title === "Troubleshooting")).toBe(false)
   expect(adminTopics.some(topic => topic.title === "Workspace and navigation" && topic.proposalKind === "evidence-backed")).toBe(true)
   expect(adminTopics.map(topic => topic.title)).not.toEqual(userTopics.map(topic => topic.title))
-  expect(adminHeadings.map(topic => topic.topicId)).toEqual(userHeadings.map(topic => topic.topicId))
-  expect(result.repeated.items).toEqual(userTopics)
-  const searchTopic = userHeadings.find(topic => topic.title === "Search projects by title")
-  expect(searchTopic?.supportingEvidenceIds).toEqual(expect.arrayContaining(["h2", "p2", "h-duplicate", "p-duplicate"]))
-  expect(searchTopic?.sourceSectionPaths).toContainEqual(["Appendix", "Search pipeline"])
-  for (let index = 0; index < userHeadings.length; index++) {
-    const topic = userHeadings.find(candidate => candidate.supportingEvidenceIds.includes(`h${index}`))
-    expect(topic?.supportingEvidenceIds).toContain(`p${index}`)
-    expect(topic?.sourceSectionPaths?.[0]).toEqual(index === 0
-      ? ["Internal operating model"] : ["Internal operating model", result.sourceTitles[index]])
-    expect(topic?.rationale).toContain(result.sourceTitles[index])
-    const parent = userTopics.find(candidate => candidate.topicId === topic?.parentTopicId)
-    expect(parent?.supportingEvidenceIds).toContain(`h${index}`)
-  }
+  expect(adminHeadings.length).toBeGreaterThan(userHeadings.length)
   expect(new Set(userTopics.map(topic => topic.topicId)).size).toBe(userTopics.length)
+  expect(result.repeated.items).toEqual(userTopics)
+  expect(searchByTitle?.sourceSectionPaths).toContainEqual(["Internal operating model", "Search pipeline"])
+  expect(searchById?.sourceSectionPaths).toContainEqual(["Appendix", "Search pipeline"])
   expect(new Set(userTopics.map(topic => topic.id)).size).toBe(userTopics.length)
   expect(result.current).toBe(true)
   expect(result.staleType).toBe(false)
@@ -225,14 +227,16 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
   await page.getByTestId("generate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-review")).toBeVisible()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
-  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Flight Operations" })).toBeVisible()
-  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: /^H2Understand Access ControlEvidence-backed/ })).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Navigate the workspace" })).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Open the Flight Operations workspace" })).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Flight Operations" })).toHaveCount(0)
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Access Control" })).toHaveCount(0)
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Evidence-backed" }).first()).toBeVisible()
-  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Optional structure" }).first()).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Optional structure" })).toHaveCount(0)
   await expect(page.getByText("Nexus", { exact: false })).toHaveCount(0)
   await expect(page.getByText("Asteria", { exact: false })).toHaveCount(0)
 
-  const flightTopic = page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Flight Operations" })
+  const flightTopic = page.getByTestId("toc-proposal-topic").filter({ hasText: "Open the Flight Operations workspace" })
   await flightTopic.click()
   await page.getByTestId("toc-supporting-evidence").first().click()
   await expect(page.getByTestId("toc-evidence-dialog")).toContainText("flight-operations.md")
@@ -251,7 +255,7 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
   await page.getByTestId("commit-toc-proposal").click()
   await expect(page.locator("header").getByRole("button", { name: /^Author,/ })).toHaveAttribute("aria-current", "step")
   await openTableOfContents(page)
-  await expect(page.getByTestId("committed-toc-panel")).toContainText("Understand Flight Operations")
+  await expect(page.getByTestId("committed-toc-panel")).toContainText("Open the Flight Operations workspace")
 
   await expect.poll(async () => (await readProject(page, projectName)).tocProposal).toBeNull()
   const stored = await readProject(page, projectName)
@@ -291,7 +295,7 @@ test("requires confirmation and preserves committed topics when merging a later 
   await expect.poll(async () => (await readProject(page, projectName)).appToc.some(item => item.title === "Release validation")).toBe(true)
   const after = await readProject(page, projectName)
   expect(after.appToc.slice(0, beforeIds.length).map(item => `${item.id}:${item.topicId}:${item.title}`)).toEqual(beforeIds)
-  expect(after.appToc.filter(item => item.title === "Understand Flight Operations")).toHaveLength(1)
+  expect(after.appToc.filter(item => item.title === "Open the Flight Operations workspace")).toHaveLength(1)
   expect(after.appToc.some(item => item.title === "Release validation")).toBe(true)
   expect(after.topicContent).toEqual(beforeContent)
   for (const [id, draftId] of Object.entries(beforeDrafts)) {
@@ -413,7 +417,8 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await openTableOfContents(page)
   await page.getByTestId("regenerate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
-  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Release Validation" }).first()).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Open the Flight Operations workspace" })).toBeVisible()
+  await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Understand Release Validation" })).toHaveCount(0)
 })
 
 test("marks a committed TOC stale after the project content type changes without replacing it", async ({ page }) => {
@@ -438,7 +443,7 @@ test("marks a committed TOC stale after the project content type changes without
   await openTableOfContents(page)
 
   await expect(page.getByTestId("committed-toc-stale")).toBeVisible()
-  await expect(page.getByTestId("committed-toc-panel")).toContainText("Understand Flight Operations")
+  await expect(page.getByTestId("committed-toc-panel")).toContainText("Open the Flight Operations workspace")
   const after = await readProject(page, projectName)
   expect(after.tocGeneratedFromContentType).toBe("user-guide")
   expect(after.appToc.map(item => `${item.id}:${item.topicId}:${item.title}`)).toEqual(committedTopics)

@@ -1,6 +1,8 @@
 import type { ConceptAnalysis } from './conceptAnalysis'
 import type { EvidenceIndex, EvidenceItem } from './evidenceIndex'
-import { organizeHeading } from './tocInformationArchitecture'
+import {
+  cleanUserGuideHeading, isUserGuideContentType, organizeHeading, scoreUserGuideEvidence,
+} from './tocInformationArchitecture'
 
 export type ProposalTopicKind = 'evidence-backed' | 'optional-structural' | 'manual'
 
@@ -222,11 +224,299 @@ function uniquePaths(paths: string[][]): string[][] {
   return unique(paths.map(path => JSON.stringify(path))).map(path => JSON.parse(path) as string[])
 }
 
+const GUIDE_ACTIONS = 'navigate|browse|search|find|filter|open|view|create|edit|update|manage|review|approve|attach|upload|add|remove|download|export|share|generate|run|complete|submit|track|receive|configure|set up|troubleshoot|recover|sign in|log in|install|save|select|choose|click'
+const MAX_USER_GUIDE_TITLE_LENGTH = 120
+
+type UserGuideSeed = {
+  title: string
+  group: string
+  level: 2 | 3
+  evidenceIds: string[]
+  paths: string[][]
+  sourceId: string
+  order: number
+  parentTitle?: string
+}
+
+function userGuideActionTitle(text: string): string | null {
+  const clean = cleanUserGuideHeading(text)
+  const taskPattern = new RegExp(
+    `\\b(?:users?|you|readers?)\\s+(?:(?:can|may|must|should|will|need to)\\s+)?((?:${GUIDE_ACTIONS})\\b[^.!?\\n]{0,90})`,
+    'i',
+  )
+  const task = clean.match(taskPattern)?.[1]
+    ?? clean.match(new RegExp(`^(?:how to\\s+)?((?:${GUIDE_ACTIONS})\\b[^.!?\\n]{0,75})`, 'i'))?.[1]
+  if (!task) return null
+  const title = task.trim().replace(/\btheir\b/gi, 'your').replace(/[.:;,\s]+$/, '')
+  return title ? title[0].toLocaleUpperCase('en-US') + title.slice(1) : null
+}
+
+function isUserGuideStatedTask(text: string): boolean {
+  return /\b(?:users?|you|readers?)\s+(?:(?:can|may|must|should|will|need to)\s+)?(?:navigate|browse|search|find|filter|open|view|create|edit|update|manage|review|approve|attach|upload|add|remove|download|export|share|generate|run|complete|submit|track|receive|configure|set up|troubleshoot|recover|sign in|log in|install|save|select|choose|click)\b/i.test(text)
+}
+
+function isExplicitUserGuideTaskHeading(text: string): boolean {
+  const heading = cleanUserGuideHeading(text)
+  return /^(?:how to\s+)?(?:sign in|log in|install|troubleshoot|recover)\b/i.test(heading)
+    || /^(?:search|find|filter|open|view|create|edit|update|manage|review|approve|attach|upload|add|remove|download|export|share|generate|run|complete|submit|track|navigate|browse|install|save|select|choose|click)\b.{0,65}\b(?:cases?|evidence|files?|records?|reports?|workspace|dashboard|profile|notifications?|account|projects?|documents?|requests?|attachments?|results?|app|software|by|for|in|using|with)\b/i.test(heading)
+}
+
+function isUserGuideInstruction(text: string): boolean {
+  return /^(?:click|select|choose|open|enter|type|press|selecting|clicking)\b/i.test(cleanUserGuideHeading(text))
+}
+
+function userGuideGroup(value: string): string {
+  const text = value.toLocaleLowerCase('en-US')
+  if (/\b(troubleshoot|error|issue|problem|recover|recovery)\b/.test(text)) return 'Troubleshoot issues'
+  if (/\b(notification|profile|preferences?)\b/.test(text)) return 'Notifications and profile'
+  if (/\b(report|export|download|share)\b/.test(text)) return 'Reports and exports'
+  if (/\b(search|find|filter)\b/.test(text)) return 'Search and find information'
+  if (/\b(case|evidence|attachment|record|request)\b/.test(text)) return 'Work with cases and evidence'
+  if (/\b(navigate|navigation|browse|workspace|dashboard)\b/.test(text)) return 'Navigate the workspace'
+  if (/\b(sign in|log in|install|get started|first steps?)\b/.test(text)) return 'Get started'
+  return 'Complete common workflows'
+}
+
+function userGuideEvidencePaths(items: EvidenceItem[]): string[][] {
+  return uniquePaths(items.flatMap(item =>
+    item.sectionPath?.length ? [[...item.sectionPath]] : [],
+  ).filter(path => path.length > 0))
+}
+
+function boundedUserGuideTitle(title: string, maxLength: number): string {
+  if (title.length <= maxLength) return title
+  if (maxLength <= 1) return title.slice(0, maxLength)
+  return `${title.slice(0, maxLength - 1).trimEnd()}…`
+}
+
+function guideLocalEvidence(heading: EvidenceItem, index: EvidenceIndex): EvidenceItem[] {
+  return localSectionEvidence(heading, index)
+    .filter(item => scoreUserGuideEvidence(item) >= 0)
+}
+
+function guideHeadingParent(
+  heading: EvidenceItem,
+  candidates: Map<string, UserGuideSeed>,
+  index: EvidenceIndex,
+): UserGuideSeed | undefined {
+  const path = heading.sectionPath?.map(normalized) ?? []
+  const headingParents = headingItems(index)
+    .filter(item => item.sourceId === heading.sourceId
+      && item.order < heading.order
+      && (item.headingLevel ?? 1) <= 2)
+    .sort((left, right) => right.order - left.order)
+  for (const parent of headingParents) {
+    const parentPath = parent.sectionPath?.map(normalized) ?? []
+    if (parentPath.length && path.length
+      && parentPath.length < path.length
+      && parentPath.every((part, position) => part === path[position])) {
+      const action = userGuideActionTitle([parent.text, ...guideLocalEvidence(parent, index).map(item => item.text)].join(' '))
+      if (action) {
+        const candidate = candidates.get(`${parent.sourceId}:${parent.id}`)
+        if (candidate) return candidate
+      }
+    }
+  }
+  return undefined
+}
+
+function buildUserGuideProposal(
+  evidenceIndex: EvidenceIndex,
+  groundedAnalysis: ConceptAnalysis,
+  contentType: string,
+): TocProposal {
+  const headings = headingItems(evidenceIndex)
+  const headingSectionKeys = new Set(headings.filter(heading => heading.sectionPath?.length).map(heading =>
+    `${heading.sourceId}:${(heading.sectionPath ?? []).map(normalized).join('>')}`,
+  ))
+  const seeds: UserGuideSeed[] = []
+  const byTitle = new Map<string, UserGuideSeed>()
+  const parentCandidates = new Map<string, UserGuideSeed>()
+
+  const addSeed = (heading: EvidenceItem, local: EvidenceItem[], preferredTitle?: string) => {
+    if (scoreUserGuideEvidence(heading) < 0) return
+    const actionItems = [heading, ...local].filter(item =>
+      scoreUserGuideEvidence(item) >= 0 && userGuideActionTitle(item.text) !== null,
+    )
+    const statedAction = actionItems.find(item => isUserGuideStatedTask(item.text))
+    const taskHeading = isExplicitUserGuideTaskHeading(heading.text)
+      ? userGuideActionTitle(heading.text) : null
+    const instruction = actionItems.find(item => item !== heading && isUserGuideInstruction(item.text))
+    const title = preferredTitle
+      ?? (statedAction ? userGuideActionTitle(statedAction.text) : null)
+      ?? taskHeading
+      ?? (instruction ? userGuideActionTitle(instruction.text) : null)
+    if (!title) return
+
+    const isSubtask = (heading.headingLevel ?? 2) >= 3
+    const parentSeed = isSubtask ? guideHeadingParent(heading, parentCandidates, evidenceIndex) : undefined
+    const parentTitle = parentSeed?.title
+    const subject = cleanUserGuideHeading(heading.text)
+    const group = parentSeed?.group
+      ?? userGuideGroup(`${title} ${subject} ${(heading.sectionPath ?? []).join(' ')}`)
+    const level: 2 | 3 = parentTitle ? 3 : 2
+    const related = unique([
+      heading.id,
+      ...actionItems.map(item => item.id),
+    ])
+    const relatedItems = [heading, ...actionItems]
+    const key = `${level}:${normalized(group)}:${normalized(parentTitle ?? '')}:${normalized(title)}`
+    const existing = byTitle.get(key)
+    if (existing) {
+      existing.evidenceIds = unique([...existing.evidenceIds, ...related])
+      existing.paths = uniquePaths([...existing.paths, ...userGuideEvidencePaths(relatedItems)])
+      existing.order = Math.min(existing.order, heading.order)
+      if (level === 2) parentCandidates.set(`${heading.sourceId}:${heading.id}`, existing)
+      return
+    }
+
+    const seed: UserGuideSeed = {
+      title: title[0].toLocaleUpperCase('en-US') + title.slice(1),
+      group,
+      level,
+      evidenceIds: related,
+      paths: userGuideEvidencePaths(relatedItems),
+      sourceId: heading.sourceId,
+      order: heading.order,
+      parentTitle,
+    }
+    byTitle.set(key, seed)
+    seeds.push(seed)
+    if (level === 2) parentCandidates.set(`${heading.sourceId}:${heading.id}`, seed)
+  }
+
+  for (const heading of headings) {
+    const cleaned = cleanUserGuideHeading(heading.text)
+    if (!cleaned || scoreUserGuideEvidence(heading) < 0) continue
+    const local = guideLocalEvidence(heading, evidenceIndex)
+    addSeed(heading, local)
+  }
+
+  // Walkthrough transcripts often contain useful procedures without formal
+  // headings. Use only explicit user actions from those blocks as candidates.
+  for (const item of evidenceIndex.items) {
+    if (item.blockType === 'heading' || scoreUserGuideEvidence(item) < 0) continue
+    if (headingSectionKeys.has(`${item.sourceId}:${(item.sectionPath ?? []).map(normalized).join('>')}`)) {
+      continue
+    }
+    const title = userGuideActionTitle(item.text)
+    if (!title) continue
+    addSeed(item, [], title)
+  }
+
+  const groups = unique(seeds.map(seed => seed.group)).sort((left, right) => {
+    const order = [
+      'Get started', 'Navigate the workspace', 'Search and find information',
+      'Work with cases and evidence', 'Complete common workflows',
+      'Reports and exports', 'Notifications and profile', 'Troubleshoot issues',
+    ]
+    return order.indexOf(left) - order.indexOf(right) || left.localeCompare(right)
+  })
+  const topics: ProposedTopic[] = []
+  const add = (input: Omit<ProposedTopic, 'id' | 'order'>): ProposedTopic => {
+    const topic: ProposedTopic = {
+      ...input,
+      id: stableNumber(input.topicId),
+      order: topics.length,
+    }
+    topics.push(topic)
+    return topic
+  }
+
+  for (const group of groups) {
+    const members = seeds
+      .filter(seed => seed.group === group)
+      .sort((left, right) => left.order - right.order || left.title.localeCompare(right.title))
+    const rootId = `ia-user-guide-${stableHash(normalized(group))}`
+    const root = add({
+      topicId: rootId,
+      title: group,
+      level: 1,
+      words: 0,
+      rationale: `User-facing tasks in this capability group are supported by the cited source evidence.`,
+      supportingEvidenceIds: unique(members.flatMap(seed => seed.evidenceIds)),
+      proposalKind: 'evidence-backed',
+      sourceSectionPaths: uniquePaths(members.flatMap(seed => seed.paths)),
+    })
+    const parentIds = new Map<string, ProposedTopic>()
+    for (const seed of members.filter(item => item.level === 2)) {
+      const topic = add({
+        topicId: `heading-${stableHash(`${normalized(group)} ${normalized(seed.title)}`)}`,
+        title: seed.title,
+        level: 2,
+        words: 0,
+        parentId: root.id,
+        parentTopicId: root.topicId,
+        rationale: `This user task is supported by local action evidence in the cited source sections.`,
+        supportingEvidenceIds: seed.evidenceIds,
+        proposalKind: 'evidence-backed',
+        sourceSectionPaths: seed.paths,
+      })
+      parentIds.set(normalized(seed.title), topic)
+    }
+    for (const seed of members.filter(item => item.level === 3 && item.parentTitle)) {
+      const parent = parentIds.get(normalized(seed.parentTitle!))
+      if (!parent) continue
+      add({
+        topicId: `procedure-${stableHash(`${group} ${normalized(seed.parentTitle!)} ${normalized(seed.title)}`)}`,
+        title: seed.title,
+        level: 3,
+        words: 0,
+        parentId: parent.id,
+        parentTopicId: parent.topicId,
+        rationale: `This procedure is supported by local action evidence in the cited source sections.`,
+        supportingEvidenceIds: seed.evidenceIds,
+        proposalKind: 'evidence-backed',
+        sourceSectionPaths: seed.paths,
+      })
+    }
+  }
+
+  const usedTitles = new Set<string>()
+  const titlesById = new Map(topics.map(topic => [topic.id, topic.title]))
+  for (const topic of topics) {
+    const originalTitle = boundedUserGuideTitle(topic.title, MAX_USER_GUIDE_TITLE_LENGTH)
+    topic.title = originalTitle
+    let candidate = originalTitle
+    if (usedTitles.has(normalized(candidate))) {
+      const context = topic.parentId === undefined ? 'section' : titlesById.get(topic.parentId) ?? 'section'
+      const kind = topic.level === 3 ? 'step' : 'task'
+      const shortContext = boundedUserGuideTitle(context, 32)
+      const hash = stableHash(topic.topicId)
+      const suffix = ` (${kind} in ${shortContext} #${hash})`
+      candidate = `${boundedUserGuideTitle(originalTitle, MAX_USER_GUIDE_TITLE_LENGTH - suffix.length)}${suffix}`
+      let disambiguator = 2
+      while (usedTitles.has(normalized(candidate))) {
+        const uniqueSuffix = ` (${kind} ${hash}-${disambiguator})`
+        candidate = `${boundedUserGuideTitle(originalTitle, MAX_USER_GUIDE_TITLE_LENGTH - uniqueSuffix.length)}${uniqueSuffix}`
+        disambiguator++
+      }
+      topic.title = candidate
+      titlesById.set(topic.id, candidate)
+    }
+    usedTitles.add(normalized(topic.title))
+  }
+
+  return {
+    version: 1,
+    method: 'evidence-grounded-toc-v1',
+    contentType,
+    evidenceSourcesRevision: evidenceIndex.sourcesRevision,
+    evidenceExtractionRevision: evidenceIndex.extractionRevision,
+    groundedAnalysisBuiltAt: groundedAnalysis.builtAt,
+    generatedAt: Date.now(),
+    items: topics.map((topic, order) => ({ ...topic, order })),
+  }
+}
+
 export function buildTocProposal(
   evidenceIndex: EvidenceIndex,
   groundedAnalysis: ConceptAnalysis,
   contentType: string,
 ): TocProposal {
+  if (isUserGuideContentType(contentType))
+    return buildUserGuideProposal(evidenceIndex, groundedAnalysis, contentType)
+
   const topics: ProposedTopic[] = []
   type HeadingSeed = {
     heading: EvidenceItem

@@ -355,8 +355,8 @@ export async function executeGroundedToc(
     try {
       generatedItems = validateGroundedTocOutput(
         raw,
-        snapshot.evidenceIndex,
-        snapshot.analysis,
+        packet.selectedEvidenceIndex,
+        packet.selectedAnalysis,
         snapshot.contentType,
       ).items
       break

@@ -1,5 +1,74 @@
 import type { EvidenceItem } from './evidenceIndex'
 
+const USER_GUIDE_BLOCKED = /\b(?:admin(?:istrator)?(?:-only)?(?: reference| guide| manual)?|test(?:ing)? scenarios?|validation scenarios?|release notes?|suggested (?:table of contents|to[c]?s?)|expected concepts?|pipeline[- ]tests?|not covered|not in scope|qa checklist)\b/i
+const USER_GUIDE_ADMIN_AREA = /\b(?:administration|administrative|admin(?:istration|istrator)?(?:[- ]only)?|permissions?|roles?|tenant\s+(?:config(?:uration)?|settings?|management|polic(?:y|ies)))\b/i
+const USER_GUIDE_ADMIN_ACTION = /\b(?:configure|manage|set up|change|update|edit|assign|create|add|remove|delete|grant|revoke)\b[^.!?\n]{0,55}\b(?:tenant(?:s| configuration| settings?)?|permissions?|roles?)\b|\b(?:tenant(?:s| configuration| settings?)?|permissions?|roles?)\b[^.!?\n]{0,55}\b(?:configure|manage|set up|assign|grant|revoke)\b/i
+const USER_GUIDE_TASK_WORDS = /\b(?:navigate|browse|search|find|filter|open|view|create|edit|update|manage|review|approve|attach|upload|add|remove|download|export|share|generate|run|complete|submit|track|notify|notification|profile|case|evidence|report|dashboard|troubleshoot|recover|sign in|log in|install|save|select|choose|click)\b/i
+const USER_GUIDE_ACTION = /\b(?:you|users?|readers?)\s+(?:(?:can|may|must|should|will|need to)\s+)?(?:navigate|browse|search|find|filter|open|view|create|edit|update|manage|review|approve|attach|upload|add|remove|download|export|share|generate|run|complete|submit|track|receive|configure|set up|troubleshoot|recover|sign in|log in|install|save|select|choose|click)\b|\b(?:how to|to|click|select|choose|open|enter|selecting|clicking)\s+(?:navigate|browse|search|find|filter|open|view|create|edit|update|manage|review|approve|attach|upload|add|remove|download|export|share|generate|run|complete|submit|track|receive|configure|set up|troubleshoot|recover|sign in|log in|install|save|select|choose|click)\b/i
+
+function guideText(value: string): string {
+  return value.normalize('NFKC').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/** Identifies user-guide content types across the labels stored by the app. */
+export function isUserGuideContentType(contentType: string): boolean {
+  return guideText(contentType).toLocaleLowerCase('en-US') === 'user guide'
+}
+
+/**
+ * Removes common source-outline and transcript prefixes before a heading is
+ * considered as a reader-facing title.
+ */
+export function cleanUserGuideHeading(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/^\s*\d+(?:\.\d+)*(?:[.)])?\s+(?=\D)/, '')
+    .replace(/^\s*[\[(]?\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?[\])]?\s*(?:(?:-|–|—|to)\s*[\[(]?\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?[\])]?\s*)?(?:[-–—:|]\s*)?/i, '')
+    .replace(/^\s*\d+(?:\.\d+)*(?:[.)])?\s+(?=\D)/, '')
+    .replace(/^\s*(?:chapter|section)\s+\d+(?:\.\d+)*[.:)]?\s*/i, '')
+    .replace(/^\s*[-–—:|.)]+\s*/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s.:–—-]+|[\s.:–—-]+$/g, '')
+    .trim()
+}
+
+/**
+ * Scores evidence for User Guide selection. Negative values mark material that
+ * should not enter a User Guide proposal; larger positive values favor
+ * actionable, user-facing sources over administrative or scaffolding material.
+ */
+export function scoreUserGuideEvidence(item: EvidenceItem): number {
+  const fileName = guideText(item.sourceFileName).toLocaleLowerCase('en-US')
+  const section = (item.sectionPath ?? []).map(guideText).join(' ').toLocaleLowerCase('en-US')
+  const text = guideText(item.text).toLocaleLowerCase('en-US')
+  const context = `${fileName} ${section} ${text}`
+  const administrativeContext = `${fileName} ${section} ${item.blockType === 'heading' ? text : ''}`
+  const profileFacingContext = /\b(?:personal profile|your profile|my profile|profile preferences|profile settings|profile and notifications|notifications and profile)\b/i
+    .test(`${section} ${text}`)
+  const adminArea = USER_GUIDE_ADMIN_AREA.test(administrativeContext) && !profileFacingContext
+
+  if (/\b(?:test scenario|testing scenario|qa test|pipeline test|release notes?|suggested toc|expected concepts?|not covered|not in scope)\b/i.test(context)
+    || /\b(?:admin|administrator)(?:istration)?\s+(?:reference|guide|manual)\b/i.test(fileName)
+    || adminArea
+    || USER_GUIDE_ADMIN_ACTION.test(text)) {
+    return -100
+  }
+
+  let score = 0
+  if (/\b(?:walk ?through|user guide|user manual|end user|how[- ]to|training walkthrough)\b/i.test(fileName)) score += 30
+  if (/\b(?:features?|capabilities|product guide|help guide)\b/i.test(fileName)) score += 24
+  if (/\b(?:admin|administrator)(?:istration)?\b/i.test(fileName)) score -= 70
+  if (/\b(?:test|testing|qa|validation|release|pipeline)\b/i.test(fileName)) score -= 60
+  if (USER_GUIDE_BLOCKED.test(section) || USER_GUIDE_BLOCKED.test(text)) score -= 55
+  if (/\b(?:admin|administrator)(?:istration)?[- ]only\b/i.test(context)) score -= 70
+  if (/\b(?:navigation|search|case|evidence|report|export|notification|profile|troubleshoot|workflow|task)\b/i.test(section)) score += 8
+  if (USER_GUIDE_TASK_WORDS.test(`${section} ${text}`)) score += 9
+  if (USER_GUIDE_ACTION.test(text)) score += 36
+  if (item.blockType === 'heading') score += 2
+  if (cleanUserGuideHeading(item.text) !== item.text.trim()) score += 1
+  return score
+}
+
 type HeadingIntent =
   | 'start' | 'navigation' | 'workflow' | 'feature' | 'search'
   | 'review' | 'export' | 'troubleshooting' | 'concept'

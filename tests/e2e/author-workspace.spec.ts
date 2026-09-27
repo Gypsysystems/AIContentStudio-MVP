@@ -118,8 +118,8 @@ async function addRealSource(page: Page) {
     name: 'workspace-operations.md',
     mimeType: 'text/markdown',
     buffer: Buffer.from(
-      '# Workspace Operations\n\n## Access Reviews\n\nAdministrators review privileged access every quarter.\n\n'
-        + '## Recovery\n\nOperators restore service from the verified recovery archive.\n',
+      '# Workspace Operations\n\n## Access Reviews\n\nUsers can review workspace activity for each project.\n\n'
+        + '## Recovery\n\nUsers can recover a workspace file from the verified backup archive.\n',
     ),
   })
   await expect(page.getByTestId('evidence-freshness')).toHaveText('Current', { timeout: 15_000 })
@@ -136,9 +136,9 @@ async function prepareAuthor(page: Page, projectName: string) {
   const project = await readProject(page, projectName)
   const evidenceIndex = project.evidenceIndex
   const accessEvidence = evidenceIndex?.items.find((item: { text: string }) =>
-    item.text.includes('Administrators review privileged access every quarter'))
+    item.text.includes('Users can review workspace activity for each project'))
   const recoveryEvidence = evidenceIndex?.items.find((item: { text: string }) =>
-    item.text.includes('Operators restore service from the verified recovery archive'))
+    item.text.includes('Users can recover a workspace file from the verified backup archive'))
   if (!accessEvidence || !recoveryEvidence) throw new Error('Expected source-derived evidence for both Author topics')
   await patchProject(page, projectName, {
     appToc: [
@@ -283,7 +283,7 @@ test('desktop Author workspace presents the outline, editor, and source context 
   const accessTopic = topicRows.filter({ hasText: 'Access Reviews' }).first()
   await accessTopic.getByText('Access Reviews', { exact: true }).click()
   await page.getByTestId('author-context-tab-evidence').click()
-  await expect(context).toContainText('Administrators review privileged access every quarter')
+  await expect(context).toContainText('Users can review workspace activity for each project')
   await page.getByTestId('author-context-tab-sources').click()
   await expect(context).toContainText('workspace-operations.md')
   await page.getByTestId('author-context-tab-review').click()
@@ -324,7 +324,7 @@ test('Review finding opens its exact Author topic and preserves manual and appro
   const targetTopicId = stableAuthorTopicId(targetTopic)
   const otherTopicId = stableAuthorTopicId(otherTopic)
   const claim = 'The workspace always recovers in five minutes.'
-  const approvedText = 'Administrators review privileged access every quarter.'
+  const approvedText = 'Users can review workspace activity for each project.'
   const metadata = createManualAuthorTopicMetadata(targetTopicId, {
     contentType: 'user-guide',
     variables: [],

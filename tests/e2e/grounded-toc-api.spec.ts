@@ -44,12 +44,12 @@ function projectRecord(overrides: Partial<ProjectRecord> = {}): ProjectRecord {
         id: 'block-body-a',
         sourceId: 'source-a',
         type: 'paragraph',
-        text: `Source note: ${PRIVATE_TEXT}`,
+        text: `Users can install the app from Downloads. Source note: ${PRIVATE_TEXT}`,
         order: 1,
         sectionPath: ['Install the app'],
       },
     ],
-    extractedText: `Install the app\nSource note: ${PRIVATE_TEXT}`,
+    extractedText: `Install the app\nUsers can install the app from Downloads. Source note: ${PRIVATE_TEXT}`,
     warnings: [],
     sourceRevision: 1,
     extractionRevision: 1,
@@ -115,6 +115,169 @@ function projectRecord(overrides: Partial<ProjectRecord> = {}): ProjectRecord {
     publishConfig: {},
     ...overrides,
   }
+}
+
+function sourceExtraction(
+  sourceId: string,
+  fileName: string,
+  blocks: Array<{
+    id: string
+    type: 'heading' | 'paragraph'
+    text: string
+    sectionPath: string[]
+    headingLevel?: number
+  }>,
+): SourceExtraction {
+  const extractedBlocks = blocks.map((block, order) => ({
+    ...block,
+    sourceId,
+    order,
+  }))
+  return {
+    sourceId,
+    fileName,
+    fileType: fileName.endsWith('.md') ? 'text/markdown' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    status: 'extracted',
+    blocks: extractedBlocks,
+    extractedText: extractedBlocks.map(block => block.text).join('\n'),
+    warnings: [],
+    sourceRevision: 1,
+    extractionRevision: 1,
+  }
+}
+
+function mixedUserGuideRecord(): ProjectRecord {
+  const walkthroughName = 'Walkthrough Transcript.docx'
+  const featuresName = 'Product Features and Capabilities.docx'
+  const sourceExtractions: Record<string, SourceExtraction> = {
+    walkthrough: sourceExtraction('walkthrough', walkthroughName, [
+      {
+        id: 'walk-h-search',
+        type: 'heading',
+        text: '00:03:20–00:04:15 1. Search cases',
+        headingLevel: 2,
+        sectionPath: ['00:03:20–00:04:15 1. Search cases'],
+      },
+      {
+        id: 'walk-p-search',
+        type: 'paragraph',
+        text: 'You can search cases by title and filter the results by status.',
+        sectionPath: ['00:03:20–00:04:15 1. Search cases'],
+      },
+      {
+        id: 'walk-h-filter',
+        type: 'heading',
+        text: '2. Filter cases by status',
+        headingLevel: 3,
+        sectionPath: ['00:03:20–00:04:15 1. Search cases', '2. Filter cases by status'],
+      },
+      {
+        id: 'walk-p-filter',
+        type: 'paragraph',
+        text: 'To narrow the case list, you can filter cases by status before opening a record.',
+        sectionPath: ['00:03:20–00:04:15 1. Search cases', '2. Filter cases by status'],
+      },
+      {
+        id: 'walk-h-create-case',
+        type: 'heading',
+        text: '3. Create a case',
+        headingLevel: 2,
+        sectionPath: ['3. Create a case'],
+      },
+      {
+        id: 'walk-p-create-case',
+        type: 'paragraph',
+        text: 'You can create a case from the workspace and add its evidence.',
+        sectionPath: ['3. Create a case'],
+      },
+    ]),
+    features: sourceExtraction('features', featuresName, [
+      {
+        id: 'feature-h-reports',
+        type: 'heading',
+        text: '03. Reports and exports',
+        headingLevel: 2,
+        sectionPath: ['03. Reports and exports'],
+      },
+      {
+        id: 'feature-p-reports',
+        type: 'paragraph',
+        text: 'Users can export a report as CSV and download it for sharing.',
+        sectionPath: ['03. Reports and exports'],
+      },
+      {
+        id: 'feature-h-format',
+        type: 'heading',
+        text: '3.1 Choose a report format',
+        headingLevel: 3,
+        sectionPath: ['03. Reports and exports', '3.1 Choose a report format'],
+      },
+      {
+        id: 'feature-p-format',
+        type: 'paragraph',
+        text: 'Choose CSV to download the report as a spreadsheet.',
+        sectionPath: ['03. Reports and exports', '3.1 Choose a report format'],
+      },
+    ]),
+    admin: sourceExtraction('admin', 'Admin Reference.docx', [
+      {
+        id: 'admin-h',
+        type: 'heading',
+        text: 'Configure tenant policy',
+        headingLevel: 2,
+        sectionPath: ['Administration', 'Configure tenant policy'],
+      },
+      {
+        id: 'admin-p',
+        type: 'paragraph',
+        text: 'Administrators configure account provisioning and tenant permissions.',
+        sectionPath: ['Administration', 'Configure tenant policy'],
+      },
+    ]),
+    scenarios: sourceExtraction('scenarios', 'Test Scenario Guide.docx', [
+      {
+        id: 'scenario-h',
+        type: 'heading',
+        text: '4. Validate notification delivery',
+        headingLevel: 2,
+        sectionPath: ['Validation scenarios', '4. Validate notification delivery'],
+      },
+      {
+        id: 'scenario-p',
+        type: 'paragraph',
+        text: 'Expected concepts: pipeline-test verifies the notification payload.',
+        sectionPath: ['Validation scenarios', '4. Validate notification delivery'],
+      },
+      ...Array.from({ length: 220 }, (_, index) => ({
+        id: `scenario-noise-${index}`,
+        type: 'paragraph' as const,
+        text: `${index + 1}. Pipeline test validates the expected concepts; this is not end-user task documentation.`,
+        sectionPath: ['Expected concepts', 'Pipeline test'],
+      })),
+    ]),
+    release: sourceExtraction('release', 'Release Notes.md', [
+      {
+        id: 'release-h',
+        type: 'heading',
+        text: '2026.4 Export changes',
+        headingLevel: 2,
+        sectionPath: ['Release notes', '2026.4 Export changes'],
+      },
+      {
+        id: 'release-p',
+        type: 'paragraph',
+        text: 'The export pipeline emits a new internal format in this release.',
+        sectionPath: ['Release notes', '2026.4 Export changes'],
+      },
+    ]),
+  }
+  const evidenceIndex = buildEvidenceIndex(sourceExtractions, 1)
+  return projectRecord({
+    sourceFileIds: Object.keys(sourceExtractions),
+    sourceExtractions,
+    evidenceIndex,
+    conceptAnalysis: buildConceptAnalysis(evidenceIndex),
+  })
 }
 
 function workflowBundle(): AiWorkflowExecutionBundle {
@@ -186,24 +349,78 @@ function workflowBundle(): AiWorkflowExecutionBundle {
 }
 
 function validOutput(record: ProjectRecord): string {
-  const candidate = buildTocProposal(
+  const candidates = buildTocProposal(
     record.evidenceIndex as never,
     record.conceptAnalysis as never,
     'User Guide',
-  ).items.find(item => item.proposalKind === 'evidence-backed')
-  if (!candidate) throw new Error('Fixture must produce an evidence-backed candidate')
-  const evidenceId = candidate.supportingEvidenceIds[0]
+  ).items
+  const task = candidates.find(item => item.level === 2 && item.proposalKind === 'evidence-backed')
+  const root = candidates.find(item => item.topicId === task?.parentTopicId)
+  if (!task || !root) throw new Error('Fixture must produce a supported task and its group')
+  const procedure = candidates.find(item => item.level === 3 && item.parentTopicId === task.topicId)
+  const selected = [root, task, ...(procedure ? [procedure] : [])]
+  const keyById = new Map(selected.map((item, index) => [item.topicId, `topic-${index}`]))
   return JSON.stringify({
-    items: [{
-      key: 'install',
-      title: candidate.title,
-      level: 1,
-      parentKey: null,
+    items: selected.map(item => ({
+      key: keyById.get(item.topicId),
+      title: item.title,
+      level: item.level,
+      parentKey: item.parentTopicId ? keyById.get(item.parentTopicId) ?? null : null,
       rationale: 'This subject is present in the supplied evidence.',
-      classification: 'evidence-backed',
-      supportingEvidenceIds: [evidenceId],
-    }],
+      classification: item.proposalKind === 'evidence-backed' ? 'evidence-backed' : 'optional-structural',
+      supportingEvidenceIds: item.supportingEvidenceIds.slice(0, 1),
+    })),
   })
+}
+
+function outputFromPacket(userContent: string, flat = false): string {
+  const packetContent = userContent.split('\nThe previous output did not pass strict schema')[0]
+  const request = JSON.parse(packetContent) as {
+    packet: {
+      candidateTopics: Array<{
+        topicId: string
+        title: string
+        level: number
+        parentTopicId: string | null
+        classification: 'evidence-backed' | 'optional-structural'
+        supportingEvidenceIds: string[]
+      }>
+    }
+  }
+  const candidates = request.packet.candidateTopics
+    .filter(candidate => candidate.classification === 'evidence-backed'
+      && candidate.supportingEvidenceIds.length > 0)
+  const candidateIds = new Set(candidates.map(candidate => candidate.topicId))
+  const tasksByGroup = new Map<string, typeof candidates>()
+  for (const task of candidates.filter(candidate => candidate.level === 2
+    && candidate.parentTopicId && candidateIds.has(candidate.parentTopicId))) {
+    const tasks = tasksByGroup.get(task.parentTopicId!) ?? []
+    tasks.push(task)
+    tasksByGroup.set(task.parentTopicId!, tasks)
+  }
+  const selectedTaskIds = new Set([...tasksByGroup.values()].flat().map(candidate => candidate.topicId))
+  const selectedRootIds = new Set([...tasksByGroup.keys()])
+  const selectedProcedureIds = new Set(candidates
+    .filter(candidate => candidate.level === 3 && candidate.parentTopicId
+      && selectedTaskIds.has(candidate.parentTopicId))
+    .map(candidate => candidate.topicId))
+  const selected = candidates.filter(candidate =>
+    (candidate.level === 1 && selectedRootIds.has(candidate.topicId))
+    || selectedTaskIds.has(candidate.topicId)
+    || selectedProcedureIds.has(candidate.topicId))
+  const keyByTopicId = new Map(selected.map((candidate, index) => [candidate.topicId, `packet-topic-${index}`]))
+  const items = selected.map(candidate => ({
+    key: keyByTopicId.get(candidate.topicId),
+    title: candidate.title,
+    level: flat ? 1 : candidate.level,
+    parentKey: flat || !candidate.parentTopicId
+      ? null
+      : keyByTopicId.get(candidate.parentTopicId) ?? null,
+    rationale: 'This task is supported by the cited cloud evidence.',
+    classification: candidate.classification,
+    supportingEvidenceIds: candidate.supportingEvidenceIds.slice(0, 3),
+  }))
+  return JSON.stringify({ items })
 }
 
 function requestFor(body: unknown, cookie = `sb_access_token=${SESSION}`): IncomingMessage {
@@ -304,6 +521,7 @@ async function callEndpoint(
   options: {
     workflow?: AiWorkflowExecutionBundle
     output?: string
+    responseForPacket?: (userContent: string) => string
     raceAfterFirstRead?: boolean
   } = {},
 ) {
@@ -319,7 +537,7 @@ async function callEndpoint(
       generateText: async input => {
         providerCalls++
         expect(input.credential).toBe('secret-must-never-leak')
-        return options.output ?? validOutput(record)
+        return options.responseForPacket?.(input.userContent) ?? options.output ?? validOutput(record)
       },
       now: () => 1_700_000_000_000,
     })
@@ -334,8 +552,9 @@ async function callEndpoint(
 
 test('request accepts exactly project and published workflow IDs and returns only saved proposal metadata', async () => {
   const record = projectRecord()
+  validOutput(record)
   const result = await callEndpoint(record)
-  expect(result.response.statusCode).toBe(200)
+  expect(result.response.statusCode, result.response.body).toBe(200)
   const body = JSON.parse(result.response.body)
   expect(Object.keys(body).sort()).toEqual(['proposal', 'recordRevision'])
   expect(body.recordRevision).toBe(5)
@@ -362,6 +581,111 @@ test('request accepts exactly project and published workflow IDs and returns onl
   expect(saved.tocProposal).toEqual(body.proposal)
   expect(saved.sourceExtractions).toEqual(record.sourceExtractions)
   expect(saved.evidenceIndex).toEqual(record.evidenceIndex)
+})
+
+test('server-authoritative User Guide generation selects mixed evidence, preserves provenance, and saves only the proposal', async () => {
+  const record = mixedUserGuideRecord()
+  expect(record.evidenceIndex?.items.length).toBeGreaterThan(200)
+  let providerContent = ''
+  const result = await callEndpoint(record, 'owner', {
+    responseForPacket: userContent => {
+      providerContent = userContent
+      return outputFromPacket(userContent)
+    },
+  })
+
+  expect(result.response.statusCode, result.response.body).toBe(200)
+  expect(result.providerCalls).toBe(1)
+  expect(providerContent.length).toBeLessThanOrEqual(120_000)
+  const packet = JSON.parse(providerContent) as {
+    packet: {
+      evidence: Array<{
+        evidenceId: string
+        source: { sourceId: string; fileId: string; fileName: string }
+        sectionPath: string[]
+      }>
+      candidateTopics: Array<{
+        title: string
+        level: number
+        parentTopicId: string | null
+        supportingEvidenceIds: string[]
+      }>
+    }
+  }
+  const packetEvidence = packet.packet.evidence
+  const packetEvidenceIds = new Set(packetEvidence.map(item => item.evidenceId))
+  const selectedSources = new Set(packetEvidence.map(item => item.source.fileName))
+  expect(selectedSources.has('Walkthrough Transcript.docx')).toBe(true)
+  expect(selectedSources.has('Product Features and Capabilities.docx')).toBe(true)
+  expect([...selectedSources]).toEqual(expect.not.arrayContaining([
+    'Admin Reference.docx',
+    'Test Scenario Guide.docx',
+    'Release Notes.md',
+  ]))
+  expect(providerContent).not.toContain('Configure tenant policy')
+  expect(providerContent).not.toContain('Expected concepts')
+  expect(providerContent).not.toContain('pipeline-test')
+  expect(providerContent).not.toContain('Release notes')
+  const sourceCounts = packetEvidence.reduce<Record<string, number>>((counts, item) => {
+    counts[item.source.fileName] = (counts[item.source.fileName] ?? 0) + 1
+    return counts
+  }, {})
+  expect(sourceCounts[ 'Walkthrough Transcript.docx']).toBeGreaterThan(sourceCounts['Product Features and Capabilities.docx'])
+
+  const candidateTitles = packet.packet.candidateTopics.map(candidate => candidate.title)
+  expect(candidateTitles.some(title => /search/i.test(title))).toBe(true)
+  expect(candidateTitles.some(title => /filter cases|create a case|export a report/i.test(title))).toBe(true)
+  expect(candidateTitles.some(title => /^(?:\d+[\s.)-]|00:\d{2})/.test(title))).toBe(false)
+  expect(packet.packet.candidateTopics.some(candidate => candidate.level === 1)).toBe(true)
+  expect(packet.packet.candidateTopics.some(candidate => candidate.level === 2)).toBe(true)
+  expect(packet.packet.candidateTopics.some(candidate => candidate.level === 3)).toBe(true)
+  expect(packet.packet.candidateTopics.every(candidate =>
+    candidate.supportingEvidenceIds.every(id => packetEvidenceIds.has(id)))).toBe(true)
+
+  const body = JSON.parse(result.response.body) as {
+    proposal: { items: Array<{
+      title: string
+      level: number
+      parentTopicId?: string
+      supportingEvidenceIds: string[]
+      sourceSectionPaths?: string[][]
+    }> }
+  }
+  const proposal = body.proposal.items
+  expect(new Set(proposal.map(item => item.level))).toEqual(new Set([1, 2, 3]))
+  expect(proposal.every(item => item.supportingEvidenceIds.length > 0
+    && item.supportingEvidenceIds.every(id => packetEvidenceIds.has(id)))).toBe(true)
+  expect(proposal.some(item => item.level === 3 && item.parentTopicId !== undefined)).toBe(true)
+  const packetPathById = new Map(packetEvidence.map(item => [item.evidenceId, item.sectionPath]))
+  for (const topic of proposal) {
+    expect(topic.sourceSectionPaths?.length).toBeGreaterThan(0)
+    for (const evidenceId of topic.supportingEvidenceIds)
+      expect(topic.sourceSectionPaths).toContainEqual(packetPathById.get(evidenceId))
+  }
+
+  expect(result.calls.patches).toHaveLength(1)
+  const saved = result.calls.patches[0].record as Record<string, unknown>
+  expect(saved.tocProposal).toEqual(body.proposal)
+  expect(saved.appToc).toEqual(record.appToc)
+  expect(saved.sourceExtractions).toEqual(record.sourceExtractions)
+  expect(saved.evidenceIndex).toEqual(record.evidenceIndex)
+})
+
+test('flat User Guide output is retried and rejected without saving or deterministic fallback', async () => {
+  const record = mixedUserGuideRecord()
+  const userContents: string[] = []
+  const result = await callEndpoint(record, 'owner', {
+    responseForPacket: userContent => {
+      userContents.push(userContent)
+      return outputFromPacket(userContent, true)
+    },
+  })
+  expect(result.response.statusCode, result.response.body).toBe(502)
+  expect(JSON.parse(result.response.body)).toMatchObject({ code: 'MODEL_OUTPUT_INVALID' })
+  expect(userContents).toHaveLength(2)
+  expect(userContents[1]).toContain('previous output did not pass strict schema')
+  expect(result.providerCalls).toBe(2)
+  expect(result.calls.patches).toHaveLength(0)
 })
 
 test('owner and admin may generate; editor and viewer are denied before project read', async () => {
@@ -629,7 +953,7 @@ test('malformed output retries once, then never falls back to deterministic gene
   })
   expect(calls).toBe(2)
   expect(result.proposal.method).toBe('ai-grounded-toc-v1')
-  expect(result.proposal.items).toHaveLength(1)
+  expect(result.proposal.items.map(item => item.level)).toEqual([1, 2])
 
   calls = 0
   const store = memoryStore(record)

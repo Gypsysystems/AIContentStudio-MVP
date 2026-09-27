@@ -20,3 +20,9 @@ If replacing an edited proposal requires clearing it before an external generati
 **Why:** Provider failures, tab closure, and concurrent project writes can happen after the clear but before the replacement is saved; an in-memory or tab-scoped copy cannot cover all of those cases.
 
 **How to apply:** Abort replacement when recovery cannot be persisted; never restore over a newer proposal or project revision without explicit review. Clear the copy only after confirmed success, confirmed recovery, or an explicit discard.
+
+For large mixed-source projects, relevance-select the bounded context sent to generation, but keep freshness tied to the complete authoritative project evidence. Validate the response against exactly the selected evidence IDs, not merely any ID in the full index.
+
+**Why:** Otherwise irrelevant or excluded sources can still be cited as factual support, while treating a selected subset as the whole project can conceal a concurrent source change. Selection must reduce noise without weakening provenance or conflict detection.
+
+**How to apply:** Preserve original evidence IDs and source paths for selected items, scope candidate and analysis references to that same selection, and keep the full project revision guard for the eventual proposal-only save.
