@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { flushSync } from 'react-dom'
 import {
   SCHEMA_VERSION,
+  ProjectConflictError,
   type ProjectRecord, type ProjectSummary, type StoredFile,
 } from './projectService'
 import {
@@ -1165,7 +1166,7 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
 function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProject, onDuplicateProject, onRestored, onNewProject }: {
   onNav: (s: Screen) => void
   activeProjectId?: string | null
-  onOpenProject: (record: ProjectRecord) => void
+  onOpenProject: (projectId: string) => Promise<void>
   onDeleteProject: (projectId: string) => Promise<void>
   onDuplicateProject: (projectId: string, confirmedName: string) => Promise<void>
   onRestored: (record: ProjectRecord, mode: RestoreOptions['mode']) => void
@@ -1204,8 +1205,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
   const handleOpen = async (pid: string) => {
     setActionLoading(pid)
     try {
-      const record = await loadProject(pid)
-      if (record) onOpenProject(record)
+      await onOpenProject(pid)
     } finally { setActionLoading(null) }
   }
 
@@ -15695,6 +15695,7 @@ export default function App() {
   const [appLoadError, setAppLoadError] = useState<string | null>(null)
   const startupInitializedRef = useRef(false)
   const projectOpenInFlightRef = useRef(false)
+  const deferHydrationPersistenceRef = useRef(false)
   const [projectId, setProjectId] = useState<string | null>(null)
   const projectIdRef = useRef(projectId)
   projectIdRef.current = projectId
@@ -16251,6 +16252,7 @@ export default function App() {
   // ── Autosave ───────────────────────────────────────────────────────────────
   const triggerAutosave = useCallback((immediate = false) => {
     if (!projectId) return
+    deferHydrationPersistenceRef.current = false
     const version = ++saveVersionRef.current
     setSaveStatus('saving')
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
@@ -16415,7 +16417,7 @@ export default function App() {
       inputSnapshot: currentReviewInputSnapshot,
       updatedAt: currentReviewInputSnapshot.capturedAt,
     }, currentReviewInputSnapshot, currentReviewInputSnapshot.capturedAt))
-    triggerAutosave()
+    if (!deferHydrationPersistenceRef.current) triggerAutosave()
   }, [
     appLoading,
     isDemoMode,
@@ -16880,7 +16882,7 @@ export default function App() {
       authorTopicMetadataRef.current = next
       return next
     })
-    triggerAutosave()
+    if (!deferHydrationPersistenceRef.current) triggerAutosave()
   }, [
     appLoading,
     appToc,
@@ -16922,7 +16924,7 @@ export default function App() {
       authorTopicMetadataRef.current = next
       return next
     })
-    triggerAutosave()
+    if (!deferHydrationPersistenceRef.current) triggerAutosave()
   }, [
     appToc,
     appLoading,
@@ -16941,7 +16943,7 @@ export default function App() {
   useEffect(() => {
     if (isDemoMode || evidenceIndex || !canRebuildEvidence) return
     setEvidenceIndex(buildEvidenceIndex(sourceExtractions, sourcesRevision))
-    triggerAutosave()
+    if (!deferHydrationPersistenceRef.current) triggerAutosave()
   }, [canRebuildEvidence, evidenceIndex, isDemoMode, sourceExtractions, sourcesRevision, triggerAutosave])
 
   const handleRebuildConceptAnalysis = useCallback(() => {
@@ -17352,6 +17354,19 @@ export default function App() {
     triggerAutosave,
   ])
 
+  // Re-read after the initial authorized read: a project can advance between
+  // selecting it and hydration. A read conflict gets one bounded retry.
+  const loadLatestProjectForOpen = async (id: string): Promise<ProjectRecord | null> => {
+    try {
+      const initial = await loadProject(id)
+      if (!initial) return null
+      return await loadProject(id)
+    } catch (error) {
+      if (!(error instanceof ProjectConflictError)) throw error
+      return loadProject(id)
+    }
+  }
+
   // ── Startup: check for active project or show dashboard ───────────────────
   useEffect(() => {
     // StrictMode replays effects in development; two concurrent hydrations
@@ -17362,7 +17377,7 @@ export default function App() {
       try {
         const activeId = getActiveProjectId()
         if (activeId) {
-          const record = await loadProject(activeId)
+          const record = await loadLatestProjectForOpen(activeId)
           if (record) {
             await hydrateFromRecord(record)
             setScreen('sources') // Preserve the existing active-project reload destination.
@@ -17382,6 +17397,7 @@ export default function App() {
   // ── Hydrate App state from a loaded ProjectRecord ─────────────────────────
   // Always sets ALL fields — conditional hydration causes isolation bugs.
   const hydrateFromRecord = async (record: ProjectRecord) => {
+    deferHydrationPersistenceRef.current = true
     projectRevisionRef.current = record.recordRevision
     projectCreatedAtRef.current = record.createdAt
     projectOwnershipRef.current = {
@@ -17396,9 +17412,6 @@ export default function App() {
     if (!record.topicContent) record = { ...record, topicContent: {} }
     if (!record.authorTopicMetadata) record = { ...record, authorTopicMetadata: {} }
     const restoredReviewModel = hydrateReviewModel(record.reviewModel, record.projectId)
-    const reviewModelNeedsPersistence = JSON.stringify(restoredReviewModel)
-      !== JSON.stringify(record.reviewModel)
-    if (reviewModelNeedsPersistence) record = { ...record, reviewModel: restoredReviewModel }
 
     setProjectId(record.projectId)
     setProjectName(record.projectName ?? '')
@@ -17424,18 +17437,6 @@ export default function App() {
     const reconciledProjectMeta = { ...restoredProjectMeta, styleProfileId: reconciledProfileId }
     setProjectMeta(reconciledProjectMeta)
     setActiveStyleProfileId(reconciledProfileId)
-    if (
-      record.activeStyleProfileId !== reconciledProfileId
-      || restoredProjectMeta.styleProfileId !== reconciledProfileId
-    ) {
-      record = {
-        ...record,
-        projectMeta: reconciledProjectMeta,
-        activeStyleProfileId: reconciledProfileId,
-      }
-      record = await saveProjectIfCurrent(record, record.recordRevision)
-      projectRevisionRef.current = record.recordRevision
-    }
     setThemeVariables((record.themeVariables as Record<string, Variable[]>) ?? DEFAULT_THEME_VARIABLES)
     setPageLayouts((record.pageLayouts as PageLayout[]) ?? INITIAL_PAGE_LAYOUTS)
     setHtmlMasterPages(normalizeHtmlMasterPages((record.htmlMasterPages as HtmlMasterPage[]) ?? INITIAL_HTML_MASTER_PAGES))
@@ -17475,11 +17476,6 @@ export default function App() {
     )
     authorTopicMetadataRef.current = restoredAuthorTopicMetadata
     setAuthorTopicMetadata(restoredAuthorTopicMetadata)
-    if (JSON.stringify(restoredAuthorTopicMetadata) !== JSON.stringify(record.authorTopicMetadata ?? {})) {
-      record = { ...record, authorTopicMetadata: restoredAuthorTopicMetadata }
-      record = await saveProjectIfCurrent(record, record.recordRevision)
-      projectRevisionRef.current = record.recordRevision
-    }
     setContentRevision(record.contentRevision ?? 0)
     setReviewModel(restoredReviewModel)
     setFindingStatuses((record.findingStatuses as Record<number, FindingStatus>) ?? {})
@@ -17490,10 +17486,6 @@ export default function App() {
     setConditionGroups((record.conditionGroups as ConditionGroup[]) ?? DEFAULT_CONDITION_GROUPS)
     setDocComments((record.docComments as DocComment[]) ?? [])
     setPublishConfig((record.publishConfig as PublishConfig) ?? { selectedFormats: [], activeVariant: '' })
-    if (reviewModelNeedsPersistence) {
-      record = await saveProjectIfCurrent(record, record.recordRevision)
-      projectRevisionRef.current = record.recordRevision
-    }
     // Restore source files from IndexedDB as stable ProjectSource[]
     try {
       const storedFiles = await loadProjectFiles(record.projectId)
@@ -17547,6 +17539,7 @@ export default function App() {
   // ── Project state reset ────────────────────────────────────────────────────
   const resetProjectState = () => {
     setAppLoadError(null)
+    deferHydrationPersistenceRef.current = false
     saveEpochRef.current++
     pendingSaveRef.current = null
     saveVersionRef.current = 0
@@ -17619,11 +17612,13 @@ export default function App() {
   }
 
   // ── App-level project actions ──────────────────────────────────────────────
-  const handleOpenProject = async (record: ProjectRecord) => {
+  const handleOpenProject = async (id: string) => {
     if (projectOpenInFlightRef.current) return
     projectOpenInFlightRef.current = true
     resetProjectState()
     try {
+      const record = await loadLatestProjectForOpen(id)
+      if (!record) throw new Error('Project no longer exists or is not accessible.')
       await hydrateFromRecord(record)
       setAppLoadError(null)
       setScreen('project-home')

@@ -18,7 +18,7 @@
 - [Publish condition safety](word-condition-safety.md) — Word and PDF reject conditional blocks when the unchanged projection cannot select an audience safely.
 - [PDF font fidelity](pdf-font-fidelity.md) — map typography to bundled PDF fonts or a supported configured fallback; never imply unprovided fonts were embedded.
 - [Conditional export safety](preview-disclosure-boundary.md) — HTML fails closed without audience context; bind downloadable outputs to the selected audience and snapshot.
-- [Local-to-cloud persistence boundary](local-cloud-persistence-boundary.md) — preserve legacy missing-field defaults and single-flight hydration when introducing guarded repository writes.
+- [Local-to-cloud persistence boundary](local-cloud-persistence-boundary.md) — keep open-time reconciliation and passive hydration effects read-only; guard later user saves.
 - [Local backup restore boundary](local-backup-restore-boundary.md) — checksummed archives need pre-write hydration checks and destination file-set guards, not only revision guards.
 - [Local ownership boundary](local-ownership-boundary.md) — only fully unowned legacy records get local ownership; current membership role gates project actions.
 - [Server-authorized local bridge](server-authorized-local-bridge.md) — server-owned identity and ownership metadata gate app actions, but browser IndexedDB is not a production security boundary.

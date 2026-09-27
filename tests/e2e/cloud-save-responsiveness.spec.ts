@@ -185,3 +185,84 @@ test('a stale-write conflict is visible and reload restores the last successful 
     expect.arrayContaining([expect.objectContaining({ contentWidth: 1300 })]),
   )
 })
+
+test('opening a cloud project uses the latest revision without saving hydrated defaults', async ({ page }) => {
+  const cloud = await mockSignedInCloud(page)
+  const name = `Concurrent open ${Date.now()}`
+  await createProject(page, name)
+  await page.getByRole('button', { name: 'Continue — Sources' }).click()
+  await expect(page.locator('header').getByText('All changes saved', { exact: true })).toBeVisible()
+  await page.locator('header').getByRole('button', { name: 'Content Studio home' }).click()
+  await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
+
+  const current = [...cloud.records.values()][0]
+  const topicId = 'cloud-open-task'
+  const stale = {
+    ...current,
+    activeStyleProfileId: 'removed-style-profile',
+    authorTopicMetadata: {},
+    appToc: [{ id: 1, topicId, title: 'Review cases', level: 1, words: 0 }],
+    topicContent: {
+      [topicId]: [{ id: 'cloud-open-block', type: 'para', content: 'Users can open cases to review their details.' }],
+    },
+    projectMeta: {
+      ...(current.projectMeta as Record<string, unknown>),
+      styleProfileId: 'removed-style-profile',
+    },
+  }
+  delete stale.reviewModel
+  const latestName = `${name} updated elsewhere`
+  const latest = { ...stale, projectName: latestName, recordRevision: stale.recordRevision + 1 }
+  cloud.records.set(current.projectId, stale)
+  const savesBeforeOpen = cloud.saves.length
+  let reads = 0
+  await page.route('**/api/cloud-projects', async route => {
+    const input = route.request().postDataJSON() as Record<string, unknown>
+    if (input.action !== 'read' || input.projectId !== current.projectId) return route.fallback()
+    reads++
+    if (reads !== 1) return route.fallback()
+    cloud.records.set(current.projectId, latest)
+    return route.fulfill({ json: { record: stale } })
+  })
+
+  const row = page.locator('main div.group').filter({ has: page.getByText(name, { exact: true }) })
+  await row.getByRole('button', { name: 'Open', exact: true }).click()
+  await expect(page.getByTestId('project-home')).toContainText(latestName)
+  await expect(page.getByTestId('project-open-error')).toHaveCount(0)
+  expect(reads).toBe(2)
+  await page.waitForTimeout(900) // Open must not schedule a deferred autosave either.
+  expect(cloud.saves).toHaveLength(savesBeforeOpen)
+  expect(cloud.records.get(current.projectId)).toEqual(latest)
+
+  // The reconciled state remains in memory and can be saved on a later user edit.
+  await page.locator('header').getByRole('button', { name: 'Project Settings' }).click()
+  await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill(`${latestName} edited`)
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect.poll(() => cloud.saves.length).toBe(savesBeforeOpen + 1)
+  expect(cloud.saves.at(-1)).toMatchObject({
+    recordRevision: latest.recordRevision + 1,
+    projectName: `${latestName} edited`,
+    reviewModel: expect.objectContaining({ projectId: current.projectId }),
+  })
+  expect(cloud.saves.at(-1)?.activeStyleProfileId).not.toBe('removed-style-profile')
+  expect((cloud.saves.at(-1)?.authorTopicMetadata as Record<string, unknown>)[topicId]).toBeDefined()
+
+  await page.locator('header').getByRole('button', { name: 'Content Studio home' }).click()
+  await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
+  await expect(page.getByText(`${latestName} edited`, { exact: true })).toBeVisible()
+
+  await page.route('**/api/cloud-projects', async route => {
+    const input = route.request().postDataJSON() as Record<string, unknown>
+    if (input.action !== 'read' || input.projectId !== current.projectId) return route.fallback()
+    return route.fulfill({
+      status: 404,
+      json: { code: 'PROJECT_NOT_FOUND', error: 'Not found.' },
+    })
+  })
+  const updatedRow = page.locator('main div.group')
+    .filter({ has: page.getByText(`${latestName} edited`, { exact: true }) })
+  await updatedRow.getByRole('button', { name: 'Open', exact: true }).click()
+  await expect(page.getByTestId('project-open-error'))
+    .toContainText('Project no longer exists or is not accessible.')
+  await expect(updatedRow.getByRole('button', { name: 'Open', exact: true })).toBeEnabled()
+})
