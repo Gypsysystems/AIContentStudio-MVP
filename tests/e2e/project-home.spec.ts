@@ -17,7 +17,7 @@ type HomeCloud = {
 type HomeStoredProject = {
   projectId: string
   projectName: string
-  appToc: Array<{ id: string | number; topicId?: string; title: string }>
+  appToc: Array<{ id: string | number; topicId?: string; title: string; level: number }>
   topicContent: Record<string, Array<{ id: string; type: string; content: string }>>
   contentRevision: number
   reviewModel: {
@@ -220,8 +220,13 @@ async function patchStoredProject(page: Page, name: string, patch: Record<string
 
 async function clearOneGeneratedTaskTopic(page: Page, name: string) {
   const project = await readStoredProject(page, name)
-  const target = project.appToc[1]
-  if (!target) throw new Error("The generated outline must contain a non-default task topic")
+  const target = project.appToc.find((topic, index) => {
+    if (index === 0 || topic.level < 2) return false
+    const topicId = topic.topicId?.trim() || `legacy-${topic.id}`
+    return project.topicContent[topicId]?.some(block => !/^h[1-6]$/.test(block.type))
+      || project.topicContent[String(topic.id)]?.some(block => !/^h[1-6]$/.test(block.type))
+  })
+  if (!target) throw new Error("The generated outline must contain an authored nested task topic")
   const topicId = target.topicId?.trim() || `legacy-${target.id}`
   const topicContent = { ...project.topicContent }
   delete topicContent[topicId]
@@ -605,14 +610,16 @@ test("Continue Working follows five real readiness states through Sources, Analy
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   await proposeAndAcceptToc(page)
   await clearClaimCheck(page)
+  await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  await openProjectHome(page, name)
+  await clearOneGeneratedTaskTopic(page, name)
+  await page.reload()
   await openProjectHome(page, name)
   await continueWorking(page)
   await expect(page.getByTestId("author-stage-heading")).toBeVisible()
 
-  // The generated TOC can include topics without authored blocks. Persist
-  // content for those topics, as Review's real readiness snapshot requires,
+  // Complete the nested task left empty for Author so Review has real inputs,
   // then refresh the content-sensitive claim check before Review.
-  await clearOneGeneratedTaskTopic(page, name)
   expect(await fillMissingAuthorTopics(page, name)).toBeGreaterThan(0)
   await page.reload()
   await returnToProjectHome(page)

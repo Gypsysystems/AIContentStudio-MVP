@@ -11,9 +11,13 @@ async function createProject(page: Page) {
 
 async function addSource(page: Page) {
   await page.locator('input[type="file"]').setInputFiles({
-    name: 'workspace-operations.md',
+    name: 'case-workflows.md',
     mimeType: 'text/markdown',
-    buffer: Buffer.from('# Workspace Operations\n\nWorkspace operators configure team access in the dashboard.\n\n## Access Control\n\nOperators manage access to the workspace.\n'),
+    buffer: Buffer.from(
+      '# Case Management\n\nUsers can open cases and track their status from the workspace.\n\n'
+      + '## Open Cases\n\nUsers can open a case from the Cases list to review its details.\n\n'
+      + '### Attach Evidence\n\nSelect Add evidence to attach a file to the case.\n',
+    ),
   })
   await expect(page.getByTestId('evidence-freshness')).toHaveText('Current', { timeout: 15_000 })
 }
@@ -71,7 +75,8 @@ test('TOC acceptance advances into Author, focuses the workspace and keeps the s
   await expect(page.getByTestId('author-stage-heading')).toBeFocused()
   await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
   await page.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
-  await expect(page.getByTestId('committed-toc-panel')).toContainText('Workspace Operations')
+  await expect(page.getByTestId('committed-toc-panel')).toContainText('Work with cases and evidence')
+  await expect(page.getByTestId('committed-toc-panel')).toContainText(/Open cases/i)
 })
 
 test('Author describes missing Review inputs and runs Review when ready; Review advances to Preview', async ({ page }) => {
