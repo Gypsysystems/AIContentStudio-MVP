@@ -14,3 +14,9 @@ Content-type-specific proposals should treat source headings and section paths a
 **Why:** Implementation-oriented headings such as an internal export adapter can describe technical components without proving that a reader can export anything. Copying them into a User Guide, or turning them into tasks from the heading alone, would misrepresent the sources.
 
 **How to apply:** Organize supported topics for the selected content type while keeping heading-derived topic IDs stable across regenerated titles, and retain local evidence IDs, source paths, and rationale. Do not turn a passive mention or an internal noun into a user action.
+
+If replacing an edited proposal requires clearing it before an external generation request, preserve a scoped, durable recovery copy before the clear and make restoration revision-guarded. A failed or interrupted call must not silently erase human review.
+
+**Why:** Provider failures, tab closure, and concurrent project writes can happen after the clear but before the replacement is saved; an in-memory or tab-scoped copy cannot cover all of those cases.
+
+**How to apply:** Abort replacement when recovery cannot be persisted; never restore over a newer proposal or project revision without explicit review. Clear the copy only after confirmed success, confirmed recovery, or an explicit discard.

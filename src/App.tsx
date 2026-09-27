@@ -16,11 +16,15 @@ import {
 } from './authorizedProjectService'
 import { indexedDbProjectRepository } from './projectService'
 import { importLocalProjectToCloud } from './cloudProjectRepository'
+import { validateRestorableProjectRecord } from './projectMigrations'
 import { LOCAL_ACCESS_CONTEXT } from './ownership'
 import { getAccessContext } from './authSession'
 import type { ProjectOwnership } from './ownership'
 import { getAdministrationAccess } from './administrationAccess'
 import AdministrationScreen from './AdministrationScreen'
+import { checkAiWorkflowReadiness, historyAiAsset, listAiAssets } from './aiCatalogRepository'
+import type { AiAssetVersion, WorkflowDefinition } from './aiCatalogModel'
+import type { WorkflowReadiness } from './workflowReadiness'
 import { normalizeProjectName, projectNameKey, suggestUniqueProjectName } from './projectNames'
 const {
   createProject, loadProject, listProjects, deleteProject, duplicateProject,
@@ -57,6 +61,7 @@ import {
   normalizeTopicIds,
   type ProposedTopic,
   type TocProposal,
+  validateTocProposal,
 } from './tocProposal'
 import {
   createManualAuthorTopicMetadata,
@@ -271,6 +276,114 @@ type PendingProjectSave = {
   version: number
   epoch: number
   promise: Promise<boolean>
+}
+type AiTocRecoveryScope = {
+  userId: string
+  workspaceId: string
+  projectId: string
+  recordRevision: number
+}
+type AiTocRecoverySnapshot = {
+  proposal: TocProposal
+  message: string
+  scope: AiTocRecoveryScope
+}
+type StoredAiTocRecovery = AiTocRecoveryScope & {
+  schemaVersion: 1
+  proposal: TocProposal
+}
+
+const aiTocRecoveryStorageKey = ({ userId, workspaceId, projectId }: AiTocRecoveryScope) =>
+  `grounded-toc-recovery:v1:${encodeURIComponent(userId)}:${encodeURIComponent(workspaceId)}:${encodeURIComponent(projectId)}`
+
+function validateRecoveryProposalForProject(record: ProjectRecord, proposal: unknown): asserts proposal is TocProposal {
+  validateTocProposal(proposal)
+  validateRestorableProjectRecord({ ...record, tocProposal: proposal })
+}
+
+function getAiTocRecoveryScope(record: ProjectRecord): AiTocRecoveryScope {
+  const access = getAccessContext()
+  if (!isCloudProjectMode()
+    || !access?.user?.id
+    || access.membership.userId !== access.user.id
+    || access.membership.workspaceId !== access.workspace.id
+    || record.workspaceId !== access.workspace.id
+    || !record.projectId
+    || !Number.isSafeInteger(record.recordRevision)
+    || record.recordRevision < 0) {
+    throw new Error('A verified cloud user, workspace, and project are required to preserve a TOC recovery snapshot.')
+  }
+  return {
+    userId: access.user.id,
+    workspaceId: access.workspace.id,
+    projectId: record.projectId,
+    recordRevision: record.recordRevision,
+  }
+}
+
+function readAiTocRecoverySnapshot(record: ProjectRecord): AiTocRecoverySnapshot | null {
+  let scope: AiTocRecoveryScope
+  try {
+    scope = getAiTocRecoveryScope(record)
+    const key = aiTocRecoveryStorageKey(scope)
+    const serialized = window.localStorage.getItem(key)
+    if (!serialized) return null
+    if (serialized.length > 1_000_000) throw new Error('Recovery snapshot exceeds the supported size.')
+    const stored: unknown = JSON.parse(serialized)
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Invalid recovery snapshot.')
+    const snapshot = stored as Record<string, unknown>
+    const expectedKeys = ['schemaVersion', 'userId', 'workspaceId', 'projectId', 'recordRevision', 'proposal']
+    if (Object.keys(snapshot).sort().join(',') !== expectedKeys.sort().join(',')
+      || snapshot.schemaVersion !== 1
+      || snapshot.userId !== scope.userId
+      || snapshot.workspaceId !== scope.workspaceId
+      || snapshot.projectId !== scope.projectId
+      || !Number.isSafeInteger(snapshot.recordRevision)
+      || (snapshot.recordRevision as number) < 0) {
+      throw new Error('Recovery snapshot scope does not match the active project.')
+    }
+    validateRecoveryProposalForProject(record, snapshot.proposal)
+    return {
+      proposal: snapshot.proposal,
+      scope: { ...scope, recordRevision: snapshot.recordRevision as number },
+      message: record.tocProposal
+        ? 'A saved proposal is available as a separate recovery copy. It will not replace the proposal currently stored in this project.'
+        : 'A previous proposal is retained as a read-only recovery snapshot. Explicitly restore it only after reviewing the current project revision.',
+    }
+  } catch {
+    try {
+      const activeScope = getAiTocRecoveryScope(record)
+      window.localStorage.removeItem(aiTocRecoveryStorageKey(activeScope))
+    } catch {
+      // Invalid data is never trusted or surfaced if scoped cleanup is unavailable.
+    }
+    return null
+  }
+}
+
+function persistAiTocRecoverySnapshot(record: ProjectRecord, proposal: TocProposal): AiTocRecoveryScope {
+  const scope = getAiTocRecoveryScope(record)
+  validateRecoveryProposalForProject(record, proposal)
+  const key = aiTocRecoveryStorageKey(scope)
+  if (window.localStorage.getItem(key) !== null)
+    throw new Error('An unresolved recovery snapshot already exists. Recover, export, or discard it before replacing this proposal.')
+  const stored: StoredAiTocRecovery = { schemaVersion: 1, ...scope, proposal }
+  const serialized = JSON.stringify(stored)
+  if (serialized.length > 1_000_000)
+    throw new Error('The prior proposal is too large to preserve safely; it was not cleared and generation was not started.')
+  window.localStorage.setItem(key, serialized)
+  if (window.localStorage.getItem(key) !== serialized) {
+    try { window.localStorage.removeItem(key) } catch { /* fail closed */ }
+    throw new Error('The prior proposal recovery snapshot could not be verified; it was not cleared and generation was not started.')
+  }
+  return scope
+}
+
+function clearAiTocRecoverySnapshot(scope: AiTocRecoveryScope): void {
+  const key = aiTocRecoveryStorageKey(scope)
+  window.localStorage.removeItem(key)
+  if (window.localStorage.getItem(key) !== null)
+    throw new Error('The recovery snapshot could not be cleared from this browser.')
 }
 
 const FONT_OPTIONS = ['Arial','Arial Narrow','Calibri','Aptos','Aptos Display','Cambria','Georgia','Segoe UI','Tahoma','Times New Roman','Trebuchet MS','Verdana','Courier New','Inter','Open Sans','Roboto','Lato']
@@ -7456,6 +7569,257 @@ function mergeCommittedToc(existing: TocItem[], proposed: ProposedTopic[]): TocI
   return normalizeTopicIds(merged).map((item, order) => ({ ...item, order }))
 }
 
+function AiTocWorkflowControls({
+  allowed,
+  hasProposal,
+  recovery,
+  onDismissRecovery,
+  onRecoverRecovery,
+  onGenerate,
+}: {
+  allowed: boolean
+  hasProposal: boolean
+  recovery: AiTocRecoverySnapshot | null
+  onDismissRecovery: () => Promise<void>
+  onRecoverRecovery: () => Promise<void>
+  onGenerate: (workflowId: string, workflowVersion: number, replaceExisting: boolean) => Promise<void>
+}) {
+  const [workflows, setWorkflows] = useState<AiAssetVersion[]>([])
+  const [selectedWorkflowKey, setSelectedWorkflowKey] = useState('')
+  const [readiness, setReadiness] = useState<WorkflowReadiness | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [loadingWorkflows, setLoadingWorkflows] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const selectedWorkflow = workflows.find(asset => `${asset.id}@${asset.version}` === selectedWorkflowKey)
+  const isGenerateTocWorkflow = (asset: AiAssetVersion): boolean => {
+    if (asset.kind !== 'workflow' || !('steps' in asset.definition)) return false
+    const definition = asset.definition as WorkflowDefinition
+    const capability = (value: string) => value.trim().toLocaleLowerCase('en-US').replace(/[\s_-]+/gu, '')
+    return capability(definition.capability) === 'generatetoc'
+      && definition.steps.length > 0
+      && definition.steps.every(step => capability(step.capability) === 'generatetoc')
+  }
+
+  useEffect(() => {
+    let active = true
+    if (!allowed) {
+      setWorkflows([])
+      setSelectedWorkflowKey('')
+      setReadiness(null)
+      return () => { active = false }
+    }
+    setLoadingWorkflows(true)
+    setError(null)
+    void listAiAssets().then(async assets => {
+      if (!active) return
+      const workflowHeads = assets.filter(asset => asset.kind === 'workflow')
+      const histories = await Promise.all(workflowHeads.map(asset => historyAiAsset(asset.id)))
+      const available = histories.flat().filter(asset => asset.kind === 'workflow'
+        && asset.state === 'published'
+        && isGenerateTocWorkflow(asset))
+        .sort((left, right) => left.name.localeCompare(right.name)
+          || left.id.localeCompare(right.id) || right.version - left.version)
+      setWorkflows(available)
+      setSelectedWorkflowKey(current => available.some(asset => `${asset.id}@${asset.version}` === current)
+        ? current
+        : available[0] ? `${available[0].id}@${available[0].version}` : '')
+    }).catch(() => {
+      if (active) setError('Published workflows could not be loaded. Try again later.')
+    }).finally(() => {
+      if (active) setLoadingWorkflows(false)
+    })
+    return () => { active = false }
+  }, [allowed])
+
+  useEffect(() => {
+    let active = true
+    setReadiness(null)
+    if (!allowed || !selectedWorkflow) {
+      setChecking(false)
+      return () => { active = false }
+    }
+    setChecking(true)
+    setError(null)
+    void checkAiWorkflowReadiness(selectedWorkflow.id, selectedWorkflow.version).then(result => {
+      if (active) setReadiness(result)
+    }).catch(() => {
+      if (active) setError('Workflow readiness could not be verified. Check the published workflow and provider connection.')
+    }).finally(() => {
+      if (active) setChecking(false)
+    })
+    return () => { active = false }
+  }, [allowed, selectedWorkflow?.id, selectedWorkflow?.version])
+
+  const generate = async () => {
+    if (!selectedWorkflow || readiness?.status !== 'ready' || generating) return
+    const replaceExisting = hasProposal
+    if (replaceExisting
+      && !window.confirm('Replace the saved TOC proposal? Its reviewed changes will be discarded before a new proposal is generated.'))
+      return
+    setGenerating(true)
+    setError(null)
+    try {
+      await onGenerate(selectedWorkflow.id, selectedWorkflow.version, replaceExisting)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'AI TOC generation failed. The proposal was not changed.')
+    } finally {
+      setGenerating(false)
+    }
+  }
+  const exportRecovery = () => {
+    if (!recovery) return
+    const blob = new Blob([JSON.stringify({
+      schemaVersion: 1,
+      scope: recovery.scope,
+      proposal: recovery.proposal,
+    }, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'grounded-toc-recovery.json'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  if (!allowed) return null
+
+  const canGenerate = !!selectedWorkflow && readiness?.status === 'ready' && !checking && !generating && !recovery
+  return (
+    <section className="mb-5 rounded-xl border border-[#D8D5F4] bg-[#F8F8FF] p-4" data-testid="ai-toc-controls">
+      {recovery && (
+        <div data-testid="ai-toc-recovery" role="alert" className="mb-4 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3 text-[11px] text-[#92400E]">
+          <p className="font-semibold">Previous proposal retained as a recovery snapshot — not saved in the project</p>
+          <p className="mt-1">{recovery.message}</p>
+          <p className="mt-1">Safely stored in this browser · source project revision {recovery.scope.recordRevision}</p>
+          <p className="mt-1">
+            {recovery.proposal.method} · {recovery.proposal.contentType} · generated {new Date(recovery.proposal.generatedAt).toLocaleString()}
+            {' · '}evidence revision {recovery.proposal.evidenceSourcesRevision}
+          </p>
+          {recovery.proposal.aiProvenance && (
+            <p className="mt-1">
+              {recovery.proposal.aiProvenance.providerId} / {recovery.proposal.aiProvenance.modelId}
+              {' · '}workflow {recovery.proposal.aiProvenance.workflow.id} v{recovery.proposal.aiProvenance.workflow.version}
+            </p>
+          )}
+          <ol className="mt-2 list-decimal space-y-2 pl-5">
+            {recovery.proposal.items.map(item => (
+              <li key={item.topicId} data-testid="ai-toc-recovery-item">
+                <p className="font-semibold">{item.title}</p>
+                <p>Level {item.level} · {item.words} words · {item.proposalKind}</p>
+                <p>{item.rationale}</p>
+                {item.parentTopicId && <p>Parent topic: {item.parentTopicId}</p>}
+                {!!item.supportingEvidenceIds.length && <p>Evidence: {item.supportingEvidenceIds.join(', ')}</p>}
+                {!!item.sourceSectionPaths?.length && <p>Source sections: {item.sourceSectionPaths.map(path => path.join(' › ')).join('; ')}</p>}
+              </li>
+            ))}
+          </ol>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-testid="export-ai-toc-recovery"
+              onClick={() => {
+                try { exportRecovery() }
+                catch { setError('The recovery snapshot could not be exported by this browser.') }
+              }}
+              className="rounded border border-[#B45309] px-2.5 py-1.5 font-semibold underline underline-offset-2"
+            >
+              Export recovery snapshot
+            </button>
+            <button
+              type="button"
+              data-testid="retry-ai-toc-recovery"
+              onClick={() => {
+                setError(null)
+                void onRecoverRecovery().catch(cause => setError(
+                  cause instanceof Error ? cause.message : 'The recovery proposal could not be restored.',
+                ))
+              }}
+              className="rounded border border-[#B45309] px-2.5 py-1.5 font-semibold"
+            >
+              Review and restore to current revision…
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setError(null)
+                void onDismissRecovery().catch(cause => setError(
+                  cause instanceof Error ? cause.message : 'The recovery snapshot could not be discarded.',
+                ))
+              }}
+              className="rounded border border-[#B45309] px-2.5 py-1.5 font-semibold underline underline-offset-2"
+            >
+              Discard recovery snapshot
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="mb-3">
+        <h2 className="text-[13px] font-semibold text-[#22223A]">Generate TOC with AI</h2>
+        <p className="mt-1 text-[11px] text-[#626277]">
+          Creates a grounded proposal for review. It does not change the committed TOC.
+        </p>
+      </div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <label className="flex-1 text-[11px] font-medium text-[#575766]">
+          Published Generate TOC workflow
+          <select
+            aria-label="Published Generate TOC workflow"
+            data-testid="ai-toc-workflow-select"
+            value={selectedWorkflowKey}
+            disabled={loadingWorkflows || generating || workflows.length === 0}
+            onChange={event => setSelectedWorkflowKey(event.target.value)}
+            className="mt-1 block w-full rounded-lg border border-[#D8D5CF] bg-white px-3 py-2 text-[12px] text-[#22223A]"
+          >
+            {workflows.length === 0
+              ? <option value="">{loadingWorkflows ? 'Loading published workflows…' : 'No published Generate TOC workflows'}</option>
+              : workflows.map(workflow => (
+                <option key={`${workflow.id}@${workflow.version}`} value={`${workflow.id}@${workflow.version}`}>
+                  {workflow.name} · v{workflow.version}
+                </option>
+              ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          data-testid="generate-ai-toc"
+          disabled={!canGenerate}
+          onClick={() => { void generate() }}
+          className="rounded-lg bg-[#4B4BBF] px-4 py-2 text-[12px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {generating ? 'Generating…' : 'Generate TOC with AI'}
+        </button>
+      </div>
+      {checking && <p role="status" className="mt-3 text-[11px] text-[#626277]">Checking published workflow and provider readiness…</p>}
+      {readiness && (
+        <div data-testid="ai-toc-readiness" className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${readiness.status === 'ready' ? 'bg-[#ECFDF3] text-[#166534]' : 'bg-[#FFF7ED] text-[#9A3412]'}`}>
+          <p className="font-semibold">
+            {readiness.status === 'ready' ? 'Workflow ready' : 'Workflow blocked'}
+            {readiness.model ? ` · ${readiness.model.providerId} / ${readiness.model.modelId}` : ''}
+          </p>
+          <p className="mt-1">
+            Prompt pack {readiness.dependencies.promptPack
+              ? `${readiness.dependencies.promptPack.name} v${readiness.dependencies.promptPack.version}`
+              : 'missing'} ·
+            {' '}Reference set {readiness.dependencies.referenceSet
+              ? `${readiness.dependencies.referenceSet.name} v${readiness.dependencies.referenceSet.version}`
+              : 'missing'} ·
+            {' '}Blueprint {readiness.dependencies.blueprint
+              ? `${readiness.dependencies.blueprint.name} v${readiness.dependencies.blueprint.version}`
+              : 'missing'}
+          </p>
+          {readiness.blockers.map(blocker => (
+            <p key={blocker.code} className="mt-1">{blocker.message}</p>
+          ))}
+        </div>
+      )}
+      {error && <p role="alert" data-testid="ai-toc-error" className="mt-3 text-[11px] text-[#B42318]">{error}</p>}
+    </section>
+  )
+}
+
 function RealTocProposalScreen({
   onNav,
   toc,
@@ -7464,7 +7828,12 @@ function RealTocProposalScreen({
   committedTocStale,
   evidenceIndex,
   canGenerate,
+  canGenerateAi,
+  recovery,
+  onDismissRecovery,
+  onRecoverRecovery,
   onGenerate,
+  onGenerateAi,
   onProposalChange,
   onDiscardProposal,
   onCommit,
@@ -7476,7 +7845,12 @@ function RealTocProposalScreen({
   committedTocStale: boolean
   evidenceIndex: EvidenceIndex | null
   canGenerate: boolean
+  canGenerateAi: boolean
+  recovery: AiTocRecoverySnapshot | null
+  onDismissRecovery: () => Promise<void>
+  onRecoverRecovery: () => Promise<void>
   onGenerate: () => void
+  onGenerateAi: (workflowId: string, workflowVersion: number, replaceExisting: boolean) => Promise<void>
   onProposalChange: (proposal: TocProposal) => void
   onDiscardProposal: () => void
   onCommit: (items: TocItem[], proposal: TocProposal, mergedExisting: boolean) => void
@@ -7619,6 +7993,14 @@ function RealTocProposalScreen({
             Generate grounded proposal
           </button>
         </div>
+        <AiTocWorkflowControls
+          allowed={canGenerateAi}
+          hasProposal={!!proposal}
+          recovery={recovery}
+          onDismissRecovery={onDismissRecovery}
+          onRecoverRecovery={onRecoverRecovery}
+          onGenerate={onGenerateAi}
+        />
         <div data-testid="real-toc-next-step" role="status" aria-live="polite" className={`mb-5 rounded-xl border px-4 py-3 text-[12px] ${
           committedTocStale
             ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
@@ -7701,6 +8083,38 @@ function RealTocProposalScreen({
           </button>
         </div>
       </div>
+      <AiTocWorkflowControls
+        allowed={canGenerateAi}
+        hasProposal={!!proposal}
+        recovery={recovery}
+        onDismissRecovery={onDismissRecovery}
+        onRecoverRecovery={onRecoverRecovery}
+        onGenerate={onGenerateAi}
+      />
+      {proposal.method === 'ai-grounded-toc-v1' && proposal.aiProvenance && (
+        <div data-testid="ai-toc-provenance" role="status" className="mb-5 rounded-xl border border-[#C7D2FE] bg-[#EEF2FF] px-4 py-3 text-[11px] text-[#3730A3]">
+          <p className="font-semibold">AI-generated proposal · Not yet accepted</p>
+          <p className="mt-1">
+            {proposal.aiProvenance.providerId} / {proposal.aiProvenance.modelId}
+            {' · '}Workflow {proposal.aiProvenance.workflow.id} v{proposal.aiProvenance.workflow.version}
+          </p>
+          <p className="mt-1">
+            Prompt pack {proposal.aiProvenance.promptPack.id} v{proposal.aiProvenance.promptPack.version}
+            {' · '}Reference set {proposal.aiProvenance.referenceSet.id} v{proposal.aiProvenance.referenceSet.version}
+            {' · '}Blueprint {proposal.aiProvenance.blueprint.id} v{proposal.aiProvenance.blueprint.version}
+          </p>
+          <p className="mt-1">
+            Evidence revision {proposal.aiProvenance.evidenceSourcesRevision}
+            {' · '}Extraction {proposal.aiProvenance.evidenceExtractionRevision}
+            {' · '}Analysis built {new Date(proposal.aiProvenance.analysisBuiltAt).toLocaleString()}
+            {' · '}Generated {new Date(proposal.generatedAt).toLocaleString()}
+          </p>
+          <p className="mt-1 font-medium">The committed TOC remains unchanged until you accept this proposal.</p>
+          <a href="#proposed-toc-topics" data-testid="review-ai-toc-proposal" className="mt-2 inline-block font-semibold underline underline-offset-2">
+            Review proposed structure
+          </a>
+        </div>
+      )}
 
       <div id={!proposalFresh ? 'toc-proposal-stale-reason' : proposal.items.length === 0 ? 'toc-commit-reason' : undefined} data-testid="real-toc-next-step" role="status" aria-live="polite" className={`mb-5 flex flex-col gap-2 rounded-xl border px-4 py-3 text-[12px] sm:flex-row sm:items-center sm:justify-between ${
         !proposalFresh
@@ -7733,7 +8147,7 @@ function RealTocProposalScreen({
       </div>
 
       <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-5">
-        <section className="min-w-0 bg-white border border-[#E2DED7] rounded-xl overflow-hidden lg:col-span-3">
+        <section id="proposed-toc-topics" className="min-w-0 bg-white border border-[#E2DED7] rounded-xl overflow-hidden lg:col-span-3">
           <div className="px-4 py-3 border-b border-[#E2DED7] flex items-center justify-between">
             <span className="text-[13px] font-semibold text-[#111218]">Proposed topics</span>
             <span className="text-[10px] text-[#9898AB]">{proposal.items.length} topics</span>
@@ -15282,6 +15696,8 @@ export default function App() {
   const startupInitializedRef = useRef(false)
   const projectOpenInFlightRef = useRef(false)
   const [projectId, setProjectId] = useState<string | null>(null)
+  const projectIdRef = useRef(projectId)
+  projectIdRef.current = projectId
   const projectRevisionRef = useRef(0)
   const projectCreatedAtRef = useRef(0)
   const projectOwnershipRef = useRef<ProjectOwnership>({
@@ -15466,6 +15882,7 @@ export default function App() {
   // ── Lifted TOC state ───────────────────────────────────────────────────────
   const [appToc, setAppToc] = useState<TocItem[]>([]) // empty until generated from analysis
   const [tocProposal, setTocProposal] = useState<TocProposal | null>(null)
+  const [aiTocRecovery, setAiTocRecovery] = useState<AiTocRecoverySnapshot | null>(null)
   const [tocGeneratedFromRev, setTocGeneratedFromRev] = useState<number>(-1)
   const [tocGeneratedFromEvidenceSourcesRevision, setTocGeneratedFromEvidenceSourcesRevision] = useState(-1)
   const [tocGeneratedFromEvidenceExtractionRevision, setTocGeneratedFromEvidenceExtractionRevision] = useState('')
@@ -15892,6 +16309,19 @@ export default function App() {
     conceptAnalysis,
     projectMeta.contentType,
   )
+  const canGenerateAiToc = !!projectId
+    && isCloudProjectMode()
+    && !isDemoMode
+    && ['owner', 'admin'].includes(getAccessContext()?.membership?.role ?? '')
+  const activeAiTocRecovery = (() => {
+    const access = getAccessContext()
+    return aiTocRecovery
+      && projectId === aiTocRecovery.scope.projectId
+      && access?.user?.id === aiTocRecovery.scope.userId
+      && access?.workspace?.id === aiTocRecovery.scope.workspaceId
+      ? aiTocRecovery
+      : null
+  })()
   const committedTocStale = !isDemoMode
     && appToc.length > 0
     && (
@@ -16587,6 +17017,281 @@ export default function App() {
     triggerAutosave()
   }, [triggerAutosave])
 
+  const handleDiscardAiTocRecovery = useCallback(async () => {
+    if (!aiTocRecovery) return
+    const access = getAccessContext()
+    if (!isCloudProjectMode()
+      || access.user.id !== aiTocRecovery.scope.userId
+      || access.workspace.id !== aiTocRecovery.scope.workspaceId
+      || projectIdRef.current !== aiTocRecovery.scope.projectId)
+      throw new Error('The recovery snapshot scope no longer matches the active user and project.')
+    clearAiTocRecoverySnapshot(aiTocRecovery.scope)
+    setAiTocRecovery(null)
+  }, [aiTocRecovery])
+
+  const handleRecoverAiTocProposal = useCallback(async () => {
+    const recovery = aiTocRecovery
+    const targetProjectId = projectIdRef.current
+    if (!recovery || !targetProjectId || targetProjectId !== recovery.scope.projectId)
+      throw new Error('Open the recovery snapshot’s project before restoring it.')
+    if (!await persistCurrentProject())
+      throw new Error('Current project changes could not be saved. The recovery snapshot remains available.')
+    await saveQueueRef.current
+    const current = await projectRepository.loadProject(targetProjectId)
+    if (!current) throw new Error('The project could not be reloaded. The recovery snapshot remains available.')
+    const currentScope = getAiTocRecoveryScope(current)
+    if (currentScope.userId !== recovery.scope.userId
+      || currentScope.workspaceId !== recovery.scope.workspaceId
+      || currentScope.projectId !== recovery.scope.projectId)
+      throw new Error('The recovery snapshot scope no longer matches the active user and project.')
+    if (current.tocProposal !== null && current.tocProposal !== undefined)
+      throw new Error('A proposal is already saved in the current project. Export or discard the separate recovery snapshot; it was not written over the saved proposal.')
+    validateRecoveryProposalForProject(current, recovery.proposal)
+    if (!window.confirm(
+      `Restore the reviewed proposal to project revision ${current.recordRevision}? This is an explicit save against the current revision and will not change the committed TOC.`,
+    )) return
+
+    const restored = await projectRepository.saveProjectIfCurrent(
+      { ...current, tocProposal: recovery.proposal },
+      current.recordRevision,
+    )
+    if (projectIdRef.current !== targetProjectId) return
+    projectRevisionRef.current = restored.recordRevision
+    flushSync(() => setTocProposal({
+      ...recovery.proposal,
+      items: normalizeTopicIds(recovery.proposal.items) as ProposedTopic[],
+    }))
+    setSaveStatus('saved')
+    try {
+      clearAiTocRecoverySnapshot(recovery.scope)
+      setAiTocRecovery(null)
+    } catch {
+      setAiTocRecovery({
+        ...recovery,
+        message: 'The proposal was restored to the project, but its browser recovery copy could not be cleared. Export or discard that copy; it will not replace the saved proposal.',
+      })
+    }
+  }, [aiTocRecovery, persistCurrentProject, projectRepository])
+
+  const handleGenerateAiTocProposal = useCallback(async (
+    workflowId: string,
+    workflowVersion: number,
+    replaceExisting: boolean,
+  ) => {
+    const targetProjectId = projectId
+    if (!targetProjectId || !canGenerateAiToc || isDemoMode)
+      throw new Error('AI TOC generation requires a cloud project and an Owner or Admin account.')
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/.test(workflowId)
+      || !Number.isSafeInteger(workflowVersion) || workflowVersion < 1)
+      throw new Error('The selected published workflow is invalid.')
+    if (!!tocProposal !== replaceExisting)
+      throw new Error('The saved proposal changed. Reload the project before generating again.')
+
+    let previousProposal = replaceExisting ? tocProposal : null
+    let recoveryScope: AiTocRecoveryScope | null = null
+    let preClearRecordRevision: number | null = null
+    let clearedRecordRevision: number | null = null
+    try {
+      if (!await persistCurrentProject())
+        throw new Error('Your latest project changes could not be saved. Retry saving before generating.')
+      await saveQueueRef.current
+
+      if (replaceExisting) {
+        const current = await projectRepository.loadProject(targetProjectId)
+        if (!current || current.recordRevision !== projectRevisionRef.current)
+          throw new Error('PROJECT_CONFLICT: The project changed. Reload it before generating a proposal.')
+        if (current.tocProposal === null || current.tocProposal === undefined)
+          throw new Error('PROJECT_CONFLICT: The saved proposal changed. Reload the project before generating again.')
+        validateRecoveryProposalForProject(current, current.tocProposal)
+        previousProposal = current.tocProposal
+        // Persist and verify a user/workspace/project-scoped browser recovery
+        // copy before the required clear-save-generate sequence begins.
+        try {
+          recoveryScope = persistAiTocRecoverySnapshot(current, previousProposal)
+        } catch (cause) {
+          if (cause instanceof Error && cause.message.startsWith('An unresolved recovery snapshot already exists.'))
+            throw cause
+          throw new Error('A validated recovery copy could not be stored for this user, workspace, and project. The saved proposal was not cleared and generation was not started.')
+        }
+        preClearRecordRevision = current.recordRevision
+        flushSync(() => setTocProposal(null))
+        triggerAutosave(true)
+        if (!await persistCurrentProject())
+          throw new Error('The existing proposal could not be cleared safely. The AI request was not sent.')
+        await saveQueueRef.current
+        clearedRecordRevision = projectRevisionRef.current
+      }
+
+      const current = await projectRepository.loadProject(targetProjectId)
+      if (!current || current.recordRevision !== projectRevisionRef.current)
+        throw new Error('PROJECT_CONFLICT: The project changed. Reload it before generating a proposal.')
+      if (current.tocProposal !== null && current.tocProposal !== undefined)
+        throw new Error('PROJECT_CONFLICT: A saved proposal already exists. Review or discard it before generating.')
+
+      let response: Response
+      try {
+        response = await fetch('/api/generate-toc', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: targetProjectId, workflowId, workflowVersion }),
+        })
+      } catch {
+        throw new Error('The AI Generate TOC service could not be reached. No fallback proposal was created.')
+      }
+      let body: unknown
+      try {
+        body = await response.json()
+      } catch {
+        throw new Error('The AI Generate TOC service returned an invalid response.')
+      }
+      const result = body && typeof body === 'object' && !Array.isArray(body)
+        ? body as Record<string, unknown>
+        : null
+      if (!response.ok) {
+        const code = result && typeof result.code === 'string' ? result.code : ''
+        const messages: Record<string, string> = {
+          PROJECT_CONFLICT: 'The project changed during generation. Reload and try again.',
+          WORKFLOW_NOT_READY: 'The published workflow is no longer ready. Review its readiness and try again.',
+          WORKFLOW_UNSUPPORTED: 'The selected workflow is not a supported Generate TOC workflow.',
+          WORKFLOW_CAPABILITY_UNSUPPORTED: 'The selected workflow is not a supported Generate TOC workflow.',
+          EVIDENCE_STALE: 'The project evidence changed. Rebuild the Evidence Index and analysis before generating.',
+          ANALYSIS_STALE: 'Grounded analysis changed. Rebuild analysis before generating.',
+          EVIDENCE_EMPTY: 'A non-empty current Evidence Index is required.',
+          EVIDENCE_NOT_READY: 'Current source evidence and grounded analysis are required.',
+          CONTENT_TYPE_UNAVAILABLE: 'Choose a supported content type before generating a TOC.',
+          NO_EVIDENCE: 'A non-empty current Evidence Index is required.',
+          EXISTING_PROPOSAL: 'A TOC proposal already exists. Review or discard it before generating again.',
+          TOC_PROPOSAL_EXISTS: 'A TOC proposal already exists. Review or discard it before generating again.',
+          TOO_LARGE: 'The grounded evidence packet exceeds the supported size. Narrow the project evidence and try again.',
+          PROVIDER_AUTH_FAILED: 'The configured provider connection could not be authenticated.',
+          AUTH_FAILED: 'The configured provider connection could not be authenticated.',
+          PROVIDER_REFUSED: 'The provider declined this generation request.',
+          REFUSED: 'The provider declined this generation request.',
+          PROVIDER_RATE_LIMITED: 'The provider is temporarily rate limited. Try again later.',
+          RATE_LIMITED: 'The provider is temporarily rate limited. Try again later.',
+          PROVIDER_TIMEOUT: 'The provider did not respond before the generation timeout.',
+          TIMEOUT: 'The provider did not respond before the generation timeout.',
+          NETWORK_ERROR: 'The provider could not be reached. No fallback proposal was created.',
+          PROVIDER_ERROR: 'The provider could not generate a proposal. No fallback proposal was created.',
+          PROVIDER_UNAVAILABLE: 'The configured provider is temporarily unavailable.',
+          INVALID_MODEL_OUTPUT: 'The provider could not produce a valid grounded TOC proposal. No fallback was used.',
+          MODEL_OUTPUT_INVALID: 'The provider could not produce a valid grounded TOC proposal. No fallback was used.',
+        }
+        throw new Error(messages[code] ?? 'AI TOC generation failed. The committed TOC was not changed.')
+      }
+      if (!result || Object.keys(result).sort().join(',') !== 'proposal,recordRevision'
+        || !Number.isSafeInteger(result.recordRevision)
+        || result.recordRevision !== projectRevisionRef.current + 1
+        || !result.proposal || typeof result.proposal !== 'object' || Array.isArray(result.proposal))
+        throw new Error('The AI Generate TOC service returned invalid saved-proposal metadata.')
+      const proposal = result.proposal as TocProposal
+      if (proposal.version !== 1 || proposal.method !== 'ai-grounded-toc-v1'
+        || !Array.isArray(proposal.items) || proposal.items.length === 0
+        || !proposal.aiProvenance)
+        throw new Error('The AI Generate TOC service did not return a validated AI proposal.')
+
+      if (projectIdRef.current !== targetProjectId) {
+        if (recoveryScope) {
+          try { clearAiTocRecoverySnapshot(recoveryScope) } catch { /* preserve a copy that could not be cleared */ }
+        }
+        return
+      }
+      projectRevisionRef.current = result.recordRevision as number
+      const pendingLocalEdits = saveVersionRef.current > savedVersionRef.current
+      flushSync(() => setTocProposal({
+        ...proposal,
+        items: normalizeTopicIds(proposal.items) as ProposedTopic[],
+      }))
+      if (recoveryScope) {
+        try {
+          clearAiTocRecoverySnapshot(recoveryScope)
+          setAiTocRecovery(null)
+        } catch {
+          setAiTocRecovery({
+            proposal: previousProposal!,
+            scope: recoveryScope,
+            message: 'Generation succeeded, but the browser recovery copy could not be cleared. It remains available for export or explicit discard and cannot replace the saved proposal.',
+          })
+        }
+      } else {
+        setAiTocRecovery(null)
+      }
+      if (pendingLocalEdits) triggerAutosave(true)
+      else setSaveStatus('saved')
+    } catch (cause) {
+      if (!previousProposal || !recoveryScope || preClearRecordRevision === null) throw cause
+
+      let safelyRestored = false
+      let restoredRecordRevision: number | null = null
+      try {
+        const latest = await projectRepository.loadProject(targetProjectId)
+        if (latest
+          && latest.recordRevision === preClearRecordRevision
+          && latest.tocProposal !== null && latest.tocProposal !== undefined) {
+          // The clear write never landed; the original is still persisted.
+          safelyRestored = true
+          restoredRecordRevision = latest.recordRevision
+        } else if (latest
+          && latest.tocProposal === null
+          && (latest.recordRevision === clearedRecordRevision
+            || (clearedRecordRevision === null
+              && latest.recordRevision === preClearRecordRevision + 1))
+        ) {
+          const restored = await projectRepository.saveProjectIfCurrent(
+            { ...latest, tocProposal: previousProposal },
+            latest.recordRevision,
+          )
+          safelyRestored = restored.recordRevision === latest.recordRevision + 1
+          if (safelyRestored) restoredRecordRevision = restored.recordRevision
+        }
+      } catch {
+        // A failed compare-and-swap is expected if another edit won the race.
+        // Never retry against a newer revision: that could overwrite concurrent work.
+      }
+
+      const failureMessage = cause instanceof Error
+        ? cause.message
+        : 'AI TOC generation failed.'
+      if (safelyRestored) {
+        if (projectIdRef.current === targetProjectId) {
+          if (restoredRecordRevision !== null) projectRevisionRef.current = restoredRecordRevision
+          flushSync(() => setTocProposal(previousProposal))
+          try {
+            clearAiTocRecoverySnapshot(recoveryScope)
+            setAiTocRecovery(null)
+          } catch {
+            setAiTocRecovery({
+              proposal: previousProposal,
+              scope: recoveryScope,
+              message: 'The previous proposal was safely restored, but the browser recovery copy could not be cleared. Export or explicitly discard the duplicate snapshot.',
+            })
+          }
+          setSaveStatus('saved')
+        }
+        throw new Error(`${failureMessage} The previous proposal was safely restored.`)
+      }
+
+      if (projectIdRef.current === targetProjectId) {
+        setAiTocRecovery({
+          proposal: previousProposal,
+          scope: recoveryScope,
+          message: 'Generation failed and the guarded restore could not be confirmed. This read-only proposal is saved in this browser. Reload the project to review it or explicitly restore it against the current revision.',
+        })
+      }
+      throw new Error(`${failureMessage} The previous proposal could not be restored safely; its scoped browser recovery snapshot remains available. Reload to review it or explicitly restore it against the current revision.`)
+    }
+  }, [
+    canGenerateAiToc,
+    isDemoMode,
+    persistCurrentProject,
+    projectId,
+    projectRepository,
+    tocProposal,
+    triggerAutosave,
+  ])
+
   const handleCommitTocProposal = useCallback((items: TocItem[], proposal: TocProposal, mergedExisting: boolean) => {
     const normalized = normalizeTopicIds(items)
     const nextRevision = tocRevision + 1
@@ -16746,6 +17451,7 @@ export default function App() {
     setTocProposal(restoredProposal
       ? { ...restoredProposal, items: normalizeTopicIds(restoredProposal.items) as ProposedTopic[] }
       : null)
+    setAiTocRecovery(readAiTocRecoverySnapshot(record))
     setTocRevision(record.tocRevision ?? 0)
     setTocGeneratedFromRev(record.tocGeneratedFromRev ?? -1)
     setTocGeneratedFromEvidenceSourcesRevision(record.tocGeneratedFromEvidenceSourcesRevision ?? -1)
@@ -16864,6 +17570,7 @@ export default function App() {
     setUnsupportedAnalysis(null)
     setAppToc([])
     setTocProposal(null)
+    setAiTocRecovery(null)
     setTocRevision(0)
     setTocGeneratedFromRev(-1)
     setTocGeneratedFromEvidenceSourcesRevision(-1)
@@ -17081,7 +17788,7 @@ export default function App() {
         : <EvidenceAnalysisScreen onNav={navigate} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} analysis={conceptAnalysis} analysisFresh={conceptAnalysisFresh} onRebuild={handleRebuildConceptAnalysis} unsupportedAnalysis={unsupportedAnalysis} unsupportedFresh={unsupportedAnalysisFresh} canBuildUnsupported={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onRebuildUnsupported={handleRebuildUnsupportedAnalysis} onGenerateToc={handleGenerateTocFromAnalysis} tocUnavailableReason={tocUnavailableReason} hasCurrentProposal={!!tocProposal && tocProposalFresh} />
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
-        : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} onGenerate={handleGenerateTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
+        : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} canGenerateAi={canGenerateAiToc} recovery={activeAiTocRecovery} onDismissRecovery={handleDiscardAiTocRecovery} onRecoverRecovery={handleRecoverAiTocProposal} onGenerate={handleGenerateTocProposal} onGenerateAi={handleGenerateAiTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
        case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />

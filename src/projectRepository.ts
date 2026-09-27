@@ -629,6 +629,24 @@ export function createProjectCopySnapshot(
               groundedAnalysisBuiltAt: copiedConceptAnalysis.builtAt,
             }
           : {}),
+        ...(sourceTocProposal.aiProvenance
+          ? {
+              aiProvenance: {
+                ...sourceTocProposal.aiProvenance,
+                workflow: { ...sourceTocProposal.aiProvenance.workflow },
+                promptPack: { ...sourceTocProposal.aiProvenance.promptPack },
+                referenceSet: { ...sourceTocProposal.aiProvenance.referenceSet },
+                blueprint: { ...sourceTocProposal.aiProvenance.blueprint },
+                ...(sourceProposalWasCurrent
+                  ? {
+                      evidenceSourcesRevision: copiedEvidenceIndex!.sourcesRevision,
+                      evidenceExtractionRevision: copiedEvidenceIndex!.extractionRevision,
+                      analysisBuiltAt: copiedConceptAnalysis!.builtAt,
+                    }
+                  : {}),
+              },
+            }
+          : {}),
         items: sourceTocProposal.items.map(item => ({
           ...item,
           supportingEvidenceIds: [...item.supportingEvidenceIds],

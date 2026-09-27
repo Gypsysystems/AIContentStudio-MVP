@@ -4,6 +4,23 @@ import { organizeHeading } from './tocInformationArchitecture'
 
 export type ProposalTopicKind = 'evidence-backed' | 'optional-structural' | 'manual'
 
+export type TocProposalAssetRef = {
+  id: string
+  version: number
+}
+
+export type AiTocProposalProvenance = {
+  providerId: string
+  modelId: string
+  workflow: TocProposalAssetRef
+  promptPack: TocProposalAssetRef
+  referenceSet: TocProposalAssetRef
+  blueprint: TocProposalAssetRef
+  evidenceSourcesRevision: number
+  evidenceExtractionRevision: string
+  analysisBuiltAt: number
+}
+
 export type ProposedTopic = {
   id: number
   topicId: string
@@ -22,13 +39,111 @@ export type ProposedTopic = {
 
 export type TocProposal = {
   version: 1
-  method: 'evidence-grounded-toc-v1'
+  method: 'evidence-grounded-toc-v1' | 'ai-grounded-toc-v1'
   contentType: string
   evidenceSourcesRevision: number
   evidenceExtractionRevision: string
   groundedAnalysisBuiltAt: number
   generatedAt: number
   items: ProposedTopic[]
+  /** Safe configuration and source revision provenance. Never includes prompts, credentials, or provider payloads. */
+  aiProvenance?: AiTocProposalProvenance
+}
+
+/** Strictly validates proposal data that crosses a recovery/storage trust boundary. */
+export function validateTocProposal(value: unknown): asserts value is TocProposal {
+  const invalid = (): never => { throw new Error('Invalid TOC recovery proposal.') }
+  const isObject = (candidate: unknown): candidate is Record<string, unknown> =>
+    candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate)
+  const exactKeys = (candidate: Record<string, unknown>, keys: string[]) =>
+    Object.keys(candidate).sort().join(',') === [...keys].sort().join(',')
+  if (!isObject(value)) invalid()
+  const proposal = value as Record<string, unknown>
+  if (!exactKeys(proposal, [
+      'version', 'method', 'contentType', 'evidenceSourcesRevision',
+      'evidenceExtractionRevision', 'groundedAnalysisBuiltAt', 'generatedAt',
+      'items', ...(proposal.aiProvenance !== undefined ? ['aiProvenance'] : []),
+    ])
+    || proposal.version !== 1
+    || (proposal.method !== 'evidence-grounded-toc-v1'
+      && proposal.method !== 'ai-grounded-toc-v1')
+    || typeof proposal.contentType !== 'string' || !proposal.contentType.trim()
+    || !Number.isSafeInteger(proposal.evidenceSourcesRevision)
+    || (proposal.evidenceSourcesRevision as number) < 0
+    || typeof proposal.evidenceExtractionRevision !== 'string'
+    || !Number.isFinite(proposal.groundedAnalysisBuiltAt)
+    || !Number.isFinite(proposal.generatedAt)
+    || !Array.isArray(proposal.items)) invalid()
+
+  const allowedTopicKeys = [
+    'id', 'topicId', 'title', 'level', 'words', 'parentId', 'parentTopicId',
+    'order', 'rationale', 'supportingEvidenceIds', 'proposalKind',
+    'sourceSectionPaths', 'hasGap',
+  ]
+  const topicIds = new Set<string>()
+  const numericIds = new Set<number>()
+  for (const candidate of proposal.items as unknown[]) {
+    if (!isObject(candidate)
+      || Object.keys(candidate).some(key => !allowedTopicKeys.includes(key))
+      || !Number.isSafeInteger(candidate.id)
+      || (candidate.id as number) < 0
+      || typeof candidate.topicId !== 'string' || !candidate.topicId.trim()
+      || candidate.topicId.length > 240
+      || typeof candidate.title !== 'string' || !candidate.title.trim()
+      || candidate.title.length > 5_000
+      || ![1, 2, 3, 4].includes(candidate.level as number)
+      || typeof candidate.words !== 'number' || !Number.isFinite(candidate.words) || candidate.words < 0
+      || !Number.isSafeInteger(candidate.order) || (candidate.order as number) < 0
+      || typeof candidate.rationale !== 'string' || candidate.rationale.length > 20_000
+      || !Array.isArray(candidate.supportingEvidenceIds)
+      || candidate.supportingEvidenceIds.some(id => typeof id !== 'string' || !id || id.length > 240)
+      || !['evidence-backed', 'optional-structural', 'manual'].includes(String(candidate.proposalKind))
+      || (candidate.parentId !== undefined && (!Number.isSafeInteger(candidate.parentId) || (candidate.parentId as number) < 0))
+      || (candidate.parentTopicId !== undefined && (typeof candidate.parentTopicId !== 'string' || candidate.parentTopicId.length > 240))
+      || (candidate.sourceSectionPaths !== undefined && (!Array.isArray(candidate.sourceSectionPaths)
+        || candidate.sourceSectionPaths.some(path => !Array.isArray(path)
+          || path.some(part => typeof part !== 'string' || part.length > 500))))
+      || (candidate.hasGap !== undefined && typeof candidate.hasGap !== 'boolean')
+      || topicIds.has(candidate.topicId as string)
+      || numericIds.has(candidate.id as number)) invalid()
+    const validCandidate = candidate as Record<string, unknown>
+    topicIds.add(validCandidate.topicId as string)
+    numericIds.add(validCandidate.id as number)
+  }
+
+  if (proposal.method === 'ai-grounded-toc-v1') {
+    const provenance = proposal.aiProvenance
+    const validReference = (reference: unknown): boolean => isObject(reference)
+      && exactKeys(reference, ['id', 'version'])
+      && typeof reference.id === 'string'
+      && /^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/.test(reference.id)
+      && Number.isSafeInteger(reference.version)
+      && (reference.version as number) > 0
+    if (!isObject(provenance)
+      || !exactKeys(provenance, [
+        'providerId', 'modelId', 'workflow', 'promptPack', 'referenceSet',
+        'blueprint', 'evidenceSourcesRevision', 'evidenceExtractionRevision',
+        'analysisBuiltAt',
+      ])
+      || typeof provenance.providerId !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/.test(provenance.providerId)
+      || typeof provenance.modelId !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(provenance.modelId)
+      || !validReference(provenance.workflow)
+      || !validReference(provenance.promptPack)
+      || !validReference(provenance.referenceSet)
+      || !validReference(provenance.blueprint)
+      || !Number.isSafeInteger(provenance.evidenceSourcesRevision)
+      || (provenance.evidenceSourcesRevision as number) < 0
+      || typeof provenance.evidenceExtractionRevision !== 'string'
+      || !provenance.evidenceExtractionRevision
+      || !Number.isFinite(provenance.analysisBuiltAt)
+      || provenance.evidenceSourcesRevision !== proposal.evidenceSourcesRevision
+      || provenance.evidenceExtractionRevision !== proposal.evidenceExtractionRevision
+      || provenance.analysisBuiltAt !== proposal.groundedAnalysisBuiltAt) invalid()
+  } else if (proposal.aiProvenance !== undefined) {
+    invalid()
+  }
 }
 
 function stableHash(value: string): string {

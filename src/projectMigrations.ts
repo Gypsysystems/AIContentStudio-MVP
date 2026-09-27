@@ -94,7 +94,7 @@ export function validateRestorableProjectRecord(record: ProjectRecord): void {
   const fail = (field: string): never => {
     throw new Error(`Invalid project backup: unusable ${field} in project record.`)
   }
-  const isObject = (value: unknown) =>
+  const isObject = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
   const arrays = ['sourceFileIds', 'appToc', 'docBlocks', 'snippets', 'docComments']
   for (const field of arrays) if (!Array.isArray(fields[field])) fail(field)
@@ -162,6 +162,40 @@ export function validateRestorableProjectRecord(record: ProjectRecord): void {
     if (value && (!Array.isArray((value as Record<string, unknown>).items) ||
       ((value as Record<string, unknown>).items as unknown[]).some(item => !isObject(item))))
       fail(`${field}.items`)
+  }
+  if (fields.tocProposal) {
+    const proposal = fields.tocProposal as Record<string, unknown>
+    if (proposal.method !== undefined
+      && proposal.method !== 'evidence-grounded-toc-v1'
+      && proposal.method !== 'ai-grounded-toc-v1') fail('tocProposal.method')
+    if (proposal.method === 'ai-grounded-toc-v1') {
+      const provenance = proposal.aiProvenance
+      const reference = (value: unknown): boolean => isObject(value)
+        && Object.keys(value).sort().join(',') === 'id,version'
+        && typeof value.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/.test(value.id)
+        && Number.isSafeInteger(value.version) && (value.version as number) > 0
+      if (!isObject(provenance)
+        || Object.keys(provenance).sort().join(',')
+          !== 'analysisBuiltAt,blueprint,evidenceExtractionRevision,evidenceSourcesRevision,modelId,promptPack,providerId,referenceSet,workflow'
+        || typeof provenance.providerId !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/.test(provenance.providerId)
+        || typeof provenance.modelId !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(provenance.modelId)
+        || !reference(provenance.workflow)
+        || !reference(provenance.promptPack)
+        || !reference(provenance.referenceSet)
+        || !reference(provenance.blueprint)
+        || !Number.isSafeInteger(provenance.evidenceSourcesRevision)
+        || typeof provenance.evidenceExtractionRevision !== 'string'
+        || !provenance.evidenceExtractionRevision
+        || !Number.isFinite(provenance.analysisBuiltAt)
+        || provenance.analysisBuiltAt !== proposal.groundedAnalysisBuiltAt
+        || provenance.evidenceSourcesRevision !== proposal.evidenceSourcesRevision
+        || provenance.evidenceExtractionRevision !== proposal.evidenceExtractionRevision)
+        fail('tocProposal.aiProvenance')
+    } else if (proposal.aiProvenance !== undefined) {
+      fail('tocProposal.aiProvenance')
+    }
   }
   if (fields.reviewModel) {
     const review = fields.reviewModel as Record<string, unknown>

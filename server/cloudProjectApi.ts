@@ -388,6 +388,62 @@ export class CloudProjectApi {
     this.role = membership.role
   }
 
+  /**
+   * Grounded Generate TOC uses the server's authenticated active-workspace
+   * project record; callers cannot supply identity or workspace claims.
+   */
+  async loadGroundedTocProject(projectIdValue: unknown): Promise<{
+    workspaceId: string
+    role: string
+    record: Json
+  }> {
+    if (this.role !== 'owner' && this.role !== 'admin')
+      throw new CloudApiError(403, 'FORBIDDEN', 'Owner or admin role required to generate a proposed TOC')
+    this.client.assertPermission(this.role, 'write')
+    const projectId = validateId(projectIdValue, 'projectId')
+    const record = await this.client.getProject(projectId, this.workspaceId)
+    if (!record) throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
+    if (record.projectId !== projectId || record.workspaceId !== this.workspaceId
+      || typeof record.ownerUserId !== 'string' || !record.ownerUserId
+      || !Number.isSafeInteger(record.recordRevision)) {
+      throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Stored project identity or revision is invalid')
+    }
+    return { workspaceId: this.workspaceId, role: this.role, record }
+  }
+
+  /**
+   * Save only the generated proposal onto the authoritative cloud record.
+   * Existing proposals are never replaced by this server mutation.
+   */
+  async saveGroundedTocProposal(
+    projectIdValue: unknown,
+    expectedRevision: number,
+    proposal: Json,
+  ): Promise<Json> {
+    if (this.role !== 'owner' && this.role !== 'admin')
+      throw new CloudApiError(403, 'FORBIDDEN', 'Owner or admin role required to generate a proposed TOC')
+    this.client.assertPermission(this.role, 'write')
+    const projectId = validateId(projectIdValue, 'projectId')
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+      throw new CloudApiError(400, 'INVALID_REVISION', 'Project revision is invalid')
+    const current = await this.client.getProject(projectId, this.workspaceId)
+    if (!current) throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
+    if (current.recordRevision !== expectedRevision)
+      throw new CloudApiError(409, 'PROJECT_CONFLICT', 'Project changed during TOC generation; reload before retrying')
+    if (current.tocProposal !== null && current.tocProposal !== undefined)
+      throw new CloudApiError(409, 'TOC_PROPOSAL_EXISTS', 'A proposed TOC already exists; explicitly replace it before generating another')
+    if (current.projectId !== projectId || current.workspaceId !== this.workspaceId
+      || typeof current.ownerUserId !== 'string' || !current.ownerUserId) {
+      throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Stored project identity is invalid')
+    }
+    const updated = safeRecord({
+      ...current,
+      tocProposal: proposal,
+      modifiedAt: Date.now(),
+    })
+    return this.client.saveProject(projectId, this.workspaceId, updated, expectedRevision)
+  }
+
   private async projectNameConflict(name: string, excludedProjectId?: string): Promise<CloudApiError> {
     let names: string[] = []
     try {

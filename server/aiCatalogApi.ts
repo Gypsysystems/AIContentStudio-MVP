@@ -10,6 +10,7 @@ import {
   type AiAssetVersion,
   type AiCatalogCommand,
   type AiVersionState,
+  type WorkflowDefinition,
 } from '../src/aiCatalogModel'
 import { resolveWorkflowReadiness, type WorkflowReadiness, type WorkflowReadinessConnection } from '../src/workflowReadiness'
 import {
@@ -40,6 +41,7 @@ type ReadinessDependencies = {
     providerId: string,
   ) => Promise<{ providerId: string; revision: number; state: string } | null>
   discover?: typeof discoverProviderModels
+  onVerifiedCredential?: (value: { providerId: string; revision: number; credential: string }) => void
 }
 type ReadinessRequest = { action: 'readiness'; id: string; version: number; workspaceId: string }
 
@@ -431,6 +433,11 @@ async function readinessForWorkflow(
                     id: (item as Json).id as string,
                   })),
                 }
+                dependencies.onVerifiedCredential?.({
+                  providerId,
+                  revision: encrypted.revision,
+                  credential,
+                })
               } else if (isObject(result) && ['unsupported', 'unavailable', 'auth-failed'].includes(String(result.state))
                 && Array.isArray(result.models) && result.models.length === 0) {
                 safeDiscovery = { state: String(result.state), models: [] }
@@ -541,6 +548,107 @@ export async function executeAiCatalog(
     }
   }
   return { asset }
+}
+
+export type AiWorkflowExecutionBundle = {
+  readiness: WorkflowReadiness
+  workflow: AiAssetVersion & { kind: 'workflow' }
+  promptPack: AiAssetVersion & { kind: 'prompt-pack' }
+  referenceSet: AiAssetVersion & { kind: 'reference-set' }
+  blueprint: AiAssetVersion & { kind: 'blueprint' }
+  credential: string
+  connectionRevision: number
+}
+
+export type AiWorkflowExecutionDependencies = Omit<ReadinessDependencies, 'onVerifiedCredential'>
+
+/**
+ * Resolve an exact published workflow for server execution. The returned
+ * definitions and credential are server-only; callers must never serialize
+ * this bundle into a browser-safe readiness response.
+ */
+export async function loadAiWorkflowExecutionBundle(
+  request: IncomingMessage,
+  workspaceId: string,
+  id: string,
+  version: number,
+  dependencies: AiWorkflowExecutionDependencies = {},
+): Promise<AiWorkflowExecutionBundle> {
+  if (!stableId(workspaceId) || !stableId(id) || !Number.isSafeInteger(version) || version < 1)
+    throw new AiCatalogApiError(400, 'INVALID_REQUEST', 'A valid workspace and published workflow version are required')
+  const settings = config()
+  if (!settings) throw new AiCatalogApiError(503, 'AI_CATALOG_UNAVAILABLE', 'Cloud AI catalog storage is not configured')
+  const token = cookieToken(request)
+  if (!token) throw new AiCatalogApiError(401, 'UNAUTHENTICATED', 'A valid authenticated session is required')
+  const client = new SupabaseClient(settings, token)
+  const { membership } = await client.identity(workspaceId)
+  if (membership.workspace_id !== workspaceId)
+    throw new AiCatalogApiError(403, 'FORBIDDEN', 'The workflow must belong to the active workspace')
+  if (membership.role !== 'owner' && membership.role !== 'admin')
+    throw new AiCatalogApiError(403, 'FORBIDDEN', 'Owner or admin role required to execute a workflow')
+
+  const loadHistory = async (assetId: string): Promise<AiAssetVersion[]> => {
+    const result = await client.command({ action: 'history', id: assetId }, workspaceId)
+    if (!isObject(result) || !Array.isArray(result.versions))
+      throw new AiCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'AI catalog storage returned invalid asset history')
+    return validateHistory(result.versions, workspaceId, assetId)
+  }
+  const workflowHistory = await loadHistory(id)
+  const workflow = workflowHistory.find(asset => asset.version === version && asset.kind === 'workflow')
+  if (!workflow)
+    throw new AiCatalogApiError(409, 'WORKFLOW_NOT_READY', 'The exact published workflow version is unavailable')
+  const definition = workflow.definition as WorkflowDefinition
+
+  const exactDependency = async <K extends 'prompt-pack' | 'reference-set' | 'blueprint'>(
+    ref: { id: string; version: number } | null,
+    kind: K,
+  ): Promise<AiAssetVersion & { kind: K }> => {
+    if (!ref) throw new AiCatalogApiError(409, 'WORKFLOW_NOT_READY', 'A required published workflow dependency is missing')
+    const history = await loadHistory(ref.id)
+    const asset = history.find(item => item.version === ref.version && item.kind === kind)
+    if (!asset) throw new AiCatalogApiError(409, 'WORKFLOW_NOT_READY', 'An exact published workflow dependency is unavailable')
+    return asset as AiAssetVersion & { kind: K }
+  }
+  const [promptPack, referenceSet, blueprint] = await Promise.all([
+    exactDependency(definition.promptPack, 'prompt-pack'),
+    exactDependency(definition.referenceSet, 'reference-set'),
+    exactDependency(definition.blueprint, 'blueprint'),
+  ])
+  // Readiness and credential discovery are deliberately the final catalog
+  // operations before handing the execution bundle to the caller.
+  const verifiedCredential: { current: { providerId: string; revision: number; credential: string } | null } = {
+    current: null,
+  }
+  const readiness = await readinessForWorkflow(id, version, client, workspaceId, membership.role, {
+    ...dependencies,
+    onVerifiedCredential(value) { verifiedCredential.current = value },
+  })
+  if (readiness.status !== 'ready') {
+    throw new AiCatalogApiError(
+      409,
+      'WORKFLOW_NOT_READY',
+      'Workflow readiness checks must pass before Generate TOC',
+      readiness.blockers,
+    )
+  }
+  const model = definition.model
+  const capturedCredential = verifiedCredential.current
+  const readyModel = readiness.model
+  if (model.mode !== 'pinned' || !capturedCredential
+    || capturedCredential.providerId !== model.providerId
+    || readyModel?.providerId !== model.providerId
+    || readyModel.modelId !== model.modelId) {
+    throw new AiCatalogApiError(409, 'WORKFLOW_NOT_READY', 'The pinned model connection is not currently ready', readiness.blockers)
+  }
+  return {
+    readiness,
+    workflow: workflow as AiAssetVersion & { kind: 'workflow' },
+    promptPack,
+    referenceSet,
+    blueprint,
+    credential: capturedCredential.credential,
+    connectionRevision: capturedCredential.revision,
+  }
 }
 
 export async function handleAiCatalog(

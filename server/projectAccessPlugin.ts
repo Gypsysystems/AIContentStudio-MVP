@@ -10,12 +10,14 @@ import { handleSupabaseAuthRequest, isLocalDevAllowed } from './supabaseProjectA
 import { handleCloudFiles, handleCloudProjects } from './cloudProjectApi'
 import { handleAiCatalog, sendAiCatalogError } from './aiCatalogApi'
 import { handleAiConnections, sendConnectionError } from './aiConnectionsApi'
+import { handleGroundedToc } from './groundedTocApi'
 
 const ENDPOINT = '/api/project-access'
 const CLOUD_PROJECTS_ENDPOINT = '/api/cloud-projects'
 const CLOUD_FILES_ENDPOINT = '/api/cloud-files'
 const AI_CATALOG_ENDPOINT = '/api/ai-catalog'
 const AI_CONNECTIONS_ENDPOINT = '/api/ai-connections'
+const GROUNDED_TOC_ENDPOINT = '/api/generate-toc'
 const MAX_BODY_BYTES = 16 * 1024
 
 function sendJson(
@@ -220,7 +222,8 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
   server.middlewares.use((request, response, next) => {
     const pathname = request.url?.split('?')[0]
     if (pathname !== CLOUD_PROJECTS_ENDPOINT && pathname !== CLOUD_FILES_ENDPOINT
-      && pathname !== AI_CATALOG_ENDPOINT && pathname !== AI_CONNECTIONS_ENDPOINT) return next()
+      && pathname !== AI_CATALOG_ENDPOINT && pathname !== AI_CONNECTIONS_ENDPOINT
+      && pathname !== GROUNDED_TOC_ENDPOINT) return next()
     response.setHeader('Cache-Control', 'no-store')
     const allowed = pathname === CLOUD_FILES_ENDPOINT ? ['GET', 'POST'] : ['POST']
     if (!allowed.includes(request.method ?? '')) {
@@ -238,6 +241,10 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
       sendJson(response, 403, { error: 'Same-origin request required', code: 'ORIGIN_REJECTED' })
       return
     }
+    if (pathname === GROUNDED_TOC_ENDPOINT && localDev) {
+      sendJson(response, 503, { error: 'Grounded Generate TOC requires an authenticated cloud project', code: 'CLOUD_PROJECT_REQUIRED' })
+      return
+    }
     if (pathname === AI_CATALOG_ENDPOINT && localDev) {
       sendJson(response, 503, { error: 'AI catalog cloud persistence is unavailable in local mode', code: 'AI_CATALOG_UNAVAILABLE' })
       return
@@ -246,12 +253,27 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
       sendJson(response, 503, { error: 'Cloud AI connections are unavailable in local mode', code: 'CONNECTIONS_UNAVAILABLE' })
       return
     }
-    if ((pathname === CLOUD_PROJECTS_ENDPOINT || pathname === AI_CATALOG_ENDPOINT)
+    if ((pathname === CLOUD_PROJECTS_ENDPOINT || pathname === AI_CATALOG_ENDPOINT
+      || pathname === GROUNDED_TOC_ENDPOINT)
       || pathname === AI_CONNECTIONS_ENDPOINT) {
       if (request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
         sendJson(response, 415, { error: 'Content-Type must be application/json', code: 'UNSUPPORTED_MEDIA_TYPE' })
         return
       }
+    }
+    if (pathname === GROUNDED_TOC_ENDPOINT) {
+      const length = request.headers['content-length']
+      if (length !== undefined && Number(length) > 4_096) {
+        request.resume()
+        sendJson(response, 413, { error: 'Generate TOC request exceeds the supported limit', code: 'REQUEST_TOO_LARGE' })
+        return
+      }
+      void handleGroundedToc(request, response).catch(() => {
+        if (!response.headersSent) {
+          sendJson(response, 503, { error: 'Generate TOC is temporarily unavailable', code: 'GENERATE_TOC_UNAVAILABLE' })
+        }
+      })
+      return
     }
     if (pathname === AI_CATALOG_ENDPOINT) {
       const length = request.headers['content-length']
