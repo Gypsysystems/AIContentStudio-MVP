@@ -390,3 +390,59 @@ begin
 end;
 $revoked$;
 reset role;
+
+-- Model the existing project-files bucket policy and verify that the follow-up
+-- permits only authenticated members to inspect both private bucket records.
+create schema storage;
+create table storage.buckets (id text primary key, public boolean not null);
+alter table storage.buckets enable row level security;
+grant usage on schema storage to authenticated, anon;
+grant select on storage.buckets to authenticated, anon;
+insert into storage.buckets (id, public) values
+  ('project-files', false), ('project-checkpoints', false), ('unrelated-private', false);
+create policy project_files_bucket_read_member on storage.buckets
+  for select to authenticated using (
+    id = 'project-files'
+    and exists (select 1 from public.workspace_memberships membership
+      where membership.user_id = (select auth.uid()))
+  );
+\i supabase/migrations/20260926000600_project_checkpoints_bucket_read.sql
+\i supabase/migrations/20260926000600_project_checkpoints_bucket_read.sql
+
+set role authenticated;
+set request.jwt.claim.sub = '20000000-0000-0000-0000-000000000001';
+do $bucket_member$
+begin
+  if (select count(*) from storage.buckets where public = false) <> 2
+    or (select count(*) from storage.buckets
+        where id in ('project-files', 'project-checkpoints')) <> 2 then
+    raise exception 'Member could not inspect both private readiness buckets or saw another bucket';
+  end if;
+end;
+$bucket_member$;
+set request.jwt.claim.sub = '20000000-0000-0000-0000-000000000002';
+do $bucket_revoked$
+begin
+  if exists (select 1 from storage.buckets) then
+    raise exception 'Revoked member could inspect bucket metadata';
+  end if;
+end;
+$bucket_revoked$;
+set request.jwt.claim.sub = '';
+do $bucket_no_session$
+begin
+  if exists (select 1 from storage.buckets) then
+    raise exception 'Missing session could inspect bucket metadata';
+  end if;
+end;
+$bucket_no_session$;
+reset role;
+set role anon;
+do $bucket_anon$
+begin
+  if exists (select 1 from storage.buckets) then
+    raise exception 'Anonymous role could inspect bucket metadata';
+  end if;
+end;
+$bucket_anon$;
+reset role;

@@ -6,6 +6,10 @@ import { CloudApiError, CloudProjectApi, handleCloudFiles } from '../../server/c
 import { handleSupabaseAuthRequest } from '../../server/supabaseProjectAccess'
 import { projectNameKey } from '../../src/projectNames'
 
+const checkpointBucketMigration = readFileSync(
+  new URL('../../supabase/migrations/20260926000600_project_checkpoints_bucket_read.sql', import.meta.url),
+  'utf8',
+)
 const ORIGINAL_FETCH = globalThis.fetch
 const ORIGINAL_ENV = {
   url: process.env.SUPABASE_URL,
@@ -90,6 +94,30 @@ test.describe('workspace cloud project API', () => {
         status: 503,
         code: 'STORAGE_NOT_READY',
       })
+    } finally {
+      restore()
+    }
+  })
+
+  test('checkpoint bucket metadata read is member-only and does not change object policies', () => {
+    const sql = checkpointBucketMigration.replace(/--.*$/gm, '').replace(/\s+/g, ' ').trim().toLowerCase()
+    expect(sql).toContain('create policy project_checkpoints_bucket_read_member on storage.buckets for select to authenticated using (')
+    expect(sql).toContain("id = 'project-checkpoints'")
+    expect(sql).toContain('from public.workspace_memberships membership where membership.user_id = (select auth.uid())')
+    expect(sql).not.toContain('storage.objects')
+  })
+
+  test('readiness fails when only checkpoint bucket metadata is hidden', async () => {
+    const restore = provider('owner')
+    const fetchWithFilesBucket = globalThis.fetch
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input)).pathname === '/storage/v1/bucket/project-checkpoints')
+        return Promise.resolve(reply({ code: 'NoSuchBucket' }, 400))
+      return fetchWithFilesBucket(input, init)
+    }) as typeof fetch
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      expect(await api.execute({ action: 'ready' })).toEqual({ ready: false })
     } finally {
       restore()
     }
