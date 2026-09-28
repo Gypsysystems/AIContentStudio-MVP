@@ -346,7 +346,7 @@ function applyNonTopic(
     const existing = record.snippets.map((value, index) => asObject(value, `Destination snippet ${index + 1}`))
     if (existing.some(value => value.name === snippet.name))
       throw new ContentCopyError(409, 'ASSET_NAME_CONFLICT', `A snippet named "${snippet.name}" already exists`)
-    const newSnippet = { ...snippet, id, content }
+    const newSnippet = { id, name: snippet.name as string, content }
     const snippetOrigins = isObject(origins.snippet) ? origins.snippet : {}
     return {
       record: {
