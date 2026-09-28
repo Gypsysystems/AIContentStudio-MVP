@@ -361,6 +361,7 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="stable-setup"]')
     .getByText("Prepare the Field Kit", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-grounding-toggle").click()
   await page.getByTestId("refresh-author-grounding").click()
   await expect.poll(() => projectRecord?.authorTopicMetadata?.["stable-setup"]?.groundingContext?.contextId)
@@ -420,6 +421,7 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="stable-setup"]')
     .getByText("Prepare the Field Kit", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-context-tab-assist").click()
   const reopenedControls = page.getByTestId("ai-topic-controls")
   const closeDraftInspectorIfOpen = async () => {

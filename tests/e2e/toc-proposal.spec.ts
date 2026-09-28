@@ -350,7 +350,7 @@ test("committing evidence-backed topics opens editable initial drafts without fi
   await page.locator('header').getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-topic-row").filter({ hasText: supported!.title })
     .getByText(supported!.title, { exact: true }).click()
-  await expect(page.getByTestId("author-generated-freshness")).toContainText("Current")
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Draft ready")
   await expect(page.getByText(blocks.find(block => block.type === "para")!.content, { exact: true }).first()).toBeVisible()
   await page.getByTestId("author-topic-row").filter({ hasText: unsupported!.title })
     .getByText(unsupported!.title, { exact: true }).click()

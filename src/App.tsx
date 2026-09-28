@@ -10442,7 +10442,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
+  const [structureView, setStructureView] = useState<'topics' | 'explorer'>('topics')
   const [contextTab, setContextTab] = useState<'evidence' | 'sources' | 'review' | 'assist'>('evidence')
+  const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [outlineDrawerOpen, setOutlineDrawerOpen] = useState(false)
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false)
   const [compactLayout, setCompactLayout] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1280)
@@ -10455,7 +10457,13 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   }
   const closeContextDrawer = () => {
     setContextDrawerOpen(false)
+    setContextPanelOpen(false)
     requestAnimationFrame(() => contextTriggerRef.current?.focus())
+  }
+  const openAuthorContext = (tab: 'evidence' | 'sources' | 'review' | 'assist') => {
+    setContextTab(tab)
+    setContextPanelOpen(true)
+    setContextDrawerOpen(true)
   }
   const [tocWidth, setTocWidth] = useState(260)
   const [activeSection, setActiveSection] = useState(1)
@@ -11389,19 +11397,17 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   }
 
   const renderAuthorContext = () => (
-    <aside data-testid="author-context" className="author-context-pane flex min-h-0 flex-col bg-[#FBFCFA]">
+    <aside data-testid="author-context" className={`author-context-pane flex min-h-0 flex-col bg-[#FBFCFA] ${compactLayout ? 'author-context-drawer' : ''}`}>
       <div className="flex items-start justify-between gap-3 border-b border-[#E2E6DF] px-4 py-4">
         <div className="min-w-0">
-          <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[#788378]">Topic context</p>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[#788378]">{contextTab === 'assist' ? 'AI Assist' : 'Topic context'}</p>
           <h2 className="mt-1 truncate text-[14px] font-semibold text-[#263229]">{activeTopic?.title ?? 'Choose a topic'}</h2>
           <p className="mt-1 text-[10px] text-[#7D877D]">
             {activeGroundingFresh ? 'Grounding current' : activeGroundingContext ? 'Grounding needs refresh' : 'No grounding context'}
             {activeReviewFindings.length > 0 ? ` · ${activeReviewFindings.length} review finding${activeReviewFindings.length === 1 ? '' : 's'}` : ''}
           </p>
         </div>
-        {compactLayout && (
-          <button type="button" aria-label="Close context panel" onClick={closeContextDrawer} className="author-close-button">Close</button>
-        )}
+        <button type="button" aria-label="Close context panel" onClick={closeContextDrawer} className="author-close-button">Close</button>
       </div>
       <div role="tablist" aria-label="Topic context" className="grid grid-cols-4 gap-1 border-b border-[#E2E6DF] px-3 py-2">
         {([
@@ -11590,12 +11596,13 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               <p className="text-[10px] font-semibold text-[#46564A]">Grounding status</p>
               <p className="mt-1 text-[10px] text-[#7D877D]">{activeGroundingFresh ? 'Current context is ready for drafting.' : activeGroundingContext ? 'Refresh the context before drafting.' : 'Build topic grounding before drafting.'}</p>
               <button type="button" disabled={!activeStableTopicId || isDemoMode} onClick={() => activeStableTopicId && onRefreshTopicGrounding?.(activeStableTopicId)} className="author-context-action mt-3 w-full disabled:cursor-not-allowed disabled:opacity-50">{activeGroundingContext ? 'Refresh grounding' : 'Build grounding'}</button>
+              {!isDemoMode && <button type="button" data-testid="author-grounding-toggle" data-topic-id={activeStableTopicId ?? ''} data-context-id={activeGroundingContext?.contextId ?? ''} onClick={() => setGroundingOpen(open => !open)} className="mt-2 w-full rounded-lg border border-[#DCE2DA] bg-white px-3 py-2 text-[10px] font-medium text-[#566458]">View grounding and evidence</button>}
             </div>
             <div className="rounded-lg border border-[#E0E5DE] bg-white p-3">
               <p className="text-[10px] font-semibold text-[#46564A]">Draft controls</p>
               <p className="mt-1 text-[10px] text-[#7D877D]">{activeDraft ? `${activeDraft.blocks.length} draft blocks · ${activeDraftFresh ? 'current' : 'out of date'}` : 'No draft has been generated for this topic.'}</p>
               <button type="button" disabled={!activeStableTopicId || !activeGroundingFresh || isDemoMode} onClick={() => { setDraftOpen(true); generateTopicContent(activeTopic?.title ?? 'New topic') }} className="author-context-action mt-3 w-full disabled:cursor-not-allowed disabled:opacity-50">Generate deterministic draft</button>
-              <button type="button" disabled={!activeStableTopicId} onClick={() => { setDraftOpen(true); setConfirmDraftApply(false) }} className="mt-2 w-full rounded-lg border border-[#DCE2DA] bg-[#F9FAF8] px-3 py-2 text-[10px] font-medium text-[#566458] hover:bg-[#F0F3EE] disabled:cursor-not-allowed disabled:opacity-50">{activeDraft ? 'Review draft and apply changes' : 'Open draft review'}</button>
+              <button type="button" data-testid="author-draft-toggle" data-topic-id={activeStableTopicId ?? ''} disabled={!activeStableTopicId || isDemoMode} onClick={() => { setDraftOpen(open => !open); setConfirmDraftApply(false) }} className="mt-2 w-full rounded-lg border border-[#DCE2DA] bg-[#F9FAF8] px-3 py-2 text-[10px] font-medium text-[#566458] hover:bg-[#F0F3EE] disabled:cursor-not-allowed disabled:opacity-50">{activeDraft ? 'Review draft and apply changes' : 'Open draft review'}</button>
             </div>
             <AiTopicDraftControls
               allowed={!!projectId && !isDemoMode && !!canGenerateAiTopic}
@@ -11628,6 +11635,14 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               onRewrite={(workflowId, workflowVersion) =>
                 handleRewriteAiTopicDraft(workflowId, workflowVersion)}
             />
+            <details className="rounded-lg border border-[#E0E5DE] bg-white p-3">
+              <summary className="cursor-pointer text-[10px] font-semibold text-[#46564A]">AI text actions</summary>
+              <div className="mt-2 grid grid-cols-2 gap-1">
+                {['Improve', 'Rewrite', 'Shorten', 'Expand', 'Simplify', 'Summarize', 'Convert to Steps', 'Convert to Bullets', 'Convert to Table', 'Generate Example', 'Check Terminology', 'Verify Against Source', 'Generate Visual', 'Ask AI'].map(action => (
+                  <button key={action} type="button" onClick={() => runAiAction(action)} className="rounded-md px-2 py-1.5 text-left text-[10px] text-[#555568] hover:bg-[#F4F2EE]">{action}</button>
+                ))}
+              </div>
+            </details>
             {topicAiWarning && <p role="status" data-testid="topic-ai-warning" className="rounded-lg border border-[#E7DCC7] bg-[#FBF7EC] p-3 text-[10px] leading-relaxed text-[#765F37]">{topicAiWarning}</p>}
           </div>
         )}
@@ -11855,12 +11870,18 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
 
   return (
     <div data-testid="author-workspace" className="author-workspace flex-1 flex overflow-hidden">
-      {/* Project organization and document outline share the resizable left rail. */}
+      {/* One Structure rail: the TOC is primary, reusable content is secondary. */}
       {outlineOpen && (!compactLayout || outlineDrawerOpen) && (
         <>
           {compactLayout && <button type="button" aria-label="Close outline drawer" className="author-drawer-scrim" onClick={() => closeOutlineDrawer()} />}
           <div className="author-outline-shell flex-shrink-0 flex flex-col min-h-0 overflow-hidden" style={{ width: tocWidth }}>
-            <ContentExplorerPanel
+            <div className="flex items-center justify-between border-b border-[#E2DED7] bg-white px-3 py-2.5">
+              <span className="text-[11px] font-semibold text-[#263229]">Structure</span>
+              <button type="button" onClick={() => setStructureView(view => view === 'topics' ? 'explorer' : 'topics')} className="rounded-md px-2 py-1 text-[10px] font-medium text-[#5B5BD6] hover:bg-[#EEEEFF]">
+                {structureView === 'topics' ? 'Browse content' : 'Back to topics'}
+              </button>
+            </div>
+            {structureView === 'explorer' ? <ContentExplorerPanel
               metadata={contentExplorer}
               assets={contentExplorerAssets}
               selectedTopicId={activeTopicId === null ? null : stableAuthorTopicId(studioToc.find(item => item.id === activeTopicId) ?? { id: activeTopicId })}
@@ -11873,9 +11894,8 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               loadCatalogItems={loadCatalogItems}
               loadCatalogPreview={loadCatalogPreview}
               onCatalogCopy={onCatalogCopy}
-              onCollapse={collapsed => { if (collapsed) closeOutlineDrawer(true) }}
-            />
-            <OutlineTocPanel
+              onCollapse={collapsed => { if (collapsed) setStructureView('topics') }}
+            /> : <OutlineTocPanel
               toc={studioToc}
               setToc={setStudioToc}
               activeSection={activeSection}
@@ -11885,7 +11905,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               onOpenTopic={openTopic}
               width="100%"
               onCollapse={() => closeOutlineDrawer(true)}
-            />
+            />}
           </div>
           {/* Draggable separator */}
           {!compactLayout && <div
@@ -11939,103 +11959,29 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
             <button type="button" onClick={onClearRealReviewTarget} className="text-[#6B6B7E] text-[11px]" aria-label="Dismiss Review target">Dismiss</button>
           </div>
         )}
-        {/* Studio toolbar — two rows */}
+        {/* Document actions and writing toolbar */}
         <div className="bg-white border-b border-[#E2DED7] flex-shrink-0">
-          {/* Row 1: document-level controls */}
-          <div className="flex flex-wrap items-center gap-1 px-4 py-1.5 border-b border-[#F0EDE8]">
-          {/* Outline toggle */}
-          {(!outlineOpen || compactLayout) && (
-            <button ref={outlineTriggerRef} data-testid="author-open-outline" aria-label="Open outline" type="button" onClick={() => { setOutlineOpen(true); setOutlineDrawerOpen(true) }} className="author-open-control mr-1">
-              <span>Outline</span>
-            </button>
-          )}
-          {compactLayout && (
-            <button ref={contextTriggerRef} data-testid="author-open-context" aria-label="Open topic context" type="button" onClick={() => setContextDrawerOpen(true)} className="author-open-control mr-1">
-              <span>Context</span>
-            </button>
-          )}
-          {/* Mode switcher */}
-          <div className="flex items-center gap-0.5 bg-[#F4F2EE] rounded-lg p-0.5 mr-3">
-            {(['author','knowledge'] as StudioMode[]).map(m => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={`px-3 py-1 rounded-md text-[12px] font-medium capitalize transition-all ${
-                  mode === m ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB] hover:text-[#6B6B7E]'
-                }`}
-              >
-                {m === 'knowledge' ? 'Knowledge Map' : 'Content'}
-              </button>
-            ))}
-          </div>
-          {/* Row 1 right side */}
-          <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-            <button onClick={() => onNav('branding')} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium text-[#9898AB] hover:text-[#6B6B7E] transition-colors" title="Style Profile">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.2"/><circle cx="6" cy="6" r="1.5" fill="currentColor"/></svg>
-              Style
-            </button>
-            {!isDemoMode && (
-              <>
-                <button
-                  type="button"
-                  data-testid="author-grounding-toggle"
-                  data-topic-id={activeStableTopicId ?? ''}
-                  data-context-id={activeGroundingContext?.contextId ?? ''}
-                  onClick={() => setGroundingOpen(open => !open)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${groundingOpen ? 'bg-[#EEF6FF] text-[#2563EB]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
-                >
-                  Grounding
-                  <span className={`w-1.5 h-1.5 rounded-full ${activeGroundingFresh ? 'bg-[#16A34A]' : activeGroundingContext ? 'bg-[#D97706]' : 'bg-[#C8C6C0]'}`} />
-                </button>
-                <button
-                  type="button"
-                  data-testid="author-draft-toggle"
-                  data-topic-id={activeStableTopicId ?? ''}
-                  onClick={() => { setDraftOpen(open => !open); setConfirmDraftApply(false) }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${draftOpen ? 'bg-[#F3F0FF] text-[#6D28D9]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
-                >
-                  Draft
-                  <span className={`w-1.5 h-1.5 rounded-full ${activeDraftFresh ? 'bg-[#16A34A]' : activeDraft ? 'bg-[#D97706]' : 'bg-[#C8C6C0]'}`} />
-                </button>
-                <div
-                  data-testid="author-generated-freshness"
-                  title={activeGeneratedFreshnessReason ?? undefined}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[10px] font-semibold ${
-                    activeGeneratedFreshness === 'current'
-                      ? 'bg-[#DCFCE7] text-[#15803D]'
-                      : activeGeneratedFreshness === 'stale'
-                        ? 'bg-[#FEF3C7] text-[#B45309]'
-                        : activeGeneratedFreshness === 'needs-grounding'
-                          ? 'bg-[#FEE2E2] text-[#B91C1C]'
-                          : 'bg-[#F1F5F9] text-[#64748B]'
-                  }`}
-                >
-                  {activeGeneratedFreshness === 'current'
-                    ? 'Current'
-                    : activeGeneratedFreshness === 'stale'
-                      ? 'Stale'
-                      : activeGeneratedFreshness === 'needs-grounding'
-                        ? 'Needs Grounding'
-                        : 'Manual-only'}
-                  {activeGeneratedFreshnessReason && (
-                    <span data-testid="author-generated-freshness-reason" className="font-normal max-w-[220px] truncate">
-                      · {activeGeneratedFreshnessReason}
-                    </span>
-                  )}
-                </div>
-              </>
-            )}
-            <button
-              onClick={() => setSourceRef(!sourceRef)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${sourceRef ? 'bg-[#F3F0FF] text-[#7C3AED]' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}
-            >
-              <div className="w-3 h-3 rounded-sm border border-current" />
-              Sources
-            </button>
-          </div>
+          <div className="flex flex-wrap items-center gap-2 border-b border-[#F0EDE8] px-4 py-2">
+            {(!outlineOpen || compactLayout) && <button ref={outlineTriggerRef} data-testid="author-open-outline" aria-label="Open structure" type="button" onClick={() => { setOutlineOpen(true); setOutlineDrawerOpen(true) }} className="author-open-control">Structure</button>}
+            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[#263229]">{activeTopic?.title ?? 'Select a topic'}</span>
+            {!isDemoMode && <button type="button" data-testid="author-generated-freshness" title={activeGeneratedFreshnessReason ?? 'Open topic status and drafting actions'} onClick={() => openAuthorContext(activeDraftFresh ? 'assist' : 'evidence')} className={`rounded-md px-2.5 py-1.5 text-[10px] font-semibold ${!activeGroundingFresh && activeTopic ? 'bg-[#FEF3C7] text-[#92400E]' : activeDraftFresh ? 'bg-[#DCFCE7] text-[#15803D]' : activeGeneratedFreshness === 'stale' ? 'bg-[#FEF3C7] text-[#92400E]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>
+              {!activeTopic ? 'Choose a topic' : !activeGroundingFresh ? (activeGroundingContext ? 'Grounding stale' : 'Needs Grounding') : activeGeneratedFreshness === 'needs-grounding' ? 'Needs Grounding' : activeGeneratedFreshness === 'stale' ? 'Needs attention' : activeDraftFresh ? 'Draft ready' : activeGeneratedFreshness === 'current' ? 'Current' : 'Ready to write'}
+              {activeGeneratedFreshnessReason && <span data-testid="author-generated-freshness-reason" className="sr-only">{activeGeneratedFreshnessReason}</span>}
+            </button>}
+            <button ref={contextTriggerRef} type="button" data-testid="author-ai-assist" aria-expanded={compactLayout ? contextDrawerOpen : contextPanelOpen} onClick={() => (compactLayout ? contextDrawerOpen : contextPanelOpen) && contextTab === 'assist' ? closeContextDrawer() : openAuthorContext('assist')} className="rounded-md bg-[#5B5BD6] px-3 py-2 text-[11px] font-semibold text-white hover:bg-[#4A4AC4]">AI Assist</button>
+            <details className="relative">
+              <summary className="cursor-pointer rounded-md border border-[#E2DED7] px-2.5 py-1.5 text-[11px] font-medium text-[#585866]">More</summary>
+              <div className="absolute right-0 top-full z-50 mt-1 min-w-[170px] rounded-lg border border-[#E2DED7] bg-white p-1 shadow-lg">
+                <button type="button" onClick={() => setMode('knowledge')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Knowledge Map</button>
+                <button type="button" onClick={() => onNav('branding')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Style profile</button>
+                <button type="button" onClick={() => openAuthorContext('sources')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Topic sources</button>
+                <button type="button" onClick={() => openAuthorContext('review')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Topic review</button>
+                <button type="button" onClick={() => setSourceRef(value => !value)} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Toggle source references</button>
+              </div>
+            </details>
           </div>
           {mode === 'author' && (
-            <div data-testid="author-review-next-step" className="flex flex-col gap-3 border-t border-[#F0EDE8] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div data-testid="author-review-next-step" className="flex flex-col gap-2 border-t border-[#F0EDE8] px-4 py-1.5 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 flex-1">
                 <h2 data-testid="author-stage-heading" tabIndex={-1} className="text-[12px] font-semibold text-[#111218] outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
                   Author workspace
@@ -12176,7 +12122,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                 </button>
               </div>
 
-              {/* Insert / Conditions / References / AI / More menus */}
+                {/* Writing and reference menus; AI actions live in AI Assist. */}
               <div className="flex items-center gap-1 border-l border-[#E2DED7] pl-3" ref={insertMenuRef}>
                 <div className="relative">
                   <button
@@ -12321,27 +12267,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                         }}
                         className={`w-full flex items-center px-3 py-1.5 text-[12px] hover:bg-[#F4F2EE] transition-colors text-left ${!isDemoMode && !groundedSourceReference ? 'text-[#9898AB]' : 'text-[#3D3D4E]'}`}
                       >{!isDemoMode && !groundedSourceReference ? 'No grounded source available' : 'Add Source Reference'}</button>
-                    </div>
-                  )}
-                </div>
-
-                {/* AI ✦ */}
-                <div className="relative">
-                  <button
-                    onClick={() => { setShowAiMenu(v => !v); setShowInsertMenu(false); setShowConditions(false); setShowMoreMenu(false); setShowRefsMenu(false) }}
-                    className={`flex items-center gap-1.5 h-7 px-2.5 rounded text-[11px] font-medium transition-colors ${showAiMenu ? 'bg-[#F3F0FF] text-[#7C3AED]' : 'text-[#7C3AED] hover:bg-[#F3F0FF]'}`}
-                  >
-                    <div className="w-3.5 h-3.5 rounded bg-[#8B5CF6] flex items-center justify-center flex-shrink-0">
-                      <span className="text-white text-[8px] leading-none">✦</span>
-                    </div>
-                    AI
-                    <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M2 3l2.5 3L7 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  </button>
-                  {showAiMenu && (
-                    <div className="absolute top-9 left-0 z-50 bg-white border border-[#E2DED7] rounded-xl popover-shadow py-1 min-w-[190px]">
-                      {['Improve', 'Rewrite', 'Shorten', 'Expand', 'Simplify', 'Summarize', 'Convert to Steps', 'Convert to Bullets', 'Convert to Table', 'Generate Example', 'Check Terminology', 'Verify Against Source', 'Generate Visual', 'Ask AI'].map(action => (
-                        <button key={action} onClick={() => { setShowAiMenu(false); runAiAction(action) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">{action}</button>
-                      ))}
                     </div>
                   )}
                 </div>
@@ -13655,7 +13580,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
         )}
       </div>
 
-      {!compactLayout && renderAuthorContext()}
+       {!compactLayout && contextPanelOpen && renderAuthorContext()}
       {compactLayout && contextDrawerOpen && (
         <>
           <button type="button" aria-label="Close context drawer" className="author-drawer-scrim author-context-scrim" onClick={closeContextDrawer} />

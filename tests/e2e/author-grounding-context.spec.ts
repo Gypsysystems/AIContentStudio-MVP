@@ -339,15 +339,17 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
   })
 
   await page.reload()
+  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
+    .getByText("Access Control", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
+  await page.getByRole("button", { name: /^(Build|Refresh) grounding$/ }).click()
   await expect.poll(async () =>
     (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.groundingContext?.contextId,
   ).toMatch(/^grounding-/)
   const firstContextId = (await readProject(page, projectName))
     .authorTopicMetadata["topic-access"].groundingContext.contextId
 
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
-  await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
-    .getByText("Access Control", { exact: true }).click()
   await expect(page.getByTestId("author-grounding-toggle")).toHaveAttribute("data-topic-id", "topic-access")
   await expect(page.getByTestId("author-grounding-toggle")).toHaveAttribute("data-context-id", firstContextId)
   await page.getByTestId("author-grounding-toggle").click()
@@ -377,6 +379,7 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access Control", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-grounding-toggle").click()
   await expect(page.getByTestId("author-grounding-freshness")).toHaveText("Stale")
   await page.getByTestId("refresh-author-grounding").click()

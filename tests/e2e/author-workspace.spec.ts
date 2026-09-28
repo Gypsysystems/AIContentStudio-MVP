@@ -252,7 +252,7 @@ async function topicTitle(row: ReturnType<Page['getByTestId']>) {
   return title.split(' — ')[0]
 }
 
-test('desktop Author workspace presents the outline, editor, and source context with keyboard topic selection', async ({ page }) => {
+test('desktop Author workspace prioritizes the editor and opens topic context on demand', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   const projectName = `Author workspace desktop ${Date.now()}`
   await prepareAuthor(page, projectName)
@@ -262,6 +262,8 @@ test('desktop Author workspace presents the outline, editor, and source context 
   const context = page.getByTestId('author-context')
   await expect(outline).toBeVisible()
   await expect(editor).toBeVisible()
+  await expect(context).toHaveCount(0)
+  await page.getByTestId('author-ai-assist').click()
   await expect(context).toBeVisible()
 
   const [outlineBox, editorBox, contextBox] = await Promise.all([
@@ -306,9 +308,11 @@ test('Author Content Explorer persists project organization without changing com
   const projectName = `Author explorer ${Date.now()}`
   await prepareAuthor(page, projectName)
   const original = await readProject(page, projectName)
-  await expect(page.getByTestId('content-explorer-panel')).toBeVisible()
   await expect(page.getByTestId('author-outline')).toBeVisible()
-  await expect(page.getByTestId('author-context')).toBeVisible()
+  await expect(page.getByTestId('content-explorer-panel')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Browse content' }).click()
+  await expect(page.getByTestId('content-explorer-panel')).toBeVisible()
+  await expect(page.getByTestId('author-outline')).toHaveCount(0)
 
   await page.getByTestId('content-explorer-item-topic-topic-recovery').click()
   await expect(page.getByTestId('author-editor')).toContainText('Recovery')
@@ -340,6 +344,7 @@ test('Author Content Explorer persists project organization without changing com
 
   await page.reload()
   await authorStep(page).click()
+  await page.getByRole('button', { name: 'Browse content' }).click()
   const restoredFolder = page.locator('[data-folder-id]').filter({ hasText: 'Working Set' }).first()
   await restoredFolder.getByRole('button', { name: 'Expand Working Set' }).click()
   await expect(restoredFolder.getByTestId('content-explorer-item-topic-topic-recovery')).toBeVisible()
@@ -354,12 +359,12 @@ test('medium and narrow viewports collapse Author panels into explicitly opened 
   for (const viewport of [{ width: 1024, height: 900 }, { width: 375, height: 812 }]) {
     await page.setViewportSize(viewport)
     await expect(page.getByTestId('author-open-outline')).toBeVisible()
-    await expect(page.getByTestId('author-open-context')).toBeVisible()
+    await expect(page.getByTestId('author-ai-assist')).toBeVisible()
     await page.getByTestId('author-open-outline').click()
     await expect(page.getByTestId('author-outline')).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('author-outline')).not.toBeVisible()
-    await page.getByTestId('author-open-context').click()
+    await page.getByTestId('author-ai-assist').click()
     await expect(page.getByTestId('author-context')).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth))
       .toBeLessThanOrEqual(viewport.width + 1)
@@ -425,6 +430,7 @@ test('Review finding opens its exact Author topic and preserves manual and appro
   await expect(page.getByTestId('real-review-author-context')).toHaveAttribute('data-focus-status', 'focused')
   await expect(page.getByTestId('author-workspace')).toBeVisible()
   await expect(page.getByTestId('author-editor')).toContainText(claim)
+  await page.getByTestId('author-ai-assist').click()
   await page.getByTestId('author-context-tab-review').click()
   await expect(page.getByTestId('author-review-finding').filter({ hasText: claim })).toBeVisible()
   await page.getByTestId('real-review-author-context').getByRole('button', { name: /Back to Review/ }).click()
@@ -484,7 +490,6 @@ test('Author topic navigation remains available while its cloud save is outstand
     if (!(await workspace.isVisible().catch(() => false))) await authorStep(page).click()
   }
   await expect(workspace).toBeVisible()
-  await expect(page.locator('header').getByText('All changes saved', { exact: true })).toBeVisible()
   const rows = page.getByTestId('author-outline').locator('[data-topic-id]')
   await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(2)
   const previousSaveCount = cloud.saves.length

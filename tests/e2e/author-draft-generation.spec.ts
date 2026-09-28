@@ -578,12 +578,14 @@ test("persists a reviewable draft without overwriting manual content and applies
   })
 
   await page.reload()
-  await expect.poll(async () =>
-    (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.groundingContext?.contextId,
-  ).toMatch(/^grounding-/)
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access operations", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
+  await page.getByRole("button", { name: /^(Build|Refresh) grounding$/ }).click()
+  await expect.poll(async () =>
+    (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.groundingContext?.contextId,
+  ).toMatch(/^grounding-/)
   await page.getByTestId("author-draft-toggle").click()
   await page.getByTestId("generate-author-draft").click()
 
@@ -621,6 +623,7 @@ test("persists a reviewable draft without overwriting manual content and applies
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access operations", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-draft-toggle").click()
   await expect(page.getByTestId("author-draft-freshness")).toHaveText("Current")
   await page.getByTestId("apply-author-draft").click()
@@ -672,10 +675,11 @@ test("persists a reviewable draft without overwriting manual content and applies
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access operations", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-draft-toggle").click()
   await expect(page.getByTestId("author-draft-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("apply-author-draft")).toBeDisabled()
-  await expect(page.getByTestId("author-generated-freshness")).toContainText("Stale")
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Grounding stale")
   await expect(page.getByTestId("author-generated-freshness-reason")).toContainText("content type changed")
   expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
 
@@ -688,7 +692,7 @@ test("persists a reviewable draft without overwriting manual content and applies
   await page.getByTestId("regenerate-author-draft").click()
 
   await expect(page.getByTestId("author-regeneration-diff")).toBeVisible()
-  await expect(page.getByTestId("author-generated-freshness")).toContainText("Stale")
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Needs attention")
   await expect(page.locator('[data-diff-status="manually-edited"]').filter({ hasText: manuallyEditedText }))
     .toBeVisible()
   await expect(page.locator('[data-diff-status="protected"]').filter({ hasText: "Reference details" }))
@@ -709,6 +713,7 @@ test("persists a reviewable draft without overwriting manual content and applies
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access operations", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-draft-toggle").click()
   const protectedRow = page.locator('[data-diff-status="protected"]').filter({ hasText: "Reference details" })
   await protectedRow.locator('input[type="checkbox"]').check()

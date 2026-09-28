@@ -495,6 +495,7 @@ test("Author Rewrite Topic saves a review-only proposal and applies only selecte
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="stable-setup"]')
     .getByText("Prepare the Field Kit", { exact: true }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-grounding-toggle").click()
   await page.getByTestId("refresh-author-grounding").click()
   await expect.poll(() => projectRecord?.authorTopicMetadata?.["stable-setup"]?.groundingContext?.contextId)
@@ -520,6 +521,7 @@ test("Author Rewrite Topic saves a review-only proposal and applies only selecte
 
   projectRecord.authorTopicMetadata["stable-setup"].blockStates["applied-generated-a"] = "generated"
   await reloadAndOpenAuthor()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-context-tab-assist").click()
   await expect(page.getByTestId("ai-topic-rewrite-controls")).toContainText("Workflow ready")
   await page.getByTestId("ai-topic-rewrite-controls").getByTestId("rewrite-ai-topic").click()
@@ -554,10 +556,12 @@ test("Author Rewrite Topic saves a review-only proposal and applies only selecte
   if (!projectRecord) throw new Error("The cloud project disappeared before Apply")
   projectRecord.authorTopicMetadata["stable-setup"].blockStates["applied-generated-a"] = "manually-edited"
   await reloadAndOpenAuthor()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-draft-toggle").click()
   await page.getByTestId("apply-author-draft").click()
   await page.getByTestId("confirm-apply-author-draft").click()
-  await page.getByTestId("author-draft-toggle").click()
+  await page.getByTestId("author-draft-inspector")
+    .getByRole("button", { name: "Close draft inspector" }).click()
   await page.getByTestId("author-context-tab-assist").click()
   await expect(page.getByTestId("topic-ai-warning"))
     .toContainText("Rewrite protection or source-block mapping changed")
@@ -567,6 +571,7 @@ test("Author Rewrite Topic saves a review-only proposal and applies only selecte
 
   projectRecord.authorTopicMetadata["stable-setup"].blockStates["applied-generated-a"] = "generated"
   await reloadAndOpenAuthor()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-draft-toggle").click()
   await page.getByTestId("apply-author-draft").click()
   await expect(page.getByTestId("confirm-author-draft-apply")).toBeVisible()
