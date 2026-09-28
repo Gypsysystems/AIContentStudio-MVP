@@ -98,6 +98,42 @@ body {
   min-width: 0;
   background: #f2f4f0;
 }
+.author-project-utilities {
+  position: relative;
+  justify-content: flex-end;
+}
+.author-project-utilities > [role="status"],
+.author-project-utilities > button[aria-label^="Save failed"] {
+  order: -1;
+  margin-right: auto;
+}
+.author-project-tools {
+  display: none;
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(240px, 90vw);
+  padding: 6px;
+  border: 1px solid #e2ded7;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 12px 30px rgb(34 35 42 / 12%);
+}
+.author-project-tools-open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.author-project-tools button {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+}
+.author-project-tools button:hover {
+  background: #f4f2ee;
+}
 
 /* Project Home — precise editorial dashboard in the studio's purple / stone / sage system. */
 .project-home {

@@ -522,7 +522,8 @@ test("uses only persisted project sources and evidence in Author and reloads sou
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-real-sources"]')
     .click()
-  await page.getByRole("button", { name: /Generate with AI/ }).click()
+  await page.getByRole("button", { name: "More", exact: true }).click()
+  await page.getByRole("button", { name: "Guided topic setup" }).click()
 
   const sourceOptions = page.getByTestId("author-source-option")
   await expect(sourceOptions).toHaveCount(1)
@@ -542,7 +543,8 @@ test("uses only persisted project sources and evidence in Author and reloads sou
   await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-real-sources"]')
     .click()
-  await page.getByRole("button", { name: /Generate with AI/ }).click()
+  await page.getByRole("button", { name: "More", exact: true }).click()
+  await page.getByRole("button", { name: "Guided topic setup" }).click()
   await expect(page.locator(`[data-testid="author-source-option"][data-source-id="${accessSourceId}"]`))
     .toContainText("✓")
 
@@ -551,11 +553,12 @@ test("uses only persisted project sources and evidence in Author and reloads sou
   await expect(page.getByText(/Administrators must review privileged access every quarter/)).toBeVisible()
   await expect(page.getByText(/Source excerpt preview not yet available/)).toHaveCount(0)
 
-  await page.getByRole("button", { name: "Sources", exact: true }).click()
-  await expect(page.getByTestId("author-topic-source-context")).toContainText("access-control.md")
-  await expect(page.getByTestId("author-topic-source-context")).toContainText(accessEvidence.location)
-
-  await page.getByRole("button", { name: /AI/ }).click()
+  await page.getByTestId("author-ai-assist").click()
+  await page.getByTestId("author-context-tab-sources").click()
+  await expect(page.getByTestId("author-context")).toContainText("access-control.md")
+  await expect(page.getByTestId("author-context")).toContainText(accessEvidence.location)
+  await page.getByTestId("author-context-tab-assist").click()
+  await page.getByText("AI text actions", { exact: true }).click()
   await page.getByRole("button", { name: "Improve", exact: true }).click()
   await expect(page.getByText(/not available yet for real projects/)).toBeVisible()
   await expect(page.getByRole("button", { name: "Apply", exact: true })).toHaveCount(0)

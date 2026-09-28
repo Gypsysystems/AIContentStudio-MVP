@@ -274,6 +274,8 @@ test('desktop Author workspace prioritizes the editor and opens topic context on
   expect(outlineBox).not.toBeNull()
   expect(editorBox).not.toBeNull()
   expect(contextBox).not.toBeNull()
+  expect(outlineBox!.width).toBeLessThanOrEqual(260)
+  expect(editorBox!.width).toBeGreaterThan(outlineBox!.width)
   expect(outlineBox!.x + outlineBox!.width).toBeLessThanOrEqual(editorBox!.x + 2)
   expect(editorBox!.x + editorBox!.width).toBeLessThanOrEqual(contextBox!.x + 2)
 
@@ -291,6 +293,14 @@ test('desktop Author workspace prioritizes the editor and opens topic context on
   await page.keyboard.press('Enter')
   await expect(editor).toContainText(await topicTitle(firstTopic))
   await expect(firstTopic).toHaveClass(/ring-1/)
+
+  const topicSearch = outline.getByRole('searchbox', { name: 'Search topics' })
+  await topicSearch.fill('no matching topic anywhere')
+  await expect(outline.getByText('No matching topics')).toBeVisible()
+  await topicSearch.fill('Access Reviews')
+  await expect(outline.getByText('Access Reviews', { exact: true })).toBeVisible()
+  await topicSearch.clear()
+  await expect(topicRows.nth(0)).toBeVisible()
 
   const accessTopic = topicRows.filter({ hasText: 'Access Reviews' }).first()
   await accessTopic.getByText('Access Reviews', { exact: true }).click()

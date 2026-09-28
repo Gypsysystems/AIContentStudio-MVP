@@ -917,7 +917,6 @@ const QUALITY_FINDINGS = [
   { id: 6, category: 'Writing Style', severity: 'info', required: false, text: 'Passive voice detected in 4 procedures. Active voice improves clarity.', action: 'Improve Writing', section: 'Managing Projects', aiSuggestion: 'Replace "can be configured by the user" with "you can configure" throughout this section.' },
 ]
 
-const AI_ACTIONS = ['Improve', 'Rewrite', 'Shorten', 'Expand', 'Simplify', 'Convert to Steps', 'Convert to Bullets', 'Summarize', 'Check Grammar', 'Check Terminology', 'Verify vs Source', 'Generate Example', 'Ask AI']
 
 // ── Utility Components ────────────────────────────────────────────────────────
 function Badge({ text, color = 'default' }: { text: string; color?: string }) {
@@ -983,28 +982,28 @@ function WorkflowSteps({
   const analysisPhase = current === 'analysis' || current === 'structure'
 
   return (
-    <nav aria-label="Content workflow" className="w-full">
-      <ol style={{ justifyContent: 'safe center' }} className="flex max-w-full items-center justify-start gap-1 overflow-x-auto no-scrollbar py-1">
+    <nav aria-label="Content workflow" className={`w-full ${current === 'studio' ? 'opacity-75' : ''}`}>
+      <ol style={{ justifyContent: 'safe center' }} className={`flex max-w-full items-center justify-start overflow-x-auto no-scrollbar ${current === 'studio' ? 'gap-0 py-0' : 'gap-1 py-1'}`}>
         {phases.map((phase, index) => {
           const active = phase.id === activePhase
           const status = statusFor(phase.statusKeys)
           return (
             <li key={phase.id} className="flex items-center flex-shrink-0">
-              {index > 0 && <span aria-hidden="true" className={`mx-1.5 h-px w-3 sm:w-5 ${status === 'complete' ? 'bg-[#5B5BD6]' : 'bg-[#D8D5CF]'}`} />}
+              {index > 0 && <span aria-hidden="true" className={`h-px ${current === 'studio' ? 'mx-1 w-2' : 'mx-1.5 w-3 sm:w-5'} ${status === 'complete' ? 'bg-[#5B5BD6]' : 'bg-[#D8D5CF]'}`} />}
               <button
                 type="button"
                 onClick={() => onNav(phase.id)}
                 aria-current={active ? 'step' : undefined}
                 aria-label={`${phase.label}, ${active ? (current === 'preview' ? 'Preview' : 'Current stage') : statusLabel(status)}`}
                 title={active ? (current === 'preview' ? 'Preview' : 'Current stage') : statusLabel(status)}
-                className={`group flex min-h-9 items-center gap-2 rounded-lg px-2.5 sm:px-3 text-[11px] sm:text-[12px] font-semibold whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 ${
+                className={`group flex items-center rounded-md font-semibold whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 ${current === 'studio' ? 'min-h-7 gap-1 px-1.5 text-[10px]' : 'min-h-9 gap-2 px-2.5 text-[11px] sm:px-3 sm:text-[12px]'} ${
                   active ? 'bg-[#EEEEFF] text-[#4D4DC2]' : status === 'stale'
                     ? 'text-[#A85C08] hover:bg-[#FEF3C7]'
                     : status === 'complete' ? 'text-[#5757B8] hover:bg-[#EEEEFF]'
                       : 'text-[#747487] hover:bg-[#F4F2EE] hover:text-[#343444]'
                 }`}
               >
-                <span className={`flex h-[18px] w-[18px] items-center justify-center rounded-full border text-[9px] font-bold ${
+                <span className={`flex items-center justify-center rounded-full border font-bold ${current === 'studio' ? 'h-3.5 w-3.5 text-[8px]' : 'h-[18px] w-[18px] text-[9px]'} ${
                   active ? 'border-[#5B5BD6] bg-[#5B5BD6] text-white'
                     : status === 'complete' ? 'border-[#C7C5F4] bg-[#EEEEFF] text-[#5B5BD6]'
                       : status === 'stale' ? 'border-[#F1D39D] bg-[#FEF3C7] text-[#A85C08]'
@@ -1065,12 +1064,13 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
   stageStatuses?: Record<string, StageStatus>
 }) {
   const cloudAccount = useCloudAccount()
+  const [projectToolsOpen, setProjectToolsOpen] = useState(false)
   const inProject = !['dashboard', 'create', 'administration'].includes(screen)
   const hasProject = screen !== 'dashboard' && screen !== 'administration' && isProject
   const saveLabel = saveStatus === 'error' ? 'Save failed' : saveStatus === 'saving' ? 'Saving changes' : 'All changes saved'
   return (
     <header className="relative z-30 flex-shrink-0 border-b border-[#E2DED7] bg-white">
-      <div className="flex min-h-[58px] flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 sm:px-5">
+      <div className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-3 sm:px-5 ${screen === 'studio' ? 'min-h-[50px] py-1.5' : 'min-h-[58px] py-2'}`}>
         <button type="button" onClick={() => onNav('dashboard')} aria-label="Content Studio home" className="group flex flex-shrink-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#5B5BD6]">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -1097,7 +1097,7 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
         ) : (
           <div className="min-w-0 border-l border-[#E2DED7] pl-3">
             <p className="max-w-[180px] truncate text-[12px] font-semibold text-[#22222F] sm:max-w-[240px]">{projectName}</p>
-            <p className="truncate text-[10px] text-[#858493]">{contentType || 'Content project'}</p>
+            {screen !== 'studio' && <p className="truncate text-[10px] text-[#858493]">{contentType || 'Content project'}</p>}
           </div>
         )}
         {inProject && (
@@ -1105,7 +1105,9 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
             <WorkflowSteps current={screen} onNav={onNav} stageStatuses={stageStatuses ?? {}} />
           </div>
         )}
-        <div className="order-2 flex w-full min-w-0 flex-wrap items-center gap-1.5 xl:order-none xl:ml-auto xl:w-auto xl:flex-1 xl:gap-2">
+        <div className={`order-2 flex w-full min-w-0 flex-wrap items-center gap-1.5 xl:order-none xl:ml-auto xl:w-auto xl:flex-1 xl:gap-2 ${screen === 'studio' ? 'author-project-utilities' : ''}`}>
+          {screen === 'studio' && <button type="button" aria-expanded={projectToolsOpen} aria-controls="author-project-tools" onClick={() => setProjectToolsOpen(open => !open)} className="order-2 min-h-8 rounded-md px-2 text-[10px] font-medium text-[#777786] hover:bg-[#F4F2EE]">Project tools</button>}
+          <div id="author-project-tools" className={screen === 'studio' ? `author-project-tools ${projectToolsOpen ? 'author-project-tools-open' : ''}` : 'contents'}>
           {hasProject && (
             <>
               {screen !== 'project-home' && (
@@ -1143,15 +1145,16 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
             className={`min-h-8 rounded-md border px-2.5 text-[10px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px] ${screen === 'administration' ? 'border-[#C7C5F4] bg-[#F4F3FF] text-[#4D4DC2]' : 'border-[#E2DED7] text-[#585866] hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2]'}`}>
             Administration
           </button>
-          {(inProject || screen === 'administration' && isProject) && saveStatus && saveStatus !== 'idle' && (
-            saveStatus === 'error'
-              ? <button type="button" onClick={onRetrySave} aria-label="Save failed. Retry saving." className="min-h-8 rounded-md border border-[#F0B6B6] bg-[#FEF2F2] px-2.5 text-[10px] font-semibold text-[#B42323] transition-colors hover:bg-[#FEE2E2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42323] sm:text-[11px]">Save failed · Retry</button>
-              : <span role="status" aria-live="polite" className={`whitespace-nowrap text-[10px] font-medium sm:text-[11px] ${saveStatus === 'saving' ? 'text-[#A85C08]' : 'text-[#43845B]'}`}>{saveLabel}</span>
-          )}
           {inProject && onDiagnostics && (
             <button type="button" onClick={onDiagnostics} title="Open project diagnostics" className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#777786] transition-colors hover:border-[#C7C5F4] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
               Diagnostics
             </button>
+          )}
+          </div>
+          {(inProject || screen === 'administration' && isProject) && saveStatus && saveStatus !== 'idle' && (
+            saveStatus === 'error'
+              ? <button type="button" onClick={onRetrySave} aria-label="Save failed. Retry saving." className="min-h-8 rounded-md border border-[#F0B6B6] bg-[#FEF2F2] px-2.5 text-[10px] font-semibold text-[#B42323] transition-colors hover:bg-[#FEE2E2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42323] sm:text-[11px]">Save failed · Retry</button>
+              : <span role="status" aria-live="polite" className={`whitespace-nowrap text-[10px] font-medium sm:text-[11px] ${saveStatus === 'saving' ? 'text-[#A85C08]' : 'text-[#43845B]'}`}>{saveLabel}</span>
           )}
           {screen === 'create' && hasProject && (
             <button type="button" onClick={() => { void onSettingsReturn() }} className="min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">
@@ -8115,7 +8118,7 @@ function AiTopicDraftControls({
 
   if (!hasCurrentTopic) return null
   return (
-    <section data-testid="ai-topic-controls" className="rounded-lg border border-[#E0E5DE] bg-white p-3">
+    <section data-testid="ai-topic-controls" className="border-t border-[#E2E6DF] pt-3">
       <p className="text-[10px] font-semibold text-[#46564A]">Generate Topic with AI</p>
       <p className="mt-1 text-[10px] leading-relaxed text-[#7D877D]">
         Creates an AI-generated draft proposal for review. It does not change authored content until you select and apply changes.
@@ -8154,16 +8157,18 @@ function AiTopicDraftControls({
           >
             {generating ? 'Generating…' : 'Generate with AI'}
           </button>
-          <button
-            type="button"
-            data-testid="generate-ai-topic-background"
-            disabled={!eligible || readiness?.status !== 'ready' || generating || backgroundBusy}
-            onClick={() => { void runBackgroundGeneration() }}
-            className="mt-2 w-full rounded-lg border border-[#D8D5CF] bg-[#F9F8F6] px-3 py-2 text-[10px] font-semibold text-[#555568] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {backgroundBusy ? 'Starting or checking background job…' : 'Generate in background'}
-          </button>
-          {scopedBackgroundJob && (
+          <div className="mt-3 border-t border-[#E2E6DF] pt-3">
+            <p className="text-[10px] font-semibold text-[#46564A]">Background generation{scopedBackgroundJob ? ` · ${scopedBackgroundJob.status.replace('-', ' ')}` : ''}</p>
+            <button
+              type="button"
+              data-testid="generate-ai-topic-background"
+              disabled={!eligible || readiness?.status !== 'ready' || generating || backgroundBusy}
+              onClick={() => { void runBackgroundGeneration() }}
+              className="mt-2 w-full rounded-lg border border-[#D8D5CF] bg-[#F9F8F6] px-3 py-2 text-[10px] font-semibold text-[#555568] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {backgroundBusy ? 'Starting or checking background job…' : 'Generate in background'}
+            </button>
+            {scopedBackgroundJob && (
             <div data-testid="ai-topic-background-status" data-job-id={scopedBackgroundJob.jobId} role="status" className="mt-2 rounded-md border border-[#E2DED7] bg-[#F9F8F6] p-2 text-[10px] text-[#555568]">
               <p className="font-semibold">Background job {scopedBackgroundJob.status.replace('-', ' ')}</p>
               <p>{scopedBackgroundJob.phase || 'Waiting for worker'} · attempt {scopedBackgroundJob.attemptCount}/{scopedBackgroundJob.maxAttempts}</p>
@@ -8193,7 +8198,8 @@ function AiTopicDraftControls({
                 </button>
               )}
             </div>
-          )}
+            )}
+          </div>
           {existingProposalId && replacementConfirmationFor === existingProposalId && (
             <div data-testid="ai-topic-replacement-confirmation" className="mt-2 rounded-md border border-[#F2C98A] bg-[#FFF8E8] p-2">
               <p className="text-[10px] leading-relaxed text-[#805B18]">
@@ -8446,7 +8452,7 @@ function AiTopicRewriteControls({
 
   if (!hasCurrentTopic) return null
   return (
-    <section data-testid="ai-topic-rewrite-controls" className="rounded-lg border border-[#D8D0F0] bg-white p-3">
+    <section data-testid="ai-topic-rewrite-controls" className="border-t border-[#E2E6DF] pt-3">
       <p className="text-[10px] font-semibold text-[#514188]">Rewrite Topic with AI</p>
       <p className="mt-1 text-[10px] leading-relaxed text-[#7D788E]">
         Proposes evidence-grounded rewrites only for unchanged generated or approved blocks. Manual and protected content stays untouched until you explicitly apply selected changes.
@@ -10015,6 +10021,7 @@ function OutlineTocPanel({
   const [editing, setEditing] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+  const [searchQuery, setSearchQuery] = useState('')
   const [justMoved, setJustMoved] = useState<number | null>(null)
   const [crossRefHint, setCrossRefHint] = useState<number | null>(null)
   const [supportModal, setSupportModal] = useState<number | null>(null)
@@ -10133,7 +10140,19 @@ function OutlineTocPanel({
     setCollapsed(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   }
 
+  const matchingIds = new Set(toc.filter(item => item.title.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())).map(item => item.id))
+  if (searchQuery.trim()) {
+    for (const item of toc) {
+      if (!matchingIds.has(item.id)) continue
+      let parentId = item.parentId
+      while (parentId !== undefined) {
+        matchingIds.add(parentId)
+        parentId = toc.find(parent => parent.id === parentId)?.parentId
+      }
+    }
+  }
   const visibleItems = toc.filter(item => {
+    if (searchQuery.trim()) return matchingIds.has(item.id)
     let pid: number | undefined = item.parentId
     while (pid !== undefined) {
       if (collapsed.has(pid)) return false
@@ -10186,10 +10205,10 @@ function OutlineTocPanel({
               if (e.target !== e.currentTarget) return
               if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectSection(item.id); setTocSelected(item.id); if (activeTopicId !== item.id) onOpenTopic(item.id, item.title) }
             }}
-            title={`${item.title} — open topic`}
-            className={`group relative flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer transition-all select-none ${indentCls}
+            title={`${item.title} — open topic${metadata?.[stableAuthorTopicId(item)]?.generatedFreshness === 'stale' ? ' (draft needs attention)' : ''}`}
+            className={`group relative flex items-center gap-1 px-2 py-1.5 rounded-md cursor-pointer transition-colors select-none ${indentCls}
               ${isDragTarget ? 'border-t-2 border-[#5B5BD6]' : ''}
-              ${isFlashing ? 'bg-[#DCFCE7]' : isActive ? 'bg-[#E8EBE7] ring-1 ring-inset ring-[#9BAA9D]' : isSelected ? 'bg-[#F4F2EE]' : 'hover:bg-[#F9F8F6]'}
+              ${isFlashing ? 'bg-[#DCFCE7]' : isActive ? 'bg-[#ECEBF8] text-[#4D4DC2] ring-1 ring-inset ring-[#D7D5ED]' : isSelected ? 'bg-[#F4F2EE]' : 'hover:bg-[#F5F4F1]'}
             `}
           >
             {/* Drag grip */}
@@ -10198,20 +10217,13 @@ function OutlineTocPanel({
             {/* Collapse toggle */}
             <div className="w-3 flex-shrink-0 flex items-center justify-center">
               {hasKids ? (
-                <button onClick={e => { e.stopPropagation(); toggleCollapse(item.id) }} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                <button onClick={e => { e.stopPropagation(); toggleCollapse(item.id) }} aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${item.title}`} aria-expanded={!isCollapsed} className="text-[#7B837D] hover:text-[#4D4DC2] transition-colors">
                   <svg width="8" height="8" viewBox="0 0 8 8" fill="none" style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.15s' }}>
                     <path d="M1 3l3 3 3-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
                 </button>
               ) : <div className="w-3" />}
             </div>
-
-            {/* Level dot */}
-            {item.level === 1 ? <div className="w-1.5 h-1.5 rounded-sm bg-[#5B5BD6] flex-shrink-0" />
-              : item.level === 2 ? <div className="w-1.5 h-1.5 rounded-sm border border-[#9898AB] flex-shrink-0" />
-              : item.level === 3 ? <div className="w-1 h-1 rounded-full border border-[#C8C6C0] flex-shrink-0" />
-              : <div className="w-1 h-1 rounded-full bg-[#E2DED7] flex-shrink-0" />
-            }
 
             {/* Title */}
             {isEditing ? (
@@ -10234,18 +10246,11 @@ function OutlineTocPanel({
               </span>
             )}
 
-            {/* Topic readiness */}
-            {(() => {
-              const stableId = stableAuthorTopicId(item)
-              const topicMeta = metadata?.[stableId]
-              const fresh = topicMeta?.generatedFreshness === 'current'
-              const status = topicMeta?.generatedFreshness ?? (item.hasGap ? 'needs-grounding' : 'not-applicable')
-              return (
-                <span className={`flex-shrink-0 rounded px-1 py-0.5 text-[8px] font-medium ${fresh ? 'bg-[#E4F1E8] text-[#38694A]' : status === 'stale' || status === 'needs-grounding' ? 'bg-[#F8EBDD] text-[#89551C]' : 'bg-[#F1F0EC] text-[#77786F]'}`}>
-                  {fresh ? 'Ready' : status === 'stale' ? 'Stale' : status === 'needs-grounding' ? 'Ground' : topicMeta?.contentOrigin === 'manual' ? 'Manual' : 'Draft'}
-                </span>
-              )
-            })()}
+            {!isActive && ['current', 'stale'].includes(metadata?.[stableAuthorTopicId(item)]?.generatedFreshness ?? '') && (
+              <span className={`flex-shrink-0 rounded px-1 py-0.5 text-[8px] font-medium ${metadata?.[stableAuthorTopicId(item)]?.generatedFreshness === 'current' ? 'bg-[#E4F1E8] text-[#38694A]' : 'bg-[#F8EBDD] text-[#89551C]'}`}>
+                {metadata?.[stableAuthorTopicId(item)]?.generatedFreshness === 'current' ? 'Ready' : 'Stale'}
+              </span>
+            )}
 
             {/* Source status */}
             {item.hasGap ? (
@@ -10318,8 +10323,8 @@ function OutlineTocPanel({
         style={{ width }}
       >
         {/* Header */}
-        <div className="px-3 py-2.5 border-b border-[#E2DED7] flex items-center gap-1.5">
-          <span className="text-[10px] font-semibold text-[#7A8279] uppercase tracking-[0.14em] flex-1">Outline</span>
+        <div className="px-2 py-2 border-b border-[#E2DED7] flex items-center gap-1.5">
+          <input type="search" aria-label="Search topics" placeholder="Search topics" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} className="min-w-0 flex-1 rounded-md border border-[#E2DED7] bg-white px-2 py-1 text-[11px] text-[#263229] placeholder:text-[#899188] focus:outline-none" />
           {crossRefHint !== null && (
             <div className="flex items-center gap-1 text-[9px] text-[#D97706] fade-in">
               <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 0.5L7.5 7.5H0.5z" stroke="currentColor" strokeWidth="0.9" strokeLinejoin="round"/></svg>
@@ -10340,6 +10345,7 @@ function OutlineTocPanel({
         </div>
         {/* Tree */}
         <div className="flex-1 overflow-y-auto py-1 overflow-x-hidden" onClick={() => setTocSelected(null)}>
+          {searchQuery.trim() && visibleItems.length === 0 && <p className="px-3 py-3 text-[11px] text-[#7B837D]">No matching topics</p>}
           {renderTree()}
         </div>
       </aside>
@@ -10465,7 +10471,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     setContextPanelOpen(true)
     setContextDrawerOpen(true)
   }
-  const [tocWidth, setTocWidth] = useState(260)
+  const [tocWidth, setTocWidth] = useState(240)
   const [activeSection, setActiveSection] = useState(1)
   const [activeTopicId, setActiveTopicId] = useState<number | null>(null)
   const loadedTopicBlocksRef = useRef<DocBlock[] | null>(null)
@@ -10553,9 +10559,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     }, 400)
   }
 
-  const TOC_DEFAULT_WIDTH = 260
-  const TOC_MIN_WIDTH = 220
-  const TOC_MAX_WIDTH = 520
+  const TOC_DEFAULT_WIDTH = 240
+  const TOC_MIN_WIDTH = 210
+  const TOC_MAX_WIDTH = 380
   const separatorRef = useRef<HTMLDivElement>(null)
   const isDraggingRef = useRef(false)
   const dragStartXRef = useRef(0)
@@ -10586,7 +10592,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   }
 
   const resetWidth = () => setTocWidth(TOC_DEFAULT_WIDTH)
-  const [aiPopover, setAiPopover] = useState<{ visible: boolean; x: number; y: number; text: string } | null>(null)
   const [aiAction, setAiAction] = useState<string | null>(null)
   const [aiResult, setAiResult] = useState<string | null>(null)
   const [aiResultUnavailable, setAiResultUnavailable] = useState(false)
@@ -11589,21 +11594,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
         {contextTab === 'assist' && (
           <div className="space-y-4">
             <div>
-              <p className="text-[11px] font-semibold text-[#344138]">Grounded drafting</p>
-              <p className="mt-1 text-[10px] leading-relaxed text-[#778278]">Deterministic evidence drafts and AI-generated proposals are kept separate from authored content. Review and select changes before applying.</p>
-            </div>
-            <div className="rounded-lg border border-[#E0E5DE] bg-white p-3">
-              <p className="text-[10px] font-semibold text-[#46564A]">Grounding status</p>
+              <p className="text-[11px] font-semibold text-[#344138]">Grounding &amp; evidence</p>
               <p className="mt-1 text-[10px] text-[#7D877D]">{activeGroundingFresh ? 'Current context is ready for drafting.' : activeGroundingContext ? 'Refresh the context before drafting.' : 'Build topic grounding before drafting.'}</p>
               <button type="button" disabled={!activeStableTopicId || isDemoMode} onClick={() => activeStableTopicId && onRefreshTopicGrounding?.(activeStableTopicId)} className="author-context-action mt-3 w-full disabled:cursor-not-allowed disabled:opacity-50">{activeGroundingContext ? 'Refresh grounding' : 'Build grounding'}</button>
               {!isDemoMode && <button type="button" data-testid="author-grounding-toggle" data-topic-id={activeStableTopicId ?? ''} data-context-id={activeGroundingContext?.contextId ?? ''} onClick={() => setGroundingOpen(open => !open)} className="mt-2 w-full rounded-lg border border-[#DCE2DA] bg-white px-3 py-2 text-[10px] font-medium text-[#566458]">View grounding and evidence</button>}
             </div>
-            <div className="rounded-lg border border-[#E0E5DE] bg-white p-3">
-              <p className="text-[10px] font-semibold text-[#46564A]">Draft controls</p>
-              <p className="mt-1 text-[10px] text-[#7D877D]">{activeDraft ? `${activeDraft.blocks.length} draft blocks · ${activeDraftFresh ? 'current' : 'out of date'}` : 'No draft has been generated for this topic.'}</p>
-              <button type="button" disabled={!activeStableTopicId || !activeGroundingFresh || isDemoMode} onClick={() => { setDraftOpen(true); generateTopicContent(activeTopic?.title ?? 'New topic') }} className="author-context-action mt-3 w-full disabled:cursor-not-allowed disabled:opacity-50">Generate deterministic draft</button>
-              <button type="button" data-testid="author-draft-toggle" data-topic-id={activeStableTopicId ?? ''} disabled={!activeStableTopicId || isDemoMode} onClick={() => { setDraftOpen(open => !open); setConfirmDraftApply(false) }} className="mt-2 w-full rounded-lg border border-[#DCE2DA] bg-[#F9FAF8] px-3 py-2 text-[10px] font-medium text-[#566458] hover:bg-[#F0F3EE] disabled:cursor-not-allowed disabled:opacity-50">{activeDraft ? 'Review draft and apply changes' : 'Open draft review'}</button>
-            </div>
+            <p className="border-t border-[#E2E6DF] pt-3 text-[11px] font-semibold text-[#344138]">Generate or rewrite</p>
             <AiTopicDraftControls
               allowed={!!projectId && !isDemoMode && !!canGenerateAiTopic}
               projectSupported={!!projectId && !isDemoMode && isCloudProjectMode()}
@@ -11635,6 +11631,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               onRewrite={(workflowId, workflowVersion) =>
                 handleRewriteAiTopicDraft(workflowId, workflowVersion)}
             />
+            <div className="border-t border-[#E2E6DF] pt-3">
+              <p className="text-[11px] font-semibold text-[#344138]">Draft review &amp; provenance</p>
+              <p className="mt-1 text-[10px] text-[#7D877D]">{activeDraft ? `${activeDraft.blocks.length} draft blocks · ${activeDraftFresh ? 'current' : 'out of date'} · review before applying` : 'Draft proposals never change the editor until you review and apply them.'}</p>
+              <button type="button" disabled={!activeStableTopicId || !activeGroundingFresh || isDemoMode} onClick={() => { setDraftOpen(true); generateTopicContent(activeTopic?.title ?? 'New topic') }} className="mt-3 w-full rounded-lg border border-[#DCE2DA] bg-white px-3 py-2 text-[10px] font-medium text-[#566458] disabled:cursor-not-allowed disabled:opacity-50">Generate deterministic draft</button>
+              <button type="button" data-testid="author-draft-toggle" data-topic-id={activeStableTopicId ?? ''} disabled={!activeStableTopicId || isDemoMode} onClick={() => { setDraftOpen(open => !open); setConfirmDraftApply(false) }} className="mt-2 w-full rounded-lg border border-[#DCE2DA] bg-[#F9FAF8] px-3 py-2 text-[10px] font-medium text-[#566458] hover:bg-[#F0F3EE] disabled:cursor-not-allowed disabled:opacity-50">{activeDraft ? 'Review draft and apply changes' : 'Open draft review'}</button>
+            </div>
             <details className="rounded-lg border border-[#E0E5DE] bg-white p-3">
               <summary className="cursor-pointer text-[10px] font-semibold text-[#46564A]">AI text actions</summary>
               <div className="mt-2 grid grid-cols-2 gap-1">
@@ -11651,16 +11653,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   )
 
   const handleSelection = useCallback(() => {
-    const sel = window.getSelection()
-    if (sel && sel.toString().trim().length > 10 && canvasRef.current?.contains(sel.anchorNode ?? null)) {
-      try {
-        const range = sel.getRangeAt(0)
-        const rect = range.getBoundingClientRect()
-        setAiPopover({ visible: true, x: rect.left + rect.width / 2, y: rect.top - 8, text: sel.toString() })
-      } catch {}
-    } else {
-      setAiPopover(null)
-    }
     checkInTable()
   }, [checkInTable])
 
@@ -11783,7 +11775,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     }
     setAiAction(action)
     setAiResultUnavailable(!isDemoMode)
-    setAiPopover(null)
     setTimeout(() => {
       if (!isDemoMode) {
         setAiResult('This action is not available yet for real projects. It requires grounded project evidence and a generation pipeline before it can safely modify authored content.')
@@ -11875,9 +11866,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
         <>
           {compactLayout && <button type="button" aria-label="Close outline drawer" className="author-drawer-scrim" onClick={() => closeOutlineDrawer()} />}
           <div className="author-outline-shell flex-shrink-0 flex flex-col min-h-0 overflow-hidden" style={{ width: tocWidth }}>
-            <div className="flex items-center justify-between border-b border-[#E2DED7] bg-white px-3 py-2.5">
+            <div className="flex items-center justify-between border-b border-[#E2DED7] bg-white px-3 py-2">
               <span className="text-[11px] font-semibold text-[#263229]">Structure</span>
-              <button type="button" onClick={() => setStructureView(view => view === 'topics' ? 'explorer' : 'topics')} className="rounded-md px-2 py-1 text-[10px] font-medium text-[#5B5BD6] hover:bg-[#EEEEFF]">
+              <button type="button" onClick={() => setStructureView(view => view === 'topics' ? 'explorer' : 'topics')} className="rounded-md px-2 py-1 text-[10px] font-medium text-[#777786] hover:bg-[#F4F2EE] hover:text-[#4D4DC2]">
                 {structureView === 'topics' ? 'Browse content' : 'Back to topics'}
               </button>
             </div>
@@ -11912,7 +11903,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
             ref={separatorRef}
             onMouseDown={startResize}
             onDoubleClick={resetWidth}
-            className="group w-1 flex-shrink-0 relative bg-[#E2DED7] hover:bg-[#5B5BD6] transition-colors duration-150 cursor-col-resize z-10"
+            className="group w-px flex-shrink-0 relative bg-[#E2DED7] hover:bg-[#5B5BD6] transition-colors duration-150 cursor-col-resize z-10"
             title="Drag to resize · Double-click to reset"
           >
             {/* Wider invisible hit area */}
@@ -11922,7 +11913,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
       )}
 
       {/* Main canvas */}
-      <div data-testid="author-editor" className="author-editor flex-1 min-w-0 flex flex-col overflow-hidden bg-[#F4F2EE]">
+      <div data-testid="author-editor" className="author-editor flex-1 min-w-0 flex flex-col overflow-hidden bg-[#FAF9F7]">
         {/* Review context banner — shown when jumped here from Review */}
         {reviewContext && (
           <div className="bg-[#EEEEFF] border-b border-[#C7C5F4] flex items-center gap-3 px-4 py-2 flex-shrink-0">
@@ -11961,32 +11952,30 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
         )}
         {/* Document actions and writing toolbar */}
         <div className="bg-white border-b border-[#E2DED7] flex-shrink-0">
-          <div className="flex flex-wrap items-center gap-2 border-b border-[#F0EDE8] px-4 py-2">
+          <div className="flex flex-wrap items-center gap-2 border-b border-[#F0EDE8] px-4 py-1.5">
             {(!outlineOpen || compactLayout) && <button ref={outlineTriggerRef} data-testid="author-open-outline" aria-label="Open structure" type="button" onClick={() => { setOutlineOpen(true); setOutlineDrawerOpen(true) }} className="author-open-control">Structure</button>}
             <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[#263229]">{activeTopic?.title ?? 'Select a topic'}</span>
-            {!isDemoMode && <button type="button" data-testid="author-generated-freshness" title={activeGeneratedFreshnessReason ?? 'Open topic status and drafting actions'} onClick={() => openAuthorContext(activeDraftFresh ? 'assist' : 'evidence')} className={`rounded-md px-2.5 py-1.5 text-[10px] font-semibold ${!activeGroundingFresh && activeTopic ? 'bg-[#FEF3C7] text-[#92400E]' : activeDraftFresh ? 'bg-[#DCFCE7] text-[#15803D]' : activeGeneratedFreshness === 'stale' ? 'bg-[#FEF3C7] text-[#92400E]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>
-              {!activeTopic ? 'Choose a topic' : !activeGroundingFresh ? (activeGroundingContext ? 'Grounding stale' : 'Needs Grounding') : activeGeneratedFreshness === 'needs-grounding' ? 'Needs Grounding' : activeGeneratedFreshness === 'stale' ? 'Needs attention' : activeDraftFresh ? 'Draft ready' : activeGeneratedFreshness === 'current' ? 'Current' : 'Ready to write'}
+            {!isDemoMode && activeTopic && <button type="button" data-testid="author-generated-freshness" title={activeGeneratedFreshnessReason ?? 'Open topic status and drafting actions'} onClick={() => openAuthorContext('assist')} className={`rounded px-2 py-1 text-[10px] font-medium ${!activeGroundingFresh || activeGeneratedFreshness === 'stale' ? 'bg-[#F8EBDD] text-[#89551C]' : activeDraftFresh ? 'bg-[#E4F1E8] text-[#38694A]' : 'bg-[#F1F0EC] text-[#747B72]'}`}>
+              {!activeGroundingFresh ? (activeGroundingContext ? 'Grounding stale' : 'Needs Grounding') : activeGeneratedFreshness === 'needs-grounding' ? 'Needs Grounding' : activeGeneratedFreshness === 'stale' ? 'Needs attention' : activeDraftFresh ? 'Draft ready' : activeGeneratedFreshness === 'current' ? 'Current' : 'Ready to write'}
               {activeGeneratedFreshnessReason && <span data-testid="author-generated-freshness-reason" className="sr-only">{activeGeneratedFreshnessReason}</span>}
             </button>}
-            <button ref={contextTriggerRef} type="button" data-testid="author-ai-assist" aria-expanded={compactLayout ? contextDrawerOpen : contextPanelOpen} onClick={() => (compactLayout ? contextDrawerOpen : contextPanelOpen) && contextTab === 'assist' ? closeContextDrawer() : openAuthorContext('assist')} className="rounded-md bg-[#5B5BD6] px-3 py-2 text-[11px] font-semibold text-white hover:bg-[#4A4AC4]">AI Assist</button>
+            <button ref={contextTriggerRef} type="button" data-testid="author-ai-assist" aria-expanded={compactLayout ? contextDrawerOpen : contextPanelOpen} onClick={() => (compactLayout ? contextDrawerOpen : contextPanelOpen) && contextTab === 'assist' ? closeContextDrawer() : openAuthorContext('assist')} className="rounded-md border border-[#D7D5ED] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#4D4DC2] hover:bg-[#F4F3FF]">AI Assist</button>
             <details className="relative">
               <summary className="cursor-pointer rounded-md border border-[#E2DED7] px-2.5 py-1.5 text-[11px] font-medium text-[#585866]">More</summary>
               <div className="absolute right-0 top-full z-50 mt-1 min-w-[170px] rounded-lg border border-[#E2DED7] bg-white p-1 shadow-lg">
                 <button type="button" onClick={() => setMode('knowledge')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Knowledge Map</button>
                 <button type="button" onClick={() => onNav('branding')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Style profile</button>
-                <button type="button" onClick={() => openAuthorContext('sources')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Topic sources</button>
-                <button type="button" onClick={() => openAuthorContext('review')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Topic review</button>
                 <button type="button" onClick={() => setSourceRef(value => !value)} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Toggle source references</button>
               </div>
             </details>
           </div>
           {mode === 'author' && (
-            <div data-testid="author-review-next-step" className="flex flex-col gap-2 border-t border-[#F0EDE8] px-4 py-1.5 sm:flex-row sm:items-center sm:justify-between">
+            <div data-testid="author-review-next-step" className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-1">
               <div className="min-w-0 flex-1">
-                <h2 data-testid="author-stage-heading" tabIndex={-1} className="text-[12px] font-semibold text-[#111218] outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
+                <h2 data-testid="author-stage-heading" tabIndex={-1} className="sr-only">
                   Author workspace
                 </h2>
-                <p id="author-review-readiness" role="status" aria-live="polite" className={`mt-0.5 text-[11px] ${
+                <p id="author-review-readiness" role="status" aria-live="polite" className={`text-[10px] ${
                   isDemoMode || reviewInputSnapshot?.readiness === 'ready'
                     ? 'text-[#43845B]'
                     : reviewInputSnapshot?.readiness === 'stale-inputs'
@@ -12015,11 +12004,11 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                 </p>
                 {reviewActionError && <p role="alert" className="mt-1 text-[11px] text-[#991B1B]">{reviewActionError}</p>}
               </div>
-              <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => onNav('preview')}
-                  className="min-h-9 w-full rounded-md border border-[#E2DED7] bg-white px-3 text-[11px] font-medium text-[#5B5BD6] transition-colors hover:bg-[#F9F8F6] sm:w-auto"
+                  className="min-h-7 rounded-md px-2 text-[10px] font-medium text-[#777786] transition-colors hover:bg-[#F9F8F6] hover:text-[#4D4DC2]"
                 >
                   Preview
                 </button>
@@ -12029,7 +12018,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                   disabled={!reviewReady}
                   aria-describedby={!reviewReady ? 'author-review-readiness' : undefined}
                   onClick={handleAuthorRunReview}
-                  className="min-h-9 w-full rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:bg-[#E2DED7] disabled:text-[#777786] sm:w-auto"
+                  className="min-h-7 rounded-md border border-[#D7D5ED] bg-white px-2 text-[10px] font-semibold text-[#4D4DC2] transition-colors hover:bg-[#F4F3FF] disabled:cursor-not-allowed disabled:border-[#E2DED7] disabled:text-[#9999A5]"
                 >
                   {isDemoMode ? 'Open Review (Demo)' : 'Run Grounded Review'}
                 </button>
@@ -12317,6 +12306,11 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                       <button onClick={() => { setShowMoreMenu(false); setShowSnippetsModal(true) }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
                         Snippets
                       </button>
+                      {activeTopicId !== null && docBlocks.length <= 1 && (
+                        <button onClick={() => { setShowMoreMenu(false); setTopicMode('ai') }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
+                          Guided topic setup
+                        </button>
+                      )}
                       <button onClick={() => { setShowMoreMenu(false); convertSelectionToVariable() }} className="w-full flex items-center px-3 py-1.5 text-[12px] text-[#3D3D4E] hover:bg-[#F4F2EE] transition-colors text-left">
                         Selection → Variable
                       </button>
@@ -12597,21 +12591,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
 
         {/* Canvas scroll area */}
         <div
-          className="flex-1 overflow-y-auto px-6 py-8"
+          className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-5"
           onClick={() => { setShowInsertMenu(false); setShowConditions(false); setShowMoreMenu(false); setShowAlignMenu(false); setShowRefsMenu(false); setShowAiMenu(false); setConvertMenuBlockId(null) }}
         >
-          <div className="max-w-2xl mx-auto">
+          <div className="max-w-4xl mx-auto">
             {/* Document card */}
-            <div ref={canvasRef} className="bg-white rounded-xl shadow-sm border border-[#E2DED7] p-10 min-h-[600px]">
-              {activeTopic && (
-                <div className="mb-5 flex flex-wrap items-center gap-2 border-b border-[#EBEEE9] pb-3">
-                  <span className="text-[9px] font-semibold uppercase tracking-[0.15em] text-[#7D897D]">Active topic</span>
-                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-semibold ${activeGroundingFresh ? 'bg-[#E4F1E8] text-[#38694A]' : activeGeneratedFreshness === 'stale' || activeGeneratedFreshness === 'needs-grounding' ? 'bg-[#F8EBDD] text-[#89551C]' : 'bg-[#F1F0EC] text-[#747B72]'}`}>
-                    {activeGroundingFresh ? 'Grounded' : activeGeneratedFreshness === 'stale' ? 'Stale draft' : activeGeneratedFreshness === 'needs-grounding' ? 'Needs grounding' : 'Manual / in progress'}
-                  </span>
-                  <span className="font-mono-code text-[9px] text-[#9AA198]">{activeStableTopicId}</span>
-                </div>
-              )}
+            <div ref={canvasRef} className="min-h-[600px] border border-[#EAE8E2] bg-white p-5 sm:p-8">
               {/* Document header — breadcrumb only when inside a topic */}
               {activeTopicId !== null && (
                 <div className="mb-4">
@@ -12644,10 +12629,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                 if (topicMode === 'choose') return (
                   <div className="mb-6">
                     <p className="text-[12px] text-[#9898AB] mb-4">This topic is empty. Choose how you'd like to add content:</p>
-                    <div className="grid grid-cols-3 gap-3 mb-4">
+                    <div className="grid grid-cols-1 gap-2 mb-4 sm:grid-cols-2">
                       {[
                         { mode: 'write' as const, icon: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 16h12M13.5 3.5l3 3-8 8H5.5v-3l8-8z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>, label: 'Write manually', desc: 'Start with a blank page and type your content' },
-                        { mode: 'ai' as const, icon: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2l1.9 4.3L16.5 7l-3.3 3.2.8 4.8L10 12.7l-4 2.3.8-4.8L3.5 7l4.6-.7L10 2z" fill="currentColor" opacity=".9"/></svg>, label: 'Generate with AI', desc: 'Let AI draft content from your source files' },
                         { mode: 'sources' as const, icon: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="1.4"/><path d="M7 7h6M7 10h4M7 13h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>, label: 'Browse sources', desc: 'Pick excerpts from your source documents' },
                       ].map(opt => (
                         <button key={opt.mode} onClick={() => {
@@ -12667,7 +12651,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                         </button>
                       ))}
                     </div>
-                    <p className="text-[11px] text-[#C8C6C0] text-center">You can also use the <strong className="text-[#9898AB]">Insert</strong> toolbar above to add headings, tables, callouts, and more at any time.</p>
+                    <p className="text-[11px] text-[#9898AB]">Use AI Assist above for grounded generation and draft review. More contains guided topic setup.</p>
                   </div>
                 )
 
@@ -12892,7 +12876,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                 return docBlocks.length <= 1 ? (
                   <div className="mb-4 flex items-center gap-3 px-3 py-2.5 bg-[#F9F8F6] border border-dashed border-[#D8D4CE] rounded-xl">
                     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="text-[#9898AB] flex-shrink-0"><path d="M6.5 2v9M2 6.5h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
-                    <p className="text-[11px] text-[#9898AB]">Use the <strong className="text-[#6B6B7E]">Insert</strong> toolbar above to add paragraphs, headings, tables, and more. Or switch to <button onClick={() => setTopicMode('ai')} className="text-[#5B5BD6] hover:underline font-medium">AI generation</button>.</p>
+                    <p className="text-[11px] text-[#9898AB]">Use the <strong className="text-[#6B6B7E]">Insert</strong> toolbar above to add paragraphs, headings, tables, and more.</p>
                   </div>
                 ) : null
               })()}
@@ -13586,38 +13570,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
           <button type="button" aria-label="Close context drawer" className="author-drawer-scrim author-context-scrim" onClick={closeContextDrawer} />
           {renderAuthorContext()}
         </>
-      )}
-
-      {/* Contextual AI Popover */}
-      {aiPopover?.visible && (
-        <div
-          className="fixed z-50 fade-in"
-          style={{ left: Math.min(aiPopover.x - 160, window.innerWidth - 340), top: aiPopover.y - 48 }}
-        >
-          <div className="bg-[#1A1B22] rounded-xl p-1.5 popover-shadow flex items-center gap-0.5 flex-wrap max-w-xs">
-            <div className="flex items-center gap-1.5 px-2 py-1 mr-1">
-              <div className="w-3.5 h-3.5 rounded bg-[#8B5CF6] flex items-center justify-center">
-                <span className="text-white text-[9px]">✦</span>
-              </div>
-              <span className="text-[11px] text-[#8B8BAA] font-medium">AI</span>
-            </div>
-            {AI_ACTIONS.slice(0, 6).map(action => (
-              <button
-                key={action}
-                onClick={() => runAiAction(action)}
-                className="px-2 py-1 rounded-lg text-[11px] text-white font-medium hover:bg-[#2A2B38] transition-colors whitespace-nowrap"
-              >
-                {action}
-              </button>
-            ))}
-            <button
-              onClick={() => setAiPopover(p => p ? { ...p, visible: false } : null)}
-              className="px-2 py-1 rounded-lg text-[11px] text-[#5B5BAA] hover:text-white transition-colors"
-            >
-              ···
-            </button>
-          </div>
-        </div>
       )}
 
       {draftOpen && !isDemoMode && (
