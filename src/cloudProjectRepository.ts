@@ -53,16 +53,31 @@ function isProjectNameConflict(error: unknown): error is CloudProjectApiError {
     && error.status === 409 && error.code === 'PROJECT_NAME_CONFLICT'
 }
 
-async function workspaceProjectRecords(): Promise<ProjectRecord[]> {
+async function workspaceProjectSummaries(): Promise<ProjectSummary[]> {
   const reply = await cloudRequest('list')
   if (!Array.isArray(reply.projects)) throw new Error('Cloud project server returned an invalid project list.')
-  return reply.projects.map(value => validateCloudRecord(value))
+  return reply.projects.map(value => {
+    const row = object(value)
+    if (typeof row.projectId !== 'string' || !row.projectId
+      || typeof row.ownerUserId !== 'string' || !row.ownerUserId
+      || typeof row.workspaceId !== 'string' || !row.workspaceId
+      || typeof row.projectName !== 'string'
+      || typeof row.documentType !== 'string' || typeof row.version !== 'string'
+      || !Number.isSafeInteger(row.createdAt) || !Number.isSafeInteger(row.modifiedAt))
+      throw new Error('Cloud project server returned invalid project metadata.')
+    return {
+      projectId: row.projectId as string, ownerUserId: row.ownerUserId as string,
+      workspaceId: row.workspaceId as string, projectName: row.projectName as string,
+      documentType: row.documentType as string, version: row.version as string,
+      createdAt: row.createdAt as number, modifiedAt: row.modifiedAt as number,
+    }
+  })
 }
 
 async function assertUniqueProjectName(name: string, exceptProjectId?: string): Promise<void> {
   const key = projectNameKey(normalizeProjectName(name))
   if (!key) throw new Error('Project name is required.')
-  const records = await workspaceProjectRecords()
+  const records = await workspaceProjectSummaries()
   for (const record of records) knownProjectNames.set(record.projectId, record.projectName)
   const existingNames = records.filter(record => record.projectId !== exceptProjectId).map(record => record.projectName)
   if (existingNames.some(existing => projectNameKey(existing) === key))
@@ -221,10 +236,13 @@ async function readCloudFiles(projectId: string): Promise<StoredFile[]> {
   if (metadata.some(file => file.projectId !== projectId) || new Set(metadata.map(file => file.fileId)).size !== metadata.length)
     throw new Error('Cloud project server returned an inconsistent file set.')
   const files: StoredFile[] = []
-  for (const file of metadata) {
-    const blob = await binaryFile(file.fileId)
-    if (blob.size !== file.size) throw new Error(`Cloud file "${file.name}" did not match its stored size.`)
-    files.push({ ...file, blob })
+  for (let start = 0; start < metadata.length; start += 3) {
+    const batch = await Promise.all(metadata.slice(start, start + 3).map(async file => {
+      const blob = await binaryFile(file.fileId)
+      if (blob.size !== file.size) throw new Error(`Cloud file "${file.name}" did not match its stored size.`)
+      return { ...file, blob }
+    }))
+    files.push(...batch)
   }
   return files
 }
@@ -390,14 +408,7 @@ export const cloudProjectRepository = {
   },
   async listProjects(context?: ProjectAccessContext): Promise<ProjectSummary[]> {
     void context
-    const records = await workspaceProjectRecords()
-    return records.map(record => {
-      return {
-        projectId: record.projectId, ownerUserId: record.ownerUserId, workspaceId: record.workspaceId,
-        projectName: record.projectName, documentType: record.documentType, version: record.version,
-        createdAt: record.createdAt, modifiedAt: record.modifiedAt,
-      }
-    })
+    return workspaceProjectSummaries()
   },
   async deleteProject(projectId: string, context?: ProjectAccessContext) {
     void context

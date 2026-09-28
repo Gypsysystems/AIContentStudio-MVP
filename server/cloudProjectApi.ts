@@ -17,7 +17,23 @@ type Json = Record<string, unknown>
 type User = { id: string }
 type Membership = { workspace_id: string; role: string }
 type FileRow = { file_id: string; project_id: string; name: string; type: string; size: number; uploaded_at: number; storage_path: string; state: string }
-type ProjectNameRow = { project_id: string; record: Json }
+type ProjectNameRow = { project_id: string; projectName: string }
+
+const PROJECT_SUMMARY_SELECT =
+  'project_id,owner_user_id,workspace_id,projectName:record->projectName,documentType:record->documentType,version:record->version,createdAt:record->createdAt,modifiedAt:record->modifiedAt'
+
+function summaryField(value: unknown, fallback: string): string {
+  if (value === null || value === undefined) return fallback // Legacy v1 defaults.
+  if (typeof value !== 'string') throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid project metadata')
+  return value
+}
+
+function summaryTimestamp(value: unknown): number {
+  if (value === null || value === undefined) return 0 // Legacy v1 defaults.
+  if (!Number.isSafeInteger(value) || (value as number) < 0)
+    throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid project metadata')
+  return value as number
+}
 
 export class CloudApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly details?: Record<string, unknown>) {
@@ -238,19 +254,32 @@ class SupabaseCloudClient {
   }
 
   async listProjects(workspaceId: string): Promise<unknown[]> {
-    const query = new URLSearchParams({ select: 'project_id,record', workspace_id: `eq.${workspaceId}`, status: 'eq.active', order: 'updated_at.desc' })
+    const query = new URLSearchParams({ select: PROJECT_SUMMARY_SELECT, workspace_id: `eq.${workspaceId}`, status: 'eq.active', order: 'updated_at.desc' })
     const rows = await this.json(`/rest/v1/cloud_projects?${query}`)
     if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid project list')
-    return rows.map(row => isObject(row) ? row.record : null).filter(Boolean)
+    return rows.map(row => {
+      if (!isObject(row) || typeof row.project_id !== 'string'
+        || typeof row.owner_user_id !== 'string' || typeof row.workspace_id !== 'string'
+        || typeof row.projectName !== 'string')
+        throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid project metadata')
+      return {
+        projectId: row.project_id, ownerUserId: row.owner_user_id, workspaceId: row.workspace_id,
+        projectName: row.projectName, documentType: summaryField(row.documentType, 'user-guide'),
+        version: summaryField(row.version, '1.0'), createdAt: summaryTimestamp(row.createdAt),
+        modifiedAt: summaryTimestamp(row.modifiedAt),
+      }
+    })
   }
 
   async listProjectNames(workspaceId: string): Promise<ProjectNameRow[]> {
-    const query = new URLSearchParams({ select: 'project_id,record', workspace_id: `eq.${workspaceId}` })
+    const query = new URLSearchParams({ select: 'project_id,projectName:record->projectName', workspace_id: `eq.${workspaceId}` })
     const rows = await this.json(`/rest/v1/cloud_projects?${query}`)
     if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid project-name list')
-    return rows.filter((row): row is ProjectNameRow =>
-      isObject(row) && typeof row.project_id === 'string' && isObject(row.record),
-    )
+    return rows.map(row => {
+      if (!isObject(row) || typeof row.project_id !== 'string' || typeof row.projectName !== 'string')
+        throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid project-name metadata')
+      return { project_id: row.project_id, projectName: row.projectName }
+    })
   }
 
   async getProject(projectId: string, workspaceId: string): Promise<Json | null> {
@@ -449,7 +478,7 @@ export class CloudProjectApi {
     try {
       names = (await this.client.listProjectNames(this.workspaceId))
         .filter(row => row.project_id !== excludedProjectId)
-        .map(row => row.record.projectName)
+        .map(row => row.projectName)
         .filter((value): value is string => typeof value === 'string')
     } catch {
       // The database unique index remains authoritative if this lookup fails.
@@ -465,7 +494,7 @@ export class CloudProjectApi {
     const rows = await this.client.listProjectNames(this.workspaceId)
     const existingNames = rows
       .filter(row => row.project_id !== excludedProjectId)
-      .map(row => row.record.projectName)
+      .map(row => row.projectName)
       .filter((value): value is string => typeof value === 'string')
     if (existingNames.some(existing => projectNameKey(existing) === projectNameKey(name)))
       throw await this.projectNameConflict(name, excludedProjectId)

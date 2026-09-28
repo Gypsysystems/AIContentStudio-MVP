@@ -718,3 +718,111 @@ test('viewer role hides cloud mutation controls while retaining read and backup 
   await expect(page.getByRole('button', { name: 'Backup' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Review local projects to import' })).toHaveCount(0)
 })
+
+test('cloud list and name checks use summaries while individual reads still validate full records', async ({ page }) => {
+  await page.goto('/')
+  const summary = {
+    projectId: 'summary-only', ownerUserId: 'summary-user', workspaceId: 'summary-workspace',
+    projectName: 'Summary only', documentType: 'user-guide', version: '1.0',
+    createdAt: 12, modifiedAt: 34,
+  }
+  let createRequests = 0
+  await page.route('**/api/cloud-projects', route => {
+    const input = route.request().postDataJSON() as { action: string }
+    if (input.action === 'list') return route.fulfill({ json: { projects: [summary] } })
+    if (input.action === 'read') return route.fulfill({
+      json: { record: { ...summary, schemaVersion: 999, recordRevision: 0 } },
+    })
+    if (input.action === 'create') createRequests++
+    return route.fulfill({ status: 400, json: { code: 'UNEXPECTED_ACTION', error: input.action } })
+  })
+  const result = await page.evaluate(async () => {
+    const { setCloudAuthSession } = await import('/src/authSession.ts' as string)
+    const { cloudProjectRepository: repo } = await import('/src/cloudProjectRepository.ts' as string)
+    setCloudAuthSession({
+      user: { id: 'summary-user' }, workspace: { id: 'summary-workspace' },
+      membership: { userId: 'summary-user', workspaceId: 'summary-workspace', role: 'owner' },
+    })
+    const projects = await repo.listProjects()
+    let nameConflict = ''
+    try { await repo.createProject({ projectId: 'new-summary', projectName: 'SUMMARY ONLY' }) }
+    catch (error) { nameConflict = (error as { code?: string }).code ?? '' }
+    let openError = ''
+    try { await repo.loadProject('summary-only') }
+    catch (error) { openError = (error as Error).message }
+    return { projects, nameConflict, openError }
+  })
+  expect(result.projects).toEqual([summary])
+  expect(result.nameConflict).toBe('PROJECT_NAME_CONFLICT')
+  expect(result.openError).toContain('Unsupported project schema version')
+  expect(createRequests).toBe(0)
+})
+
+test('cloud project source files download in bounded parallel batches with stable association', async ({ page }) => {
+  await page.goto('/')
+  const ids = Array.from({ length: 5 }, (_, index) => `source-${index}`)
+  let wrongAssociation = false
+  let active = 0
+  let peak = 0
+  const started: string[] = []
+  const release = new Map<string, () => void>()
+  await page.route('**/api/cloud-projects', route => {
+    const input = route.request().postDataJSON() as { action: string; projectId?: string }
+    if (input.action === 'load-files') return route.fulfill({ json: {
+      files: ids.map((fileId, index) => ({
+        fileId, projectId: wrongAssociation && index === 1 ? 'another-project' : 'source-project',
+        name: `${fileId}.txt`,
+        type: 'text/plain', size: fileId.length, uploadedAt: index + 1,
+      })),
+    } })
+    return route.fulfill({ status: 400, json: { code: 'UNEXPECTED_ACTION', error: input.action } })
+  })
+  await page.route('**/api/cloud-files?fileId=*', async route => {
+    const id = new URL(route.request().url()).searchParams.get('fileId')!
+    active++
+    peak = Math.max(peak, active)
+    started.push(id)
+    await new Promise<void>(resolve => { release.set(id, resolve) })
+    active--
+    return route.fulfill({ status: 200, contentType: 'text/plain', body: id })
+  })
+  const loading = page.evaluate(async () => {
+    const { setCloudAuthSession } = await import('/src/authSession.ts' as string)
+    const { cloudProjectRepository: repo } = await import('/src/cloudProjectRepository.ts' as string)
+    setCloudAuthSession({
+      user: { id: 'source-user' }, workspace: { id: 'source-workspace' },
+      membership: { userId: 'source-user', workspaceId: 'source-workspace', role: 'viewer' },
+    })
+    const files = await repo.loadProjectFiles('source-project')
+    return Promise.all(files.map(async file => ({
+      fileId: file.fileId, projectId: file.projectId, text: await file.blob.text(),
+    })))
+  })
+  await expect.poll(() => started.length).toBe(3)
+  expect(peak).toBe(3)
+  for (const id of ids.slice(0, 3)) release.get(id)!()
+  await expect.poll(() => started.length).toBe(5)
+  for (const id of ids.slice(3)) release.get(id)!()
+  expect(await loading).toEqual(ids.map(fileId => ({
+    fileId, projectId: 'source-project', text: fileId,
+  })))
+  expect(peak).toBe(3)
+
+  await page.unroute('**/api/cloud-files?fileId=*')
+  let furtherDownloads = 0
+  await page.route('**/api/cloud-files?fileId=*', route => {
+    furtherDownloads++
+    return route.fulfill({ status: 200, contentType: 'text/plain', body: 'x' })
+  })
+  const failedLoad = () => page.evaluate(async () => {
+    const { cloudProjectRepository: repo } = await import('/src/cloudProjectRepository.ts' as string)
+    try { await repo.loadProjectFiles('source-project') }
+    catch (error) { return (error as Error).message }
+    return ''
+  })
+  expect(await failedLoad()).toContain('did not match its stored size')
+  wrongAssociation = true
+  const downloadsBeforeMismatch = furtherDownloads
+  expect(await failedLoad()).toContain('inconsistent file set')
+  expect(furtherDownloads).toBe(downloadsBeforeMismatch)
+})

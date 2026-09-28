@@ -123,6 +123,33 @@ test.describe('workspace cloud project API', () => {
     }
   })
 
+  test('list selects only project summary fields and never returns record JSON', async () => {
+    const restore = provider('viewer', true, url => {
+      if (url.pathname !== '/rest/v1/cloud_projects') throw new Error(`Unexpected provider call: ${url.pathname}`)
+      const select = url.searchParams.get('select') ?? ''
+      expect(select).toContain('projectName:record->projectName')
+      expect(select).toContain('createdAt:record->createdAt')
+      expect(select).not.toMatch(/(^|,)record(,|$)/)
+      expect(url.searchParams.get('workspace_id')).toBe('eq.workspace-1')
+      expect(url.searchParams.get('status')).toBe('eq.active')
+      return reply([{
+        project_id: 'listed-project', owner_user_id: 'user-1', workspace_id: 'workspace-1',
+        projectName: 'Listed project', documentType: 'user-guide', version: '1.0',
+        createdAt: 12, modifiedAt: 34,
+      }])
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      expect(await api.execute({ action: 'list' })).toEqual({ projects: [{
+        projectId: 'listed-project', ownerUserId: 'user-1', workspaceId: 'workspace-1',
+        projectName: 'Listed project', documentType: 'user-guide', version: '1.0',
+        createdAt: 12, modifiedAt: 34,
+      }] })
+    } finally {
+      restore()
+    }
+  })
+
   test('readiness checks independent authenticated provider endpoints concurrently', async () => {
     const initialChecks = new Set<string>()
     const resourceChecks = new Set<string>()
@@ -237,7 +264,7 @@ test.describe('workspace cloud project API', () => {
       if (url.pathname !== '/rest/v1/cloud_projects') throw new Error(`Unexpected provider call: ${url.pathname}`)
       return reply([{
         project_id: 'existing-project',
-        record: { projectName: 'Asteria 2' },
+        projectName: 'Asteria 2',
       }])
     })
     try {
@@ -278,7 +305,7 @@ test.describe('workspace cloud project API', () => {
         if (nameReads === 2) releaseNameReads()
         await bothNameReads
         return reply(projects.filter(row => row.workspace_id === url.searchParams.get('workspace_id')?.slice(3))
-          .map(({ project_id, record }) => ({ project_id, record })))
+          .map(({ project_id, record }) => ({ project_id, projectName: record.projectName })))
       }
       throw new Error(`Unexpected provider request: ${url.pathname}`)
     })
@@ -306,7 +333,7 @@ test.describe('workspace cloud project API', () => {
       if (url.searchParams.has('limit')) return reply([{
         record: { projectId: 'project-to-rename', ownerUserId: 'owner', recordRevision: 0 },
       }])
-      return reply([{ project_id: 'another-project', record: { projectName: 'Asteria 2' } }])
+      return reply([{ project_id: 'another-project', projectName: 'Asteria 2' }])
     })
     try {
       const api = await CloudProjectApi.fromRequest(request())
@@ -329,8 +356,8 @@ test.describe('workspace cloud project API', () => {
         }
         if (url.searchParams.has('limit')) return reply([])
         return reply([
-          { project_id: 'source-project', record: { projectName: 'Source' } },
-          { project_id: 'existing-copy', record: { projectName: 'Source Copy' } },
+          { project_id: 'source-project', projectName: 'Source' },
+          { project_id: 'existing-copy', projectName: 'Source Copy' },
         ])
       }
       if (url.pathname === '/rest/v1/cloud_project_files') return reply([])
