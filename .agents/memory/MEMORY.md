@@ -9,6 +9,7 @@
 - [Author grounding context](author-grounding-context.md) — cache deterministic per-topic context separately from content; stale inputs invalidate context without rewriting authored blocks.
 - [Author draft review boundary](author-draft-review-boundary.md) — drafts and regeneration diffs stay separate; confirmed selected changes preserve manual and approved content.
 - [Author project search](author-project-search.md) — index persisted topic content by stable TOC ID; real projects never use demo search fallback.
+- [Content Explorer organization boundary](content-explorer-organization-boundary.md) — folder placement is project-local organization, never canonical TOC or publishing structure.
 - [Review data boundary](review-data-boundary.md) — persisted real Review history is project-scoped; demo findings never hydrate into it.
 - [Review rule evidence](review-rule-evidence.md) — language checks are conservative; writing and formatting findings require explicit enforceable snapshot rules.
 - [Review-to-Author navigation](review-author-navigation.md) — treat locating and focusing an authored block as a read-only operation; guard stale IDs first.

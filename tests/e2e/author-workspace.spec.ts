@@ -291,6 +291,52 @@ test('desktop Author workspace presents the outline, editor, and source context 
   await page.getByTestId('author-context-tab-assist').click()
 })
 
+test('Author Content Explorer persists project organization without changing committed topics or authored blocks', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const projectName = `Author explorer ${Date.now()}`
+  await prepareAuthor(page, projectName)
+  const original = await readProject(page, projectName)
+  await expect(page.getByTestId('content-explorer-panel')).toBeVisible()
+  await expect(page.getByTestId('author-outline')).toBeVisible()
+  await expect(page.getByTestId('author-context')).toBeVisible()
+
+  await page.getByTestId('content-explorer-item-topic-topic-recovery').click()
+  await expect(page.getByTestId('author-editor')).toContainText('Recovery')
+  await page.getByTestId('content-explorer-new-folder').click()
+  await page.getByLabel('New folder name').fill('Working Set')
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+  const folder = page.locator('[data-folder-id]').filter({ hasText: 'Working Set' }).first()
+  await expect(folder).toBeVisible()
+  await page.getByTestId('content-explorer-item-topic-topic-recovery')
+    .locator('xpath=ancestor::*[@role="treeitem"][1]').dragTo(folder)
+  await folder.getByRole('button', { name: 'Expand Working Set' }).click()
+  await expect(folder.getByTestId('content-explorer-item-topic-topic-recovery')).toBeVisible()
+
+  await expect.poll(async () => {
+    const saved = await readProject(page, projectName)
+    return saved.contentExplorer?.placements?.find(
+      (item: { assetType: string; assetId: string }) =>
+        item.assetType === 'topic' && item.assetId === 'topic-recovery',
+    )?.folderId
+  }).toBe(await folder.getAttribute('data-folder-id'))
+  const saved = await readProject(page, projectName)
+  // The Author hydration normalizes omitted legacy TOC order fields; compare
+  // the committed topic content and effective order rather than those defaults.
+  const withoutDerivedOrder = ({ order, parentTopicId, ...topic }: StoredTopic) => topic
+  expect(saved.appToc.map(withoutDerivedOrder)).toEqual(original.appToc.map(withoutDerivedOrder))
+  expect(saved.appToc.map((topic, index) => topic.order ?? index))
+    .toEqual(original.appToc.map((topic, index) => topic.order ?? index))
+  expect(saved.topicContent).toEqual(original.topicContent)
+
+  await page.reload()
+  await authorStep(page).click()
+  const restoredFolder = page.locator('[data-folder-id]').filter({ hasText: 'Working Set' }).first()
+  await restoredFolder.getByRole('button', { name: 'Expand Working Set' }).click()
+  await expect(restoredFolder.getByTestId('content-explorer-item-topic-topic-recovery')).toBeVisible()
+  await restoredFolder.getByTestId('content-explorer-item-topic-topic-recovery').click()
+  await expect(page.getByTestId('author-editor')).toContainText('Recovery')
+})
+
 test('medium and narrow viewports collapse Author panels into explicitly opened drawers', async ({ page }) => {
   const projectName = `Author workspace responsive ${Date.now()}`
   await prepareAuthor(page, projectName)

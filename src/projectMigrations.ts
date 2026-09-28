@@ -1,11 +1,17 @@
 import {
   createEmptyReviewModel, remapReviewModelForDuplicate, REVIEW_MODEL_VERSION,
 } from './reviewModel'
-import { hydrateAuthorTopicMetadata, type AuthorMetadataTopic } from './authorMetadata'
+import {
+  hydrateAuthorTopicMetadata, stableAuthorTopicId, type AuthorMetadataTopic,
+} from './authorMetadata'
+import {
+  hydrateContentExplorerMetadata,
+  type ContentExplorerAssets,
+} from './contentExplorerModel'
 import type { ProjectRecord } from './projectRepository'
 import { LOCAL_USER_ID, LOCAL_WORKSPACE_ID } from './ownership'
 
-export const CURRENT_PROJECT_SCHEMA_VERSION = 4
+export const CURRENT_PROJECT_SCHEMA_VERSION = 5
 
 export class UnsupportedProjectSchemaError extends Error {
   constructor(readonly version: number) {
@@ -35,6 +41,63 @@ function v1Defaults(projectId: string): Record<string, unknown> {
   }
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function assetReferences(
+  values: unknown,
+  idField: 'id',
+  nameField: 'name' | 'group',
+): Array<{ id: string; name: string }> {
+  if (!Array.isArray(values)) return []
+  return values.flatMap(value => {
+    if (!isObject(value) || typeof value[idField] !== 'string' ||
+        typeof value[nameField] !== 'string') return []
+    const id = (value[idField] as string).trim()
+    const name = (value[nameField] as string).trim()
+    return id && name ? [{ id, name }] : []
+  })
+}
+
+/** Project payloads are reduced to stable IDs and display names for the tree. */
+export function contentExplorerAssetsForProject(record: unknown): ContentExplorerAssets {
+  const source = isObject(record) ? record : {}
+  const topics = Array.isArray(source.appToc)
+    ? source.appToc.flatMap(value => {
+      if (!isObject(value) || typeof value.id !== 'number' || !Number.isSafeInteger(value.id) ||
+          typeof value.title !== 'string' || !value.title.trim()) return []
+      const topic = {
+        id: value.id,
+        ...(typeof value.topicId === 'string' ? { topicId: value.topicId } : {}),
+      }
+      return [{ id: stableAuthorTopicId(topic), name: value.title.trim() }]
+    })
+    : []
+  const snippets = assetReferences(source.snippets, 'id', 'name')
+  const conditionGroups = assetReferences(source.conditionGroups, 'id', 'group')
+
+  const variablesById = new Map<string, { id: string; name: string }>()
+  const themeVariables = isObject(source.themeVariables) ? source.themeVariables : {}
+  const projectMeta = isObject(source.projectMeta) ? source.projectMeta : {}
+  const activeThemeId = typeof projectMeta.themeId === 'string' ? projectMeta.themeId : ''
+  const activeVariables = activeThemeId && Array.isArray(themeVariables[activeThemeId])
+    ? themeVariables[activeThemeId]
+    : Object.values(themeVariables).flatMap(value => Array.isArray(value) ? value : [])
+  for (const reference of assetReferences(activeVariables, 'id', 'name')) {
+    if (!variablesById.has(reference.id)) variablesById.set(reference.id, reference)
+  }
+
+  return {
+    topics,
+    snippets,
+    variables: [...variablesById.values()],
+    conditions: conditionGroups,
+    references: [],
+    media: [],
+  }
+}
+
 export function migrateProjectRecord(raw: unknown): {
   record: ProjectRecord
   fromVersion: number
@@ -53,6 +116,7 @@ export function migrateProjectRecord(raw: unknown): {
     throw new UnsupportedProjectSchemaError(fromVersion as number)
 
   let record = input
+  let contentExplorerChanged = false
   if (fromVersion === 1) {
     const defaults = v1Defaults(input.projectId)
     record = { ...defaults, ...record, schemaVersion: 2 }
@@ -79,13 +143,23 @@ export function migrateProjectRecord(raw: unknown): {
       schemaVersion: 4,
     }
   }
+  if (record.schemaVersion === 4 || record.schemaVersion === 5) {
+    const assets = contentExplorerAssetsForProject(record)
+    const contentExplorer = hydrateContentExplorerMetadata(record.contentExplorer, assets)
+    contentExplorerChanged = JSON.stringify(record.contentExplorer) !== JSON.stringify(contentExplorer)
+    record = {
+      ...record,
+      contentExplorer,
+      schemaVersion: 5,
+    }
+  }
   if (typeof record.ownerUserId !== 'string' || !record.ownerUserId.trim() ||
     typeof record.workspaceId !== 'string' || !record.workspaceId.trim())
     throw new Error('Project record has invalid ownership.')
   if (!Number.isSafeInteger(record.recordRevision) || (record.recordRevision as number) < 0)
     throw new Error('Invalid project record revision.')
   return { record: record as unknown as ProjectRecord, fromVersion: fromVersion as number,
-    changed: fromVersion !== CURRENT_PROJECT_SCHEMA_VERSION }
+    changed: fromVersion !== CURRENT_PROJECT_SCHEMA_VERSION || contentExplorerChanged }
 }
 
 /** Check untrusted backup content before it can enter the live repository. */
@@ -96,6 +170,14 @@ export function validateRestorableProjectRecord(record: ProjectRecord): void {
   }
   const isObject = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
+  try {
+    hydrateContentExplorerMetadata(
+      fields.contentExplorer,
+      contentExplorerAssetsForProject(record),
+    )
+  } catch {
+    fail('contentExplorer')
+  }
   const arrays = ['sourceFileIds', 'appToc', 'docBlocks', 'snippets', 'docComments']
   for (const field of arrays) if (!Array.isArray(fields[field])) fail(field)
   // Legacy missing presentation/condition fields are intentional: App supplies

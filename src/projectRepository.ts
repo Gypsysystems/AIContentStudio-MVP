@@ -30,7 +30,9 @@ import {
 } from './reviewModel'
 import {
   CURRENT_PROJECT_SCHEMA_VERSION, migrateProjectRecord, validateRestorableProjectRecord,
+  contentExplorerAssetsForProject,
 } from './projectMigrations'
+import { hydrateContentExplorerMetadata, type ContentExplorerMetadata } from './contentExplorerModel'
 import { getAccessContext } from './authSession'
 import {
   authorizeProject, authorizeWorkspace, LOCAL_WORKSPACE_ID,
@@ -142,6 +144,7 @@ export type ProjectRecord = ProjectOwnership & {
   conditionGroups: unknown[]
   docComments: unknown[]
   publishConfig: unknown
+  contentExplorer: ContentExplorerMetadata
 }
 
 export type ProjectSummary = ProjectOwnership & {
@@ -358,6 +361,10 @@ export function createProjectRecord(
     docComments: [],
     publishConfig: { selectedFormats: [], activeVariant: '' },
     ...partial,
+    contentExplorer: hydrateContentExplorerMetadata(
+      partial.contentExplorer,
+      contentExplorerAssetsForProject(partial),
+    ),
     ownerUserId: context.user.id,
     workspaceId: context.workspace.id,
     schemaVersion: SCHEMA_VERSION,

@@ -17,7 +17,13 @@ import {
 } from './authorizedProjectService'
 import { indexedDbProjectRepository } from './projectService'
 import { importLocalProjectToCloud } from './cloudProjectRepository'
-import { validateRestorableProjectRecord } from './projectMigrations'
+import { contentExplorerAssetsForProject, validateRestorableProjectRecord } from './projectMigrations'
+import {
+  hydrateContentExplorerMetadata,
+  type ContentExplorerAssets,
+  type ContentExplorerMetadata,
+} from './contentExplorerModel'
+import { ContentExplorerPanel } from './ContentExplorerPanel'
 import { LOCAL_ACCESS_CONTEXT } from './ownership'
 import { getAccessContext } from './authSession'
 import type { ProjectOwnership } from './ownership'
@@ -9520,7 +9526,7 @@ function OutlineTocPanel({
   metadata?: AuthorTopicMetadataMap
   onSelectSection: (id: number) => void
   onOpenTopic: (id: number, title: string) => void
-  width: number
+  width: number | string
   onCollapse: () => void
 }) {
   const [tocSelected, setTocSelected] = useState<number | null>(null)
@@ -9950,7 +9956,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, contentExplorer, contentExplorerAssets, onContentExplorerChange, explorerReadOnly, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; contentExplorer: ContentExplorerMetadata; contentExplorerAssets: ContentExplorerAssets; onContentExplorerChange: (metadata: ContentExplorerMetadata) => void; explorerReadOnly: boolean; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
@@ -9972,6 +9978,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   const [tocWidth, setTocWidth] = useState(260)
   const [activeSection, setActiveSection] = useState(1)
   const [activeTopicId, setActiveTopicId] = useState<number | null>(null)
+  const loadedTopicBlocksRef = useRef<DocBlock[] | null>(null)
   useEffect(() => {
     const update = () => setCompactLayout(window.innerWidth < 1280)
     window.addEventListener('resize', update)
@@ -9985,18 +9992,21 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     if (activeTopicId !== null && onTopicContentChange) {
       const currentTopic = (toc ?? []).find(topic => topic.id === activeTopicId)
       const currentKey = currentTopic ? stableAuthorTopicId(currentTopic) : String(activeTopicId)
-      onTopicContentChange({ ...(topicContent ?? {}), [currentKey]: docBlocks })
+      const stored = (topicContent ?? {})[currentKey] ?? (topicContent ?? {})[String(activeTopicId)]
+      if (loadedTopicBlocksRef.current
+        && JSON.stringify(loadedTopicBlocksRef.current) !== JSON.stringify(docBlocks)
+        && JSON.stringify(stored) !== JSON.stringify(docBlocks)) {
+        onTopicContentChange({ ...(topicContent ?? {}), [currentKey]: docBlocks })
+      }
     }
     // Load or create blocks for the new topic — flag as hydration so sync effect is skipped for this load
     isHydratingTopicRef.current = true
     const nextTopic = (toc ?? []).find(topic => topic.id === topicId)
     const nextKey = nextTopic ? stableAuthorTopicId(nextTopic) : String(topicId)
     const existing = (topicContent ?? {})[nextKey] ?? (topicContent ?? {})[String(topicId)]
-    if (existing) {
-      setDocBlocks(existing)
-    } else {
-      setDocBlocks([{ id: `${topicId}-h1`, type: 'h1', content: topicTitle }])
-    }
+    const nextBlocks = existing ?? [{ id: `${topicId}-h1`, type: 'h1' as const, content: topicTitle }]
+    loadedTopicBlocksRef.current = nextBlocks
+    setDocBlocks(nextBlocks)
     // Clear hydration flag after React flushes the setState
     setTimeout(() => { isHydratingTopicRef.current = false }, 0)
     setActiveTopicId(topicId)
@@ -10008,6 +10018,10 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     setTopicMode(existing?.length && authorTopicMetadata?.[nextKey]?.contentOrigin === 'generated'
       ? 'write'
       : 'choose')
+  }
+  const openExplorerTopic = (stableId: string) => {
+    const topic = (toc ?? []).find(item => stableAuthorTopicId(item) === stableId)
+    if (topic) openTopic(topic.id, topic.title)
   }
   useEffect(() => {
     if (!requestedTopicId || realReviewTarget || isDemoMode) return
@@ -11280,21 +11294,32 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
 
   return (
     <div data-testid="author-workspace" className="author-workspace flex-1 flex overflow-hidden">
-      {/* Editable outline / TOC panel */}
+      {/* Project organization and document outline share the resizable left rail. */}
       {outlineOpen && (!compactLayout || outlineDrawerOpen) && (
         <>
           {compactLayout && <button type="button" aria-label="Close outline drawer" className="author-drawer-scrim" onClick={() => closeOutlineDrawer()} />}
-          <OutlineTocPanel
-            toc={studioToc}
-            setToc={setStudioToc}
-            activeSection={activeSection}
-            activeTopicId={activeTopicId}
-            metadata={authorTopicMetadata}
-            onSelectSection={setActiveSection}
-            onOpenTopic={openTopic}
-            width={tocWidth}
-            onCollapse={() => closeOutlineDrawer(true)}
-          />
+          <div className="author-outline-shell flex-shrink-0 flex flex-col min-h-0 overflow-hidden" style={{ width: tocWidth }}>
+            <ContentExplorerPanel
+              metadata={contentExplorer}
+              assets={contentExplorerAssets}
+              selectedTopicId={activeTopicId === null ? null : stableAuthorTopicId(studioToc.find(item => item.id === activeTopicId) ?? { id: activeTopicId })}
+              onOpenTopic={openExplorerTopic}
+              onChange={onContentExplorerChange}
+              readOnly={explorerReadOnly}
+              onCollapse={collapsed => { if (collapsed) closeOutlineDrawer(true) }}
+            />
+            <OutlineTocPanel
+              toc={studioToc}
+              setToc={setStudioToc}
+              activeSection={activeSection}
+              activeTopicId={activeTopicId}
+              metadata={authorTopicMetadata}
+              onSelectSection={setActiveSection}
+              onOpenTopic={openTopic}
+              width="100%"
+              onCollapse={() => closeOutlineDrawer(true)}
+            />
+          </div>
           {/* Draggable separator */}
           {!compactLayout && <div
             ref={separatorRef}
@@ -15962,6 +15987,9 @@ const DEFAULT_THEME_VARIABLES: Record<string, Variable[]> = {
     { id: 'v5', name: 'SupportEmail', value: '', description: 'Support contact email' },
   ],
 }
+const EMPTY_EXPLORER_ASSETS: ContentExplorerAssets = {
+  topics: [], snippets: [], variables: [], conditions: [],
+}
 
 // ── App Root ──────────────────────────────────────────────────────────────────
 export default function App() {
@@ -16173,6 +16201,10 @@ export default function App() {
   const [tocHumanModified, setTocHumanModified] = useState(false)
   const [authorTopicMetadata, setAuthorTopicMetadata] = useState<AuthorTopicMetadataMap>({})
   const authorTopicMetadataRef = useRef<AuthorTopicMetadataMap>({})
+  const [contentExplorer, setContentExplorer] = useState<ContentExplorerMetadata>(
+    () => hydrateContentExplorerMetadata(null, EMPTY_EXPLORER_ASSETS),
+  )
+  const contentExplorerRef = useRef(contentExplorer)
 
   // ── Master page topic assignments ──────────────────────────────────────────
   const [masterAssignments, setMasterAssignments] = useState<Record<number, string>>({}) // topicId → masterPageId
@@ -16459,6 +16491,26 @@ export default function App() {
   ]
   const [snippets, setSnippets] = useState<Snippet[]>([])
   const [conditionGroups, setConditionGroups] = useState<ConditionGroup[]>(DEFAULT_CONDITION_GROUPS)
+  const contentExplorerAssets = useMemo(
+    () => contentExplorerAssetsForProject({
+      appToc, snippets, conditionGroups, themeVariables, projectMeta,
+    }),
+    [appToc, snippets, conditionGroups, themeVariables, projectMeta],
+  )
+  const resolvedContentExplorer = useMemo(
+    () => hydrateContentExplorerMetadata(contentExplorer, contentExplorerAssets),
+    [contentExplorer, contentExplorerAssets],
+  )
+  contentExplorerRef.current = resolvedContentExplorer
+  const handleContentExplorerChange = (metadata: ContentExplorerMetadata) => {
+    if (isCloudProjectMode()
+      && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true) return
+    const next = hydrateContentExplorerMetadata(metadata, contentExplorerAssets)
+    if (JSON.stringify(next) === JSON.stringify(contentExplorerRef.current)) return
+    contentExplorerRef.current = next
+    setContentExplorer(next)
+    triggerAutosave()
+  }
   const [docComments, setDocComments] = useState<DocComment[]>([])
   const [publishConfig, setPublishConfig] = useState<PublishConfig>({ selectedFormats: [], activeVariant: '' })
   const [navError, setNavError] = useState<string | null>(null)
@@ -16514,6 +16566,7 @@ export default function App() {
       docBlocks: sharedDocBlocksRef.current as unknown[],
       topicContent: topicContentRef.current as Record<string, unknown[]>,
       authorTopicMetadata: authorTopicMetadataRef.current,
+      contentExplorer: hydrateContentExplorerMetadata(contentExplorerRef.current, contentExplorerAssets),
       contentRevision,
       reviewModel,
       findingStatuses: findingStatuses as Record<number, string>,
@@ -16525,7 +16578,7 @@ export default function App() {
       docComments: docComments as unknown[],
       publishConfig: publishConfig as unknown,
     }
-  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, unsupportedAnalysis, appToc, tocProposal, tocRevision, tocGeneratedFromRev, tocGeneratedFromEvidenceSourcesRevision, tocGeneratedFromEvidenceExtractionRevision, tocGeneratedFromConceptBuiltAt, tocGeneratedFromContentType, tocHumanModified, masterAssignments, contentRevision, reviewModel, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, docComments, publishConfig])
+  }, [projectId, projectName, projectMeta, isDemoMode, themes, activeStyleProfileId, themeVariables, pageLayouts, htmlMasterPages, sources, sourcesRevision, sourceExtractions, evidenceIndex, analysisResult, analysisRevision, conceptAnalysis, unsupportedAnalysis, appToc, tocProposal, tocRevision, tocGeneratedFromRev, tocGeneratedFromEvidenceSourcesRevision, tocGeneratedFromEvidenceExtractionRevision, tocGeneratedFromConceptBuiltAt, tocGeneratedFromContentType, tocHumanModified, masterAssignments, contentRevision, reviewModel, findingStatuses, aiReviewDone, reviewStage, reviewRevision, snippets, conditionGroups, contentExplorerAssets, docComments, publishConfig])
 
   // Keep latestBuildRef current on every render so autosave never sees stale state
   latestBuildRef.current = buildProjectRecord
@@ -18074,6 +18127,12 @@ export default function App() {
     setUnsupportedAnalysis((record.unsupportedAnalysis as UnsupportedAnalysis | null) ?? null)
     const restoredToc = normalizeTopicIds((record.appToc as TocItem[]) ?? [])
     setAppToc(restoredToc)
+    const restoredExplorer = hydrateContentExplorerMetadata(
+      record.contentExplorer,
+      contentExplorerAssetsForProject(record),
+    )
+    contentExplorerRef.current = restoredExplorer
+    setContentExplorer(restoredExplorer)
     const restoredProposal = (record.tocProposal as TocProposal | null) ?? null
     setTocProposal(restoredProposal
       ? { ...restoredProposal, items: normalizeTopicIds(restoredProposal.items) as ProposedTopic[] }
@@ -18188,6 +18247,9 @@ export default function App() {
     setConceptAnalysis(null)
     setUnsupportedAnalysis(null)
     setAppToc([])
+    const emptyExplorer = hydrateContentExplorerMetadata(null, EMPTY_EXPLORER_ASSETS)
+    contentExplorerRef.current = emptyExplorer
+    setContentExplorer(emptyExplorer)
     setTocProposal(null)
     setAiTocRecovery(null)
     setTocRevision(0)
@@ -18410,7 +18472,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} canGenerateAi={canGenerateAiToc} recovery={activeAiTocRecovery} onDismissRecovery={handleDiscardAiTocRecovery} onRecoverRecovery={handleRecoverAiTocProposal} onGenerate={handleGenerateTocProposal} onGenerateAi={handleGenerateAiTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
+       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} contentExplorer={resolvedContentExplorer} contentExplorerAssets={contentExplorerAssets} onContentExplorerChange={handleContentExplorerChange} explorerReadOnly={isCloudProjectMode() && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {

@@ -242,6 +242,25 @@ body {
   background: #fbfcfa;
 }
 
+.author-outline-shell {
+  border-right: 1px solid #e1e6df;
+  background: #fbfcfa;
+}
+
+.author-outline-shell > .content-explorer {
+  flex: 3 1 0;
+  width: 100%;
+  min-height: 180px;
+}
+
+.author-outline-shell > .author-outline-panel {
+  flex: 2 1 0;
+  width: 100%;
+  min-height: 160px;
+  border-right: 0;
+  border-top: 1px solid #e1e6df;
+}
+
 .author-context-pane {
   width: 320px;
   flex: 0 0 320px;
@@ -320,12 +339,20 @@ body {
 }
 
 @media (max-width: 1279px) {
-  .author-outline-panel {
+  .author-outline-shell {
     position: fixed;
     z-index: 60;
     inset: 0 auto 0 0;
     width: min(86vw, 360px) !important;
     box-shadow: 18px 0 48px rgb(34 45 35 / 14%);
+  }
+
+  .author-outline-shell > .author-outline-panel {
+    position: relative;
+    z-index: auto;
+    inset: auto;
+    width: 100% !important;
+    box-shadow: none;
   }
 }
 
