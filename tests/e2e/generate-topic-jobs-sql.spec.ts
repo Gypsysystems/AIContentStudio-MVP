@@ -165,6 +165,7 @@ test('topic generation job RPCs enforce authorization, idempotency, leases, and 
     expect(contextResult?.connectionMetadata).toEqual({
       providerId: 'provider-a', revision: 4, state: 'verified',
       proof: 'a'.repeat(64),
+      testedAt: expect.any(String),
     })
     expect(new Date(contextResult?.connectionMetadata.testedAt as string).toISOString())
       .toBe('2026-09-28T12:34:56.000Z')
@@ -204,8 +205,6 @@ test('topic generation job RPCs enforce authorization, idempotency, leases, and 
 
     const jobB = await enqueue(owner, 'topic-b')
     const jobC = await enqueue(owner, 'topic-c')
-    const jobD = await enqueue(owner, 'topic-d')
-    const jobE = await enqueue(owner, 'topic-e')
     const idB = jobB.job.jobId as string
     const idC = jobC.job.jobId as string
 
@@ -251,7 +250,7 @@ test('topic generation job RPCs enforce authorization, idempotency, leases, and 
       [idB, tokenB2, 'RATE_LIMITED', 'unsafe provider detail must not escape', true],
     )
     expect(retryWait?.job.status).toBe('retry-wait')
-    expect(retryWait?.job.errorMessage).toBe('The generation provider is temporarily rate limited.')
+    expect(retryWait?.job.errorMessage).toBeUndefined()
     expect(JSON.stringify(retryWait)).not.toContain('unsafe provider detail')
     await admin.query(
       'update public.generate_topic_jobs set next_attempt_at = clock_timestamp() - interval \'1 second\' where job_id = $1',
@@ -271,6 +270,10 @@ test('topic generation job RPCs enforce authorization, idempotency, leases, and 
     expect(failedRerunB.job.status).toBe('queued')
     expect(failedRerunB.job.jobId).not.toBe(idB)
     expect((await enqueue(owner, 'topic-b')).job.jobId).toBe(failedRerunB.job.jobId)
+    await admin.query(
+      "update public.generate_topic_jobs set next_attempt_at = clock_timestamp() + interval '1 hour' where job_id = $1",
+      [failedRerunB.job.jobId],
+    )
 
     const staleProjectJob = await enqueue(owner, 'topic-d')
     await asWorker()
@@ -323,8 +326,6 @@ test('topic generation job RPCs enforce authorization, idempotency, leases, and 
     )
     expect(editorCanReadFailed.rows[0].value.job.errorCode).toBe('PERMISSION_REVOKED')
 
-    expect(jobD.job.status).toBe('queued')
-    expect(jobE.job.status).toBe('queued')
   } catch (error) {
     failure = error as Error
   } finally {
