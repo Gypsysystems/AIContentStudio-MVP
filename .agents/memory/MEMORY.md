@@ -35,3 +35,4 @@
 - [Cross-project copy conflict boundary](cross-project-copy-conflict-boundary.md) — copy is server-authoritative; post-copy local edits must survive instead of being overwritten by hydration.
 - [AI connection integrity](ai-connection-integrity.md) — bind requests to a workspace; canonicalize signed timestamps and reject reader URL TLS overrides.
 - [Playwright navigation timeouts](playwright-navigation-timeouts.md) — full UI suites can time out during dev-server page loads before assertions; distinguish this from feature failures.
+- [GitHub connector sync](github-connector-sync.md) — an added GitHub connection can write through its proxy even when the HTTPS git remote rejects push authentication.
