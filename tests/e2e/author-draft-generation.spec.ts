@@ -432,6 +432,78 @@ test("regeneration protects approved and manually edited blocks while selecting 
   ]))
 })
 
+test("AI procedure proposals preserve ordered steps through diffs and protect authored content", () => {
+  const current = {
+    id: "applied-procedure",
+    type: "procedure",
+    content: "Review privileged access",
+    procedureSteps: ["Open the current access register.", "Record the review outcome."],
+  }
+  const proposal = {
+    ...buildDeterministicAuthorDraft(grounding(), 1_710_000_000_000),
+    draftId: "ai-topic-draft-procedure",
+    method: "ai-grounded-topic-v1" as const,
+    modelLabel: "AI-generated · openai / test-model",
+    aiProvenance: {
+      providerId: "openai",
+      modelId: "test-model",
+      workflow: { id: "workflow-topic", version: 1 },
+      promptPack: { id: "prompt-topic", version: 1 },
+      referenceSet: { id: "reference-topic", version: 1 },
+      blueprint: { id: "blueprint-topic", version: 1 },
+    },
+    blocks: [{
+      id: "procedure-review",
+      type: "procedure" as const,
+      content: "Review privileged access",
+      procedureSteps: ["Open the access register.", "Record the current review outcome."],
+      evidenceIds: ["evidence-required"],
+    }],
+  }
+  const baseline: AuthorAppliedBaseline = {
+    draftId: "applied-draft",
+    groundingContextId: "grounding-current",
+    contentFingerprint: "baseline",
+    blocks: [{
+      sourceBlockId: "procedure-review",
+      appliedBlockId: current.id,
+      block: {
+        id: "procedure-review",
+        type: "procedure",
+        content: current.content,
+        procedureSteps: [...current.procedureSteps],
+        evidenceIds: ["evidence-required"],
+      },
+    }],
+  }
+  const result = buildAuthorRegenerationProposal(
+    proposal,
+    [current, { id: "manual-block", type: "para", content: "Keep this writer-authored block." }],
+    baseline,
+    true,
+    { "applied-procedure": "approved" },
+  )
+
+  expect(result.diffs).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      sourceBlockId: "procedure-review",
+      status: "protected",
+      selected: false,
+      proposedBlock: expect.objectContaining({
+        procedureSteps: ["Open the access register.", "Record the current review outcome."],
+      }),
+      baselineBlock: expect.objectContaining({
+        procedureSteps: ["Open the current access register.", "Record the review outcome."],
+      }),
+    }),
+    expect.objectContaining({
+      currentBlock: expect.objectContaining({ id: "manual-block" }),
+      status: "manually-edited",
+      selected: false,
+    }),
+  ]))
+})
+
 test("persists a reviewable draft without overwriting manual content and applies only after confirmation", async ({ page }) => {
   test.setTimeout(90_000)
   const projectName = `Grounded draft ${Date.now()}`

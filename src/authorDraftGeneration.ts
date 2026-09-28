@@ -5,9 +5,10 @@ import type {
 
 export type AuthorDraftBlock = {
   id: string
-  type: 'h1' | 'h2' | 'h3' | 'para' | 'callout'
+  type: 'h1' | 'h2' | 'h3' | 'para' | 'procedure' | 'callout'
   content: string
   calloutVariant?: 'note' | 'warning'
+  procedureSteps?: string[]
   evidenceIds: string[]
 }
 
@@ -22,8 +23,16 @@ export type AuthorTopicDraft = {
   version: 1
   draftId: string
   topicId: string
-  method: 'deterministic-evidence-draft-v1'
-  modelLabel: 'No external model — deterministic evidence builder'
+  method: 'deterministic-evidence-draft-v1' | 'ai-grounded-topic-v1'
+  modelLabel: string
+  aiProvenance?: {
+    providerId: string
+    modelId: string
+    workflow: { id: string; version: number }
+    promptPack: { id: string; version: number } | null
+    referenceSet: { id: string; version: number } | null
+    blueprint: { id: string; version: number } | null
+  }
   generatedAt: number
   groundingContextId: string
   groundingRevision: string
@@ -91,6 +100,7 @@ export type AuthorComparableBlock = {
   type: string
   content: string
   calloutVariant?: string
+  procedureSteps?: string[]
 }
 
 function stableHash(value: string): string {
@@ -118,6 +128,7 @@ function blockFingerprint(block: AuthorComparableBlock): string {
     type: block.type,
     content: block.content,
     calloutVariant: block.calloutVariant ?? '',
+    ...(block.procedureSteps && block.procedureSteps.length ? { procedureSteps: block.procedureSteps } : {}),
   }))
 }
 
@@ -131,6 +142,7 @@ export function authorContentFingerprint(blocks: AuthorComparableBlock[]): strin
     type: block.type,
     content: block.content,
     calloutVariant: block.calloutVariant ?? '',
+    ...(block.procedureSteps && block.procedureSteps.length ? { procedureSteps: block.procedureSteps } : {}),
   }))))
 }
 
@@ -140,6 +152,7 @@ function draftAsComparable(block: AuthorDraftBlock): AuthorComparableBlock {
     type: block.type,
     content: block.content,
     calloutVariant: block.calloutVariant,
+    procedureSteps: block.procedureSteps ? [...block.procedureSteps] : undefined,
   }
 }
 
@@ -149,6 +162,7 @@ function contentAsDraft(block: AuthorComparableBlock): AuthorDraftBlock {
     type: block.type as AuthorDraftBlock['type'],
     content: block.content,
     ...(block.calloutVariant ? { calloutVariant: block.calloutVariant as 'note' | 'warning' } : {}),
+    ...(block.procedureSteps && block.procedureSteps.length ? { procedureSteps: [...block.procedureSteps] } : {}),
     evidenceIds: [],
   }
 }

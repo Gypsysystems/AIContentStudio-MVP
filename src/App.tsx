@@ -718,6 +718,7 @@ type DocBlock = {
   type: DocBlockType
   content: string
   calloutVariant?: CalloutVariant
+  evidenceIds?: string[]
   tableData?: { rows: string[][]; hasHeader: boolean }
   procedureSteps?: string[]
   mediaType?: string
@@ -7479,6 +7480,13 @@ type TocItem = {
   supportingSourceIds?: string[]
 }
 
+function isAuthorMetadataTopic(value: unknown): value is { id: number; topicId?: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const topic = value as Record<string, unknown>
+  return Number.isSafeInteger(topic.id)
+    && (topic.topicId === undefined || typeof topic.topicId === 'string')
+}
+
 type AnalysisResult = {
   revision: number
   concepts: { id: number; label: string; support: string; related: string[] }[]
@@ -7816,6 +7824,218 @@ function AiTocWorkflowControls({
         </div>
       )}
       {error && <p role="alert" data-testid="ai-toc-error" className="mt-3 text-[11px] text-[#B42318]">{error}</p>}
+    </section>
+  )
+}
+
+function AiTopicDraftControls({
+  allowed,
+  projectSupported,
+  hasCurrentTopic,
+  groundingCurrent,
+  hasSubstantiveEvidence,
+  existingProposalId,
+  onGenerate,
+}: {
+  allowed: boolean
+  projectSupported: boolean
+  hasCurrentTopic: boolean
+  groundingCurrent: boolean
+  hasSubstantiveEvidence: boolean
+  existingProposalId: string | null
+  onGenerate: (workflowId: string, workflowVersion: number) => Promise<void>
+}) {
+  const [workflows, setWorkflows] = useState<AiAssetVersion[]>([])
+  const [selectedWorkflowKey, setSelectedWorkflowKey] = useState('')
+  const [readiness, setReadiness] = useState<WorkflowReadiness | null>(null)
+  const [loadingWorkflows, setLoadingWorkflows] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [replacementConfirmationFor, setReplacementConfirmationFor] = useState<string | null>(null)
+  const generationLockRef = useRef(false)
+  const selectedWorkflow = workflows.find(asset => `${asset.id}@${asset.version}` === selectedWorkflowKey)
+  const eligible = allowed && hasCurrentTopic && groundingCurrent && hasSubstantiveEvidence
+  const capabilityMatches = (asset: AiAssetVersion): boolean => {
+    if (asset.kind !== 'workflow' || !('steps' in asset.definition)) return false
+    const normalize = (value: string) => value.trim().toLocaleLowerCase('en-US').replace(/[\s_-]+/gu, '')
+    const definition = asset.definition as WorkflowDefinition
+    return normalize(definition.capability) === 'generatetopic'
+      && definition.steps.length > 0
+      && definition.steps.every(step => normalize(step.capability) === 'generatetopic')
+  }
+
+  useEffect(() => {
+    let active = true
+    if (!allowed) {
+      setWorkflows([])
+      setSelectedWorkflowKey('')
+      setReadiness(null)
+      return () => { active = false }
+    }
+    setLoadingWorkflows(true)
+    setError(null)
+    void listAiAssets().then(async assets => {
+      if (!active) return
+      const workflowHeads = assets.filter(asset => asset.kind === 'workflow')
+      const histories = await Promise.all(workflowHeads.map(asset => historyAiAsset(asset.id)))
+      const available = histories.flat().filter(asset => asset.kind === 'workflow'
+        && asset.state === 'published'
+        && capabilityMatches(asset))
+        .sort((left, right) => left.name.localeCompare(right.name)
+          || left.id.localeCompare(right.id) || right.version - left.version)
+      if (!active) return
+      setWorkflows(available)
+      setSelectedWorkflowKey(current => available.some(asset => `${asset.id}@${asset.version}` === current)
+        ? current
+        : available[0] ? `${available[0].id}@${available[0].version}` : '')
+    }).catch(() => {
+      if (active) setError('Published Generate Topic workflows could not be loaded. Try again later.')
+    }).finally(() => {
+      if (active) setLoadingWorkflows(false)
+    })
+    return () => { active = false }
+  }, [allowed])
+
+  useEffect(() => {
+    let active = true
+    setReadiness(null)
+    if (!allowed || !selectedWorkflow) {
+      setChecking(false)
+      return () => { active = false }
+    }
+    setChecking(true)
+    setError(null)
+    void checkAiWorkflowReadiness(selectedWorkflow.id, selectedWorkflow.version).then(result => {
+      if (active) setReadiness(result)
+    }).catch(() => {
+      if (active) setError('Workflow readiness could not be verified. Check the published workflow and provider connection.')
+    }).finally(() => {
+      if (active) setChecking(false)
+    })
+    return () => { active = false }
+  }, [allowed, selectedWorkflow?.id, selectedWorkflow?.version])
+
+  const generate = async () => {
+    if (!selectedWorkflow || readiness?.status !== 'ready' || !eligible || generating
+      || generationLockRef.current) return
+    if (existingProposalId) {
+      setReplacementConfirmationFor(existingProposalId)
+      return
+    }
+    await runGeneration()
+  }
+
+  const runGeneration = async () => {
+    if (!selectedWorkflow || readiness?.status !== 'ready' || !eligible || generationLockRef.current) return
+    generationLockRef.current = true
+    setGenerating(true)
+    setError(null)
+    try {
+      await onGenerate(selectedWorkflow.id, selectedWorkflow.version)
+    } catch (cause) {
+      setError(cause instanceof Error
+        ? cause.message
+        : 'AI topic generation failed. The draft proposal was not installed.')
+    } finally {
+      generationLockRef.current = false
+      setGenerating(false)
+    }
+  }
+
+  const confirmReplacementAndGenerate = async () => {
+    if (!existingProposalId || replacementConfirmationFor !== existingProposalId
+      || generationLockRef.current) return
+    setReplacementConfirmationFor(null)
+    await runGeneration()
+  }
+
+  if (!hasCurrentTopic) return null
+  return (
+    <section data-testid="ai-topic-controls" className="rounded-lg border border-[#E0E5DE] bg-white p-3">
+      <p className="text-[10px] font-semibold text-[#46564A]">Generate Topic with AI</p>
+      <p className="mt-1 text-[10px] leading-relaxed text-[#7D877D]">
+        Creates an AI-generated draft proposal for review. It does not change authored content until you select and apply changes.
+      </p>
+      {!projectSupported ? (
+        <p role="status" className="mt-2 text-[10px] text-[#9A3412]">AI Generate Topic requires a saved cloud project; demo and local projects are unsupported.</p>
+      ) : !allowed ? (
+        <p role="status" className="mt-2 text-[10px] text-[#9A3412]">Write permission is required to generate and save an AI draft.</p>
+      ) : (
+        <>
+          <label className="mt-3 block text-[10px] font-medium text-[#575766]">
+            Published Generate Topic workflow
+            <select
+              aria-label="Published Generate Topic workflow"
+              data-testid="ai-topic-workflow-select"
+              value={selectedWorkflowKey}
+              disabled={loadingWorkflows || generating || workflows.length === 0}
+              onChange={event => setSelectedWorkflowKey(event.target.value)}
+              className="mt-1 block w-full rounded-lg border border-[#D8D5CF] bg-white px-3 py-2 text-[11px] text-[#22223A]"
+            >
+              {workflows.length === 0
+                ? <option value="">{loadingWorkflows ? 'Loading published workflows…' : 'No published Generate Topic workflows'}</option>
+                : workflows.map(workflow => (
+                  <option key={`${workflow.id}@${workflow.version}`} value={`${workflow.id}@${workflow.version}`}>
+                    {workflow.name} · v{workflow.version}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            data-testid="generate-ai-topic"
+            disabled={!eligible || readiness?.status !== 'ready' || generating}
+            onClick={() => { void generate() }}
+            className="author-context-action mt-2 w-full disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {generating ? 'Generating…' : 'Generate with AI'}
+          </button>
+          {existingProposalId && replacementConfirmationFor === existingProposalId && (
+            <div data-testid="ai-topic-replacement-confirmation" className="mt-2 rounded-md border border-[#F2C98A] bg-[#FFF8E8] p-2">
+              <p className="text-[10px] leading-relaxed text-[#805B18]">
+                A saved draft proposal already exists for this topic. Generating again will replace it only after the new proposal is saved.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  data-testid="confirm-ai-topic-proposal-replacement"
+                  disabled={!eligible || readiness?.status !== 'ready' || generating}
+                  onClick={() => { void confirmReplacementAndGenerate() }}
+                  className="flex-1 rounded-md bg-[#5B5BD6] px-2 py-1.5 text-[10px] font-semibold text-white disabled:opacity-50"
+                >
+                  {generating ? 'Generating…' : 'Replace proposal and generate'}
+                </button>
+                <button
+                  type="button"
+                  data-testid="cancel-ai-topic-proposal-replacement"
+                  disabled={generating}
+                  onClick={() => setReplacementConfirmationFor(null)}
+                  className="rounded-md border border-[#D8D5CF] bg-white px-2 py-1.5 text-[10px] font-medium text-[#555568] disabled:opacity-50"
+                >
+                  Keep current
+                </button>
+              </div>
+            </div>
+          )}
+          {!groundingCurrent && <p role="status" className="mt-2 text-[10px] text-[#9A3412]">Current topic grounding is missing or stale. Refresh grounding before AI generation.</p>}
+          {groundingCurrent && !hasSubstantiveEvidence && <p role="status" className="mt-2 text-[10px] text-[#9A3412]">No substantive evidence is committed to this topic. Add grounded evidence before AI generation.</p>}
+          {loadingWorkflows && <p role="status" className="mt-2 text-[10px] text-[#626277]">Loading published workflows…</p>}
+          {checking && <p role="status" className="mt-2 text-[10px] text-[#626277]">Checking workflow and provider readiness…</p>}
+          {readiness && (
+            <div data-testid="ai-topic-readiness" className={`mt-2 rounded-md px-2 py-1.5 text-[10px] ${readiness.status === 'ready' ? 'bg-[#ECFDF3] text-[#166534]' : 'bg-[#FFF7ED] text-[#9A3412]'}`}>
+              <p className="font-semibold">{readiness.status === 'ready' ? 'Workflow ready' : 'Workflow blocked'}
+                {readiness.model ? ` · ${readiness.model.providerId} / ${readiness.model.modelId}` : ''}
+              </p>
+              {readiness.blockers.map(blocker => <p key={blocker.code} className="mt-1">{blocker.message}</p>)}
+            </div>
+          )}
+          {!loadingWorkflows && workflows.length === 0 && !error && (
+            <p role="status" className="mt-2 text-[10px] text-[#9A3412]">No published Generate Topic workflow is available.</p>
+          )}
+          {error && <p role="alert" data-testid="ai-topic-error" className="mt-2 text-[10px] text-[#B42318]">{error}</p>}
+        </>
+      )}
     </section>
   )
 }
@@ -9730,7 +9950,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
@@ -10425,6 +10645,33 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   const activeGeneratedFreshnessReason = activeAuthorMetadata?.generatedFreshnessReason
     ? freshnessReasonText[activeAuthorMetadata.generatedFreshnessReason]
     : null
+  const hasSubstantiveActiveTopicEvidence = !!activeTopic
+    && (activeTopic.supportingEvidenceIds ?? []).some(id =>
+      evidenceIndex?.items.some(item => item.id === id && item.blockType !== 'heading'))
+
+  const handleGenerateAiTopicDraft = async (workflowId: string, workflowVersion: number) => {
+    if (!activeStableTopicId || !onGenerateAiTopicDraft) {
+      setTopicAiWarning('Select a committed TOC topic before generating an AI draft.')
+      return
+    }
+    setContentSugLoading(true)
+    setTopicAiWarning(null)
+    try {
+      const result = await onGenerateAiTopicDraft(activeStableTopicId, workflowId, workflowVersion)
+      if (!result.draft) {
+        setTopicAiWarning(result.error ?? 'AI topic generation failed. No draft proposal was installed.')
+        return
+      }
+      setDraftOpen(true)
+      setConfirmDraftApply(false)
+    } catch (cause) {
+      setTopicAiWarning(cause instanceof Error
+        ? cause.message
+        : 'AI topic generation failed. No draft proposal was installed.')
+    } finally {
+      setContentSugLoading(false)
+    }
+  }
 
   const openProjectSearchResult = (result: AuthorSearchResult) => {
     const topic = studioToc.find(candidate => stableAuthorTopicId(candidate) === result.topicId)
@@ -10783,7 +11030,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
           <div className="space-y-4">
             <div>
               <p className="text-[11px] font-semibold text-[#344138]">Grounded drafting</p>
-              <p className="mt-1 text-[10px] leading-relaxed text-[#778278]">Drafts are deterministic and grounded in the selected evidence. This is not provider-backed AI. Nothing enters the editor until you review and apply changes.</p>
+              <p className="mt-1 text-[10px] leading-relaxed text-[#778278]">Deterministic evidence drafts and AI-generated proposals are kept separate from authored content. Review and select changes before applying.</p>
             </div>
             <div className="rounded-lg border border-[#E0E5DE] bg-white p-3">
               <p className="text-[10px] font-semibold text-[#46564A]">Grounding status</p>
@@ -10796,7 +11043,17 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               <button type="button" disabled={!activeStableTopicId || !activeGroundingFresh || isDemoMode} onClick={() => { setDraftOpen(true); generateTopicContent(activeTopic?.title ?? 'New topic') }} className="author-context-action mt-3 w-full disabled:cursor-not-allowed disabled:opacity-50">Generate deterministic draft</button>
               <button type="button" disabled={!activeStableTopicId} onClick={() => { setDraftOpen(true); setConfirmDraftApply(false) }} className="mt-2 w-full rounded-lg border border-[#DCE2DA] bg-[#F9FAF8] px-3 py-2 text-[10px] font-medium text-[#566458] hover:bg-[#F0F3EE] disabled:cursor-not-allowed disabled:opacity-50">{activeDraft ? 'Review draft and apply changes' : 'Open draft review'}</button>
             </div>
-            {topicAiWarning && <p role="status" className="rounded-lg border border-[#E7DCC7] bg-[#FBF7EC] p-3 text-[10px] leading-relaxed text-[#765F37]">{topicAiWarning}</p>}
+            <AiTopicDraftControls
+              allowed={!!projectId && !isDemoMode && !!canGenerateAiTopic}
+              projectSupported={!!projectId && !isDemoMode && isCloudProjectMode()}
+              hasCurrentTopic={!!activeStableTopicId && !!activeTopic}
+              groundingCurrent={activeGroundingFresh}
+              hasSubstantiveEvidence={hasSubstantiveActiveTopicEvidence}
+              existingProposalId={activeRegenerationProposal?.proposalId ?? null}
+              onGenerate={(workflowId, workflowVersion) =>
+                handleGenerateAiTopicDraft(workflowId, workflowVersion)}
+            />
+            {topicAiWarning && <p role="status" data-testid="topic-ai-warning" className="rounded-lg border border-[#E7DCC7] bg-[#FBF7EC] p-3 text-[10px] leading-relaxed text-[#765F37]">{topicAiWarning}</p>}
           </div>
         )}
       </div>
@@ -12851,7 +13108,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
           <div className="px-4 py-3 border-b border-[#E2DED7] flex items-start gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-[13px] font-semibold text-[#111218]">Review grounded draft</h2>
+                <h2 className="text-[13px] font-semibold text-[#111218]">
+                  {activeDraft?.method === 'ai-grounded-topic-v1' ? 'Review AI-generated draft proposal' : 'Review grounded draft'}
+                </h2>
                 {activeDraft && (
                   <span data-testid="author-draft-freshness" className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded ${activeDraftFresh ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEF3C7] text-[#B45309]'}`}>
                     {activeDraftFresh ? 'Current' : 'Stale'}
@@ -12890,10 +13149,24 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               <div className="space-y-5">
                 <section data-testid="author-draft-method" className="bg-[#F9F8F6] border border-[#E2DED7] rounded-lg p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Generation method</p>
+                  {activeDraft.method === 'ai-grounded-topic-v1' && (
+                    <p data-testid="ai-topic-not-applied" className="mt-1 text-[10px] font-semibold text-[#9A3412]">
+                      AI-generated draft proposal · not applied to authored content
+                    </p>
+                  )}
                   <p className="text-[11px] font-semibold text-[#3D3D4E] mt-1">{activeDraft.modelLabel}</p>
                   <p className="text-[9px] text-[#9898AB] mt-1">{activeDraft.method} · {new Date(activeDraft.generatedAt).toLocaleString()}</p>
                   <p className="text-[9px] text-[#9898AB] mt-1">Content type: {activeDraft.contentType} · Language: {activeDraft.language || 'Project language'}</p>
                   <p className="text-[9px] text-[#9898AB]">Style: {activeDraft.styleProvenance.styleProfileName}</p>
+                  {activeDraft.aiProvenance && (
+                    <div data-testid="ai-topic-provenance" className="mt-2 space-y-0.5 text-[9px] text-[#6B6B7E]">
+                      <p>{activeDraft.aiProvenance.providerId} / {activeDraft.aiProvenance.modelId}</p>
+                      <p>Workflow {activeDraft.aiProvenance.workflow.id} v{activeDraft.aiProvenance.workflow.version}</p>
+                      {activeDraft.aiProvenance.promptPack && <p>Prompt pack {activeDraft.aiProvenance.promptPack.id} v{activeDraft.aiProvenance.promptPack.version}</p>}
+                      {activeDraft.aiProvenance.referenceSet && <p>Reference set {activeDraft.aiProvenance.referenceSet.id} v{activeDraft.aiProvenance.referenceSet.version}</p>}
+                      {activeDraft.aiProvenance.blueprint && <p>Blueprint {activeDraft.aiProvenance.blueprint.id} v{activeDraft.aiProvenance.blueprint.version}</p>}
+                    </div>
+                  )}
                 </section>
 
                 {activeRegenerationProposal && (
@@ -12998,6 +13271,14 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                       if (block.type === 'h2' || block.type === 'h3') return <h4 key={block.id} className="text-[12px] font-semibold text-[#3D3D4E]">{block.content}</h4>
                       if (block.type === 'callout') return (
                         <div key={block.id} className={`border-l-2 rounded-r p-2.5 text-[10px] leading-relaxed ${block.calloutVariant === 'warning' ? 'border-[#D97706] bg-[#FFF7ED] text-[#92400E]' : 'border-[#5B5BD6] bg-[#FAFAFF] text-[#4C4C8A]'}`}>{block.content}</div>
+                      )
+                      if (block.type === 'procedure') return (
+                        <div key={block.id} className="text-[11px] text-[#3D3D4E] leading-relaxed">
+                          {block.content && <p className="mb-1">{block.content}</p>}
+                          <ol className="list-decimal space-y-1 pl-5">
+                            {(block.procedureSteps ?? []).map((step, index) => <li key={`${block.id}-${index}`}>{step}</li>)}
+                          </ol>
+                        </div>
                       )
                       return <p key={block.id} className="text-[11px] text-[#3D3D4E] leading-relaxed">{block.content}</p>
                     })}
@@ -16315,6 +16596,10 @@ export default function App() {
     && isCloudProjectMode()
     && !isDemoMode
     && ['owner', 'admin'].includes(getAccessContext()?.membership?.role ?? '')
+  const canGenerateAiTopic = !!projectId
+    && isCloudProjectMode()
+    && !isDemoMode
+    && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true
   const activeAiTocRecovery = (() => {
     const access = getAccessContext()
     return aiTocRecovery
@@ -16577,6 +16862,345 @@ export default function App() {
     ]
   }))
 
+  const handleGenerateAiTopicDraft = useCallback(async (
+    topicId: string,
+    workflowId: string,
+    workflowVersion: number,
+  ): Promise<{ draft: AuthorTopicDraft | null; error: string | null }> => {
+    const targetProjectId = projectIdRef.current
+    if (!targetProjectId || !isCloudProjectMode() || isDemoMode)
+      throw new Error('AI Generate Topic is available only for a cloud project.')
+    if (getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true)
+      throw new Error('Write permission is required to generate and save an AI topic draft.')
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/u.test(workflowId)
+      || !Number.isSafeInteger(workflowVersion) || workflowVersion < 1)
+      throw new Error('Select a published Generate Topic workflow.')
+
+    const topic = appToc.find(candidate => stableAuthorTopicId(candidate) === topicId)
+    if (!topic) throw new Error('The selected TOC topic no longer exists.')
+    const beforeMetadata = authorTopicMetadataRef.current[topicId]
+    const beforeContext = beforeMetadata?.groundingContext
+    if (!beforeContext || !isTopicGroundingContextFresh(beforeContext, buildGroundingInput(topic)))
+      throw new Error('Topic grounding is missing or stale. Refresh grounding before AI generation.')
+    const committedEvidenceIds = new Set(topic.supportingEvidenceIds ?? [])
+    const substantiveEvidenceIds = new Set((evidenceIndex?.items ?? [])
+      .filter(item => item.blockType !== 'heading' && committedEvidenceIds.has(item.id))
+      .map(item => item.id))
+    if (substantiveEvidenceIds.size === 0)
+      throw new Error('No substantive evidence is committed to this topic.')
+
+    if (!await persistCurrentProject())
+      throw new Error('Your latest project changes could not be saved. Retry saving before generating.')
+    await saveQueueRef.current
+    const beforeRecord = await projectRepository.loadProject(targetProjectId)
+    if (!beforeRecord || projectIdRef.current !== targetProjectId
+      || beforeRecord.recordRevision !== projectRevisionRef.current)
+      throw new Error('PROJECT_CONFLICT: The project changed. Reload it before generating an AI draft.')
+
+    const savedTopic = (beforeRecord.appToc ?? []).find((candidate): candidate is { id: number; topicId?: string } =>
+      isAuthorMetadataTopic(candidate) && stableAuthorTopicId(candidate) === topicId)
+    if (!savedTopic || JSON.stringify(savedTopic) !== JSON.stringify(topic))
+      throw new Error('PROJECT_CONFLICT: The committed topic changed. Reload it before generating.')
+    const startingRevision = beforeRecord.recordRevision
+    const startingSaveVersion = saveVersionRef.current
+    const startingBlocks = topicContentRef.current[topicId]
+      ?? topicContentRef.current[String(topic.id)]
+      ?? []
+    const startingContentFingerprint = authorContentFingerprint(startingBlocks)
+    const startingContextId = beforeContext.contextId
+    const startingGroundingFingerprint = JSON.stringify(beforeContext.provenance)
+    const beforeRecordGrounding = JSON.stringify({
+      sourcesRevision: beforeRecord.sourcesRevision,
+      evidenceIndex: beforeRecord.evidenceIndex,
+      conceptAnalysis: beforeRecord.conceptAnalysis,
+      tocRevision: beforeRecord.tocRevision,
+    })
+
+    let response: Response
+    try {
+      response = await fetch('/api/generate-topic', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: targetProjectId, topicId, workflowId, workflowVersion }),
+      })
+    } catch {
+      throw new Error('The AI Generate Topic service could not be reached. No deterministic fallback was used.')
+    }
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch {
+      throw new Error('The AI Generate Topic service returned an invalid response.')
+    }
+    const result = body && typeof body === 'object' && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : null
+    if (!response.ok) {
+      const code = result && typeof result.code === 'string' ? result.code : ''
+      const messages: Record<string, string> = {
+        PROJECT_CONFLICT: 'The project or topic changed during generation. Reload and try again.',
+        TOPIC_CONFLICT: 'The committed topic changed during generation. Reload and try again.',
+        GROUNDING_STALE: 'Topic grounding is stale. Refresh grounding before AI generation.',
+        EVIDENCE_STALE: 'Source evidence changed. Rebuild the Evidence Index and grounded analysis.',
+        ANALYSIS_STALE: 'Grounded analysis changed. Rebuild analysis before generating.',
+        NO_SUPPORTING_EVIDENCE: 'No substantive evidence is committed to this topic.',
+        NO_SUBSTANTIVE_EVIDENCE: 'No substantive evidence is committed to this topic.',
+        EVIDENCE_EMPTY: 'No substantive evidence is committed to this topic.',
+        TOPIC_NOT_GROUNDED: 'This committed topic does not have current factual evidence.',
+        WORKFLOW_NOT_READY: 'The published Generate Topic workflow is not ready. Check its readiness and try again.',
+        WORKFLOW_UNSUPPORTED: 'The selected workflow is not a supported Generate Topic workflow.',
+        WORKFLOW_CAPABILITY_UNSUPPORTED: 'The selected workflow is not a supported Generate Topic workflow.',
+        INVALID_WORKFLOW_CAPABILITY: 'The selected workflow is not a supported Generate Topic workflow.',
+        TOO_LARGE: 'The current evidence packet exceeds the supported size limit. Narrow the evidence and try again.',
+        PROVIDER_AUTH_FAILED: 'The configured provider connection could not be authenticated.',
+        AUTH_FAILED: 'The configured provider connection could not be authenticated.',
+        PROVIDER_REFUSED: 'The provider declined this generation request.',
+        REFUSED: 'The provider declined this generation request.',
+        RATE_LIMITED: 'The provider is temporarily rate limited. Try again later.',
+        TIMEOUT: 'The provider did not respond before the generation timeout.',
+        NETWORK_ERROR: 'The provider could not be reached. No deterministic fallback was used.',
+        PROVIDER_FAILURE: 'The provider did not complete this request. No deterministic fallback was used.',
+        PROVIDER_ERROR: 'The provider could not generate a topic draft. No deterministic fallback was used.',
+        MODEL_OUTPUT_INVALID: 'The provider did not return a valid evidence-grounded topic draft.',
+        INVALID_MODEL_OUTPUT: 'The provider did not return a valid evidence-grounded topic draft.',
+        DEMO_PROJECT_UNSUPPORTED: 'AI Generate Topic is unavailable for demo or local projects.',
+      }
+      throw new Error(messages[code] ?? 'AI topic generation failed. No draft proposal was installed.')
+    }
+    if (!result || Object.keys(result).sort().join(',') !== 'draft,recordRevision'
+      || !Number.isSafeInteger(result.recordRevision)
+      || result.recordRevision !== startingRevision
+      || !result.draft || typeof result.draft !== 'object' || Array.isArray(result.draft))
+      throw new Error('The AI Generate Topic service returned invalid draft revision metadata.')
+
+    const serverDraft = result.draft as AuthorTopicDraft
+    const currentMetadata = authorTopicMetadataRef.current[topicId]
+    const currentContext = currentMetadata?.groundingContext
+    const currentTopic = appToc.find(candidate => stableAuthorTopicId(candidate) === topicId)
+    const currentBlocks = topicContentRef.current[topicId]
+      ?? topicContentRef.current[String(topic.id)]
+      ?? []
+    if (projectIdRef.current !== targetProjectId
+      || projectRevisionRef.current !== startingRevision
+      || saveVersionRef.current !== startingSaveVersion
+      || !currentTopic
+      || JSON.stringify(currentTopic) !== JSON.stringify(topic)
+      || !currentContext
+      || currentContext.contextId !== startingContextId
+      || JSON.stringify(currentContext.provenance) !== startingGroundingFingerprint
+      || !isTopicGroundingContextFresh(currentContext, buildGroundingInput(currentTopic))
+      || authorContentFingerprint(currentBlocks) !== startingContentFingerprint) {
+      throw new Error('PROJECT_CONFLICT: The topic, grounding, or authored content changed during generation. No draft was installed.')
+    }
+    const afterRecord = await projectRepository.loadProject(targetProjectId)
+    if (!afterRecord
+      || projectIdRef.current !== targetProjectId
+      || afterRecord.recordRevision !== startingRevision
+      || projectRevisionRef.current !== startingRevision
+      || saveVersionRef.current !== startingSaveVersion
+      || authorContentFingerprint(topicContentRef.current[topicId]
+        ?? topicContentRef.current[String(topic.id)]
+        ?? []) !== startingContentFingerprint
+      || authorTopicMetadataRef.current[topicId]?.groundingContext?.contextId !== startingContextId
+      || JSON.stringify({
+        sourcesRevision: afterRecord.sourcesRevision,
+        evidenceIndex: afterRecord.evidenceIndex,
+        conceptAnalysis: afterRecord.conceptAnalysis,
+        tocRevision: afterRecord.tocRevision,
+      }) !== beforeRecordGrounding
+      || JSON.stringify((afterRecord.appToc ?? []).find((candidate): candidate is { id: number; topicId?: string } =>
+        isAuthorMetadataTopic(candidate) && stableAuthorTopicId(candidate) === topicId)) !== JSON.stringify(topic)) {
+      throw new Error('PROJECT_CONFLICT: Project grounding changed during generation. No draft was installed.')
+    }
+
+    if (serverDraft.version !== 1
+      || serverDraft.method !== 'ai-grounded-topic-v1'
+      || serverDraft.topicId !== topicId
+      || typeof serverDraft.draftId !== 'string'
+      || !Number.isSafeInteger(serverDraft.generatedAt)
+      || typeof serverDraft.groundingRevision !== 'string'
+      || serverDraft.groundingContextId !== startingContextId
+      || !Array.isArray(serverDraft.blocks)
+      || !Array.isArray(serverDraft.evidenceIdsUsed)
+      || !serverDraft.aiProvenance
+      || typeof serverDraft.aiProvenance.providerId !== 'string'
+      || typeof serverDraft.aiProvenance.modelId !== 'string'
+      || !serverDraft.aiProvenance.workflow
+      || typeof serverDraft.aiProvenance.workflow.id !== 'string'
+      || serverDraft.aiProvenance.workflow.id !== workflowId
+      || serverDraft.aiProvenance.workflow.version !== workflowVersion)
+      throw new Error('The AI Generate Topic service returned an invalid grounded draft.')
+
+    const allowedEvidence = new Set([
+      ...beforeContext.requiredEvidence.map(item => item.evidenceId),
+      ...beforeContext.optionalSupportingEvidence.map(item => item.evidenceId),
+    ])
+    const citedEvidence = new Set<string>()
+    const safeBlocks = serverDraft.blocks.map((block, index) => {
+      if (!block || !['para', 'procedure', 'callout'].includes(block.type)
+        || typeof block.id !== 'string' || typeof block.content !== 'string'
+        || !Array.isArray(block.evidenceIds) || block.evidenceIds.length === 0
+        || block.evidenceIds.some(id => typeof id !== 'string' || !allowedEvidence.has(id))
+        || (block.type === 'callout' && !['note', 'warning'].includes(block.calloutVariant ?? ''))
+        || (block.type === 'procedure'
+          && (!Array.isArray(block.procedureSteps)
+            || block.procedureSteps.length < 2
+            || block.procedureSteps.some(step => typeof step !== 'string' || !step.trim()))))
+        throw new Error(`The AI Generate Topic service returned an invalid evidence-backed block (${index + 1}).`)
+      block.evidenceIds.forEach(id => citedEvidence.add(id))
+      return {
+        id: block.id,
+        type: block.type,
+        content: block.content,
+        evidenceIds: [...block.evidenceIds],
+        ...(block.calloutVariant ? { calloutVariant: block.calloutVariant } : {}),
+        ...(block.procedureSteps ? { procedureSteps: [...block.procedureSteps] } : {}),
+      }
+    })
+    const evidenceIdsUsed = [...new Set(serverDraft.evidenceIdsUsed)]
+    if (evidenceIdsUsed.some(id => !allowedEvidence.has(id))
+      || [...citedEvidence].some(id => !evidenceIdsUsed.includes(id))
+      || evidenceIdsUsed.some(id => !citedEvidence.has(id)))
+      throw new Error('The AI Generate Topic service returned unsupported evidence references.')
+
+    const aiProvenance = serverDraft.aiProvenance
+    const safeRefs = (ref: { id: string; version: number } | null) => {
+      if (ref === null) return null
+      if (!ref || typeof ref.id !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/u.test(ref.id)
+        || !Number.isSafeInteger(ref.version) || ref.version < 1)
+        throw new Error('The AI Generate Topic service returned invalid safe provenance.')
+      return { id: ref.id, version: ref.version }
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/u.test(aiProvenance.providerId)
+      || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/u.test(aiProvenance.modelId)
+      || !Array.isArray(serverDraft.warnings)
+      || serverDraft.warnings.some(warning => !warning
+        || typeof warning.id !== 'string'
+        || !['no-evidence', 'conflict', 'gap', 'unavailable', 'language'].includes(warning.kind)
+        || typeof warning.message !== 'string'
+        || !Array.isArray(warning.evidenceIds)
+        || warning.evidenceIds.some(id => !allowedEvidence.has(id))))
+      throw new Error('The AI Generate Topic service returned invalid safe provenance or warnings.')
+    const draft: AuthorTopicDraft = {
+      version: 1,
+      draftId: serverDraft.draftId,
+      topicId,
+      method: 'ai-grounded-topic-v1',
+      modelLabel: `AI-generated · ${aiProvenance.providerId} / ${aiProvenance.modelId}`,
+      aiProvenance: {
+        providerId: aiProvenance.providerId,
+        modelId: aiProvenance.modelId,
+        workflow: { id: workflowId, version: workflowVersion },
+        promptPack: safeRefs(aiProvenance.promptPack),
+        referenceSet: safeRefs(aiProvenance.referenceSet),
+        blueprint: safeRefs(aiProvenance.blueprint),
+      },
+      generatedAt: serverDraft.generatedAt,
+      groundingContextId: startingContextId,
+      groundingRevision: serverDraft.groundingRevision,
+      contentType: beforeContext.writingGuidance.contentType,
+      language: beforeContext.writingGuidance.language,
+      variableSnapshot: { ...beforeContext.writingGuidance.variables },
+      styleProvenance: {
+        styleProfileId: beforeContext.writingGuidance.styleProfileId,
+        styleProfileName: beforeContext.writingGuidance.styleProfileName,
+        styleProfileScope: beforeContext.writingGuidance.styleProfileScope,
+        styleFingerprint: beforeContext.provenance.styleFingerprint,
+        brandNames: [...beforeContext.writingGuidance.brandNames],
+      },
+      evidenceIdsUsed,
+      requiredEvidenceIdsUsed: evidenceIdsUsed.filter(id =>
+        beforeContext.requiredEvidence.some(item => item.evidenceId === id)),
+      optionalEvidenceIdsUsed: evidenceIdsUsed.filter(id =>
+        beforeContext.optionalSupportingEvidence.some(item => item.evidenceId === id)),
+      warnings: serverDraft.warnings.map(warning => ({
+        id: warning.id,
+        kind: warning.kind,
+        message: warning.message,
+        evidenceIds: [...warning.evidenceIds],
+      })),
+      blocks: safeBlocks,
+    }
+    const usedEvidence = [
+      ...beforeContext.requiredEvidence,
+      ...beforeContext.optionalSupportingEvidence,
+    ].filter(item => evidenceIdsUsed.includes(item.evidenceId))
+    const base = currentMetadata ?? createManualAuthorTopicMetadata(
+      topicId,
+      authorMetadataContext(),
+      false,
+    )
+    const regenerationProposal = buildAuthorRegenerationProposal(
+      draft,
+      currentBlocks,
+      base.appliedBaseline,
+      base.approved,
+      base.blockStates,
+    )
+    const hasAppliedGeneratedContent = base.generationStatus === 'generated'
+      || base.contentOrigin === 'generated'
+      || base.contentOrigin === 'mixed'
+      || base.contentOrigin === 'approved'
+      || !!base.appliedBaseline
+    const previousMetadataMap = authorTopicMetadataRef.current
+    const nextMetadata = {
+      ...previousMetadataMap,
+      [topicId]: {
+        ...base,
+        generationStatus: 'draft' as const,
+        draft,
+        regenerationProposal,
+        evidenceIds: [...draft.evidenceIdsUsed],
+        sourcePaths: usedEvidence.map(item => [...item.sectionPath]),
+        sourceFileIds: [...new Set(usedEvidence.map(item => item.fileId))],
+        provenance: hasAppliedGeneratedContent ? base.provenance : {
+          ...base.provenance,
+          sourcesRevision: beforeContext.provenance.sourcesRevision,
+          evidenceExtractionRevision: beforeContext.provenance.evidenceExtractionRevision,
+          evidenceIndexBuiltAt: beforeContext.provenance.evidenceIndexBuiltAt,
+          analysisBuiltAt: beforeContext.provenance.analysisBuiltAt,
+          analysisRevision: beforeContext.provenance.analysisRevision,
+          tocRevision: beforeContext.provenance.tocRevision,
+          contentType: draft.contentType,
+          variableSnapshot: { ...draft.variableSnapshot },
+          variableFingerprint: beforeContext.provenance.variableFingerprint,
+          groundingContextId: startingContextId,
+          language: draft.language,
+          styleProfileId: draft.styleProvenance.styleProfileId,
+          styleFingerprint: draft.styleProvenance.styleFingerprint,
+        },
+        generatedAt: draft.generatedAt,
+        generatedFreshness: hasAppliedGeneratedContent ? base.generatedFreshness : 'not-applicable' as const,
+        generatedFreshnessReason: hasAppliedGeneratedContent ? base.generatedFreshnessReason : null,
+        approved: base.approved,
+      },
+    }
+    authorTopicMetadataRef.current = nextMetadata
+    setAuthorTopicMetadata(nextMetadata)
+    triggerAutosave(true)
+    if (!await persistCurrentProject()) {
+      if (projectIdRef.current === targetProjectId) {
+        authorTopicMetadataRef.current = previousMetadataMap
+        setAuthorTopicMetadata(previousMetadataMap)
+      }
+      throw new Error('The generated proposal could not be durably saved. The previous proposal remains in place; reload or retry saving before generating again.')
+    }
+    return { draft, error: null }
+  }, [
+    appToc,
+    authorMetadataContext,
+    buildGroundingInput,
+    evidenceIndex,
+    isDemoMode,
+    persistCurrentProject,
+    projectRepository,
+    setAuthorTopicMetadata,
+    triggerAutosave,
+  ])
+
   const handleGenerateTopicDraft = useCallback((topicId: string): {
     draft: AuthorTopicDraft | null
     error: string | null
@@ -16732,6 +17356,8 @@ export default function App() {
       id,
       type: block.type,
       content: block.content,
+      ...(block.evidenceIds.length > 0 ? { evidenceIds: [...block.evidenceIds] } : {}),
+      ...(block.procedureSteps ? { procedureSteps: [...block.procedureSteps] } : {}),
       ...(block.type === 'callout'
         ? { calloutVariant: block.calloutVariant === 'warning' ? 'warning' as const : 'note' as const }
         : {}),
@@ -17784,7 +18410,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} canGenerateAi={canGenerateAiToc} recovery={activeAiTocRecovery} onDismissRecovery={handleDiscardAiTocRecovery} onRecoverRecovery={handleRecoverAiTocProposal} onGenerate={handleGenerateTocProposal} onGenerateAi={handleGenerateAiTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
+       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {

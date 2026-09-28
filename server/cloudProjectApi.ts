@@ -441,6 +441,27 @@ export class CloudProjectApi {
   }
 
   /**
+   * Grounded Author generation uses the same authenticated workspace and write
+   * permission as ordinary Author edits. Viewers may read, but cannot generate.
+   */
+  async loadGroundedTopicProject(projectIdValue: unknown): Promise<{
+    workspaceId: string
+    role: string
+    record: Json
+  }> {
+    this.client.assertPermission(this.role, 'write')
+    const projectId = validateId(projectIdValue, 'projectId')
+    const record = await this.client.getProject(projectId, this.workspaceId)
+    if (!record) throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
+    if (record.projectId !== projectId || record.workspaceId !== this.workspaceId
+      || typeof record.ownerUserId !== 'string' || !record.ownerUserId
+      || !Number.isSafeInteger(record.recordRevision)) {
+      throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Stored project identity or revision is invalid')
+    }
+    return { workspaceId: this.workspaceId, role: this.role, record }
+  }
+
+  /**
    * Save only the generated proposal onto the authoritative cloud record.
    * Existing proposals are never replaced by this server mutation.
    */

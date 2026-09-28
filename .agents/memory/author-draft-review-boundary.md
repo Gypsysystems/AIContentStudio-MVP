@@ -20,3 +20,9 @@ Applied generated or mixed content keeps its own provenance and freshness. Refre
 **Why:** Draft provenance describes a proposal, not the generated content users are currently viewing and editing. Conflating them can hide stale applied content before the user accepts a replacement.
 
 **How to apply:** Evaluate applied freshness against current sources, extraction and Evidence Index revisions, grounded analysis, committed TOC, content type, variables, language, and style/brand guidance. Keep stale content visible and editable while blocking stale generation/apply paths.
+
+AI-generated topic text remains a proposed interpretation of evidence, not an authoritative source fact. A citation with a valid Evidence ID alone cannot establish that the claim or each procedure step is supported; prefer conservative rejection when support is unclear, and keep human review and explicit Apply.
+
+**Why:** A provider can produce plausible but invented instructions while citing genuine, unrelated evidence. Mechanical support checks reduce that risk but cannot prove semantic entailment.
+
+**How to apply:** Keep the provider's optional evidence within the authoritative topic grounding context, fail closed on unsupported claims or procedural steps, and never describe an unsaved proposal as durable or an unreviewed draft as approved.

@@ -477,8 +477,8 @@ export async function executeAiCatalog(
   validateCommand(value)
   const input = value as Json & (AiCatalogCommand | ReadinessRequest)
   if (input.action === 'readiness') {
-    if (role !== 'owner' && role !== 'admin')
-      throw new AiCatalogApiError(403, 'FORBIDDEN', 'Owner or admin role required to check workflow readiness')
+    if (role !== 'owner' && role !== 'admin' && role !== 'editor')
+      throw new AiCatalogApiError(403, 'FORBIDDEN', 'Workspace write permission is required to check workflow readiness')
     if (input.workspaceId !== workspaceId)
       throw new AiCatalogApiError(403, 'FORBIDDEN', 'Readiness can only be checked in the active workspace')
     return { readiness: await readinessForWorkflow(input.id, input.version, client, workspaceId, role, readinessDependencies) }
@@ -573,6 +573,7 @@ export async function loadAiWorkflowExecutionBundle(
   id: string,
   version: number,
   dependencies: AiWorkflowExecutionDependencies = {},
+  allowEditorExecution = false,
 ): Promise<AiWorkflowExecutionBundle> {
   if (!stableId(workspaceId) || !stableId(id) || !Number.isSafeInteger(version) || version < 1)
     throw new AiCatalogApiError(400, 'INVALID_REQUEST', 'A valid workspace and published workflow version are required')
@@ -584,8 +585,12 @@ export async function loadAiWorkflowExecutionBundle(
   const { membership } = await client.identity(workspaceId)
   if (membership.workspace_id !== workspaceId)
     throw new AiCatalogApiError(403, 'FORBIDDEN', 'The workflow must belong to the active workspace')
-  if (membership.role !== 'owner' && membership.role !== 'admin')
-    throw new AiCatalogApiError(403, 'FORBIDDEN', 'Owner or admin role required to execute a workflow')
+  if (membership.role !== 'owner' && membership.role !== 'admin'
+    && !(allowEditorExecution && membership.role === 'editor')) {
+    throw new AiCatalogApiError(403, 'FORBIDDEN', allowEditorExecution
+      ? 'Workspace write permission is required to execute this workflow'
+      : 'Owner or admin role required to execute a workflow')
+  }
 
   const loadHistory = async (assetId: string): Promise<AiAssetVersion[]> => {
     const result = await client.command({ action: 'history', id: assetId }, workspaceId)
