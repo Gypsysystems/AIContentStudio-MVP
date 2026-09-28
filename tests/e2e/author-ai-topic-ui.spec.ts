@@ -11,6 +11,12 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   const projectId = `ai-topic-ui-${Date.now()}`
   let projectRecord: Record<string, any> | null = null
   let failSecondProposalSave = false
+  let failNextBackgroundProposalSave = false
+  let lastGeneratedDraft: Record<string, any> | null = null
+  let backgroundWorkerAvailable = false
+  let failNextBackgroundJob = false
+  let backgroundJobSequence = 0
+  const backgroundJobs: Record<string, any>[] = []
   const originalContent = fixture.topicContent["stable-setup"]
   const workflow = {
     workspaceId: "ai-topic-workspace",
@@ -33,9 +39,30 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   }
   const requests: Record<string, unknown>[] = []
 
+  const session = {
+    authenticated: true,
+    mode: "supabase",
+    userId: "ai-topic-ui-owner",
+    activeWorkspaceId: "ai-topic-workspace",
+    activeRole: "owner",
+    activeOrganizationName: "Topic UI workspace",
+    activeWorkspaceName: "Topic UI workspace",
+  }
+  await context.route("**/api/auth/session", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(session),
+  }))
+  await context.route("**/api/auth/refresh", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(session),
+  }))
   await context.route("**/api/cloud-projects", async route => {
     const command = route.request().postDataJSON()
-    if (command.action === "list") {
+    if (command.action === "ready") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ready: true }) })
+    } else if (command.action === "list") {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -51,6 +78,15 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
     } else if (command.action === "save") {
       const incoming = command.record as Record<string, any>
       const incomingDraftId = incoming.authorTopicMetadata?.["stable-setup"]?.draft?.draftId
+      if (failNextBackgroundProposalSave && incomingDraftId?.startsWith("author-draft-ai-topic-background-")) {
+        failNextBackgroundProposalSave = false
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "SAVE_UNAVAILABLE", error: "Save unavailable" }),
+        })
+        return
+      }
       if (failSecondProposalSave && incomingDraftId === "author-draft-ai-topic-ui-2") {
         failSecondProposalSave = false
         await route.fulfill({
@@ -176,11 +212,89 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
         blueprint: { id: "blueprint-topic", version: 1 },
       },
     }
+    lastGeneratedDraft = draft
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ draft, recordRevision: projectRecord.recordRevision }),
     })
+  })
+  await context.route("**/api/generate-topic-jobs", async route => {
+    const command = route.request().postDataJSON() as Record<string, unknown>
+    if (command.action === "list") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          jobs: backgroundJobs.filter(job => job.projectId === command.projectId && job.topicId === command.topicId),
+        }),
+      })
+      return
+    }
+    if (command.action === "enqueue") {
+      expect(command).toEqual({
+        action: "enqueue",
+        projectId,
+        topicId: "stable-setup",
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+      })
+      if (!backgroundWorkerAvailable) {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({
+            code: "WORKER_UNAVAILABLE",
+            error: "Background Generate Topic is unavailable.",
+          }),
+        })
+        return
+      }
+      if (!projectRecord || !lastGeneratedDraft) throw new Error("A project and grounded draft are required for the job fixture")
+      backgroundJobSequence += 1
+      const succeeded = !failNextBackgroundJob
+      failNextBackgroundJob = false
+      const job = {
+        jobId: `topic-job-${backgroundJobSequence}`,
+        projectId,
+        topicId: "stable-setup",
+        workflowId: workflow.id,
+        workflowVersion: workflow.version,
+        inputRevision: projectRecord.recordRevision,
+        status: succeeded ? "queued" : "failed",
+        phase: succeeded ? "queued" : "provider-unavailable",
+        attemptCount: succeeded ? 0 : 1,
+        maxAttempts: 3,
+        nextAttemptAt: null,
+        createdAt: new Date(Date.now() + backgroundJobSequence).toISOString(),
+        updatedAt: new Date(Date.now() + backgroundJobSequence).toISOString(),
+        draft: {
+          ...lastGeneratedDraft,
+          draftId: `author-draft-ai-topic-background-${backgroundJobSequence}`,
+          generatedAt: 1_800_000_000_000 + 100 + backgroundJobSequence,
+        },
+        ...(succeeded ? {} : {
+          errorCode: "PROVIDER_UNAVAILABLE",
+          errorMessage: "The provider is unavailable. Rerun after the worker is repaired.",
+        }),
+      }
+      backgroundJobs.push(job)
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ job }) })
+      return
+    }
+    expect(command.action).toBe("get")
+    const job = backgroundJobs.find(candidate => candidate.jobId === command.jobId)
+    if (!job) {
+      await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ code: "JOB_NOT_FOUND" }) })
+      return
+    }
+    if (job.status === "queued") {
+      job.status = "succeeded"
+      job.phase = "complete"
+      job.attemptCount = 1
+      job.updatedAt = new Date(Date.now() + 10).toISOString()
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ job }) })
   })
 
   await page.goto("/")
@@ -217,11 +331,23 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
       tocGeneratedFromEvidenceExtractionRevision: evidenceIndex.extractionRevision,
       tocGeneratedFromConceptBuiltAt: conceptAnalysis.builtAt,
       tocGeneratedFromContentType: source.projectMeta.contentType,
-      appToc: [{
-        ...source.appToc[0],
-        supportingEvidenceIds: [requiredEvidenceId],
-        proposalKind: "evidence-backed",
-      }],
+      appToc: [
+        {
+          ...source.appToc[0],
+          supportingEvidenceIds: [requiredEvidenceId],
+          proposalKind: "evidence-backed",
+        },
+        {
+          ...source.appToc[0],
+          id: 102,
+          topicId: "other-topic",
+          title: "Other topic",
+          supportingEvidenceIds: [],
+          sourceSectionPaths: [],
+          rationale: "A separate topic for background-job scope checks.",
+          proposalKind: "evidence-backed",
+        },
+      ],
       tocProposal: null,
       topicContent: source.topicContent,
     })
@@ -262,6 +388,11 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
 
   await page.getByTestId("author-draft-inspector")
     .getByRole("button", { name: "Close draft inspector" }).click()
+  await controls.getByTestId("generate-ai-topic-background").click()
+  await expect(controls.getByTestId("ai-topic-error")).toContainText("no worker is online")
+  await expect(controls.getByTestId("generate-ai-topic")).toBeEnabled()
+  expect(requests).toHaveLength(1)
+
   await controls.getByTestId("generate-ai-topic").click()
   await expect(controls.getByTestId("ai-topic-replacement-confirmation")).toBeVisible()
   expect(requests).toHaveLength(1)
@@ -272,4 +403,103 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(firstDraftId)
   expect(projectRecord?.authorTopicMetadata["stable-setup"].regenerationProposal).toBeTruthy()
   expect(projectRecord?.topicContent["stable-setup"]).toEqual(originalContent)
+
+  const retainedProposalId = projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId
+  backgroundWorkerAvailable = true
+  await controls.getByTestId("generate-ai-topic-background").click()
+  await expect(controls.getByTestId("ai-topic-background-status")).toContainText("succeeded")
+  const reloadedJobDraftId = backgroundJobs[0].draft.draftId
+  expect(reloadedJobDraftId).not.toBe(retainedProposalId)
+  expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(retainedProposalId)
+
+  await page.reload()
+  await page.getByTestId("topbar-administration").click()
+  await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
+  const reopenedProjectRow = page.locator("main div.group").filter({ has: page.getByText("AI topic UI project", { exact: true }) })
+  await reopenedProjectRow.getByRole("button", { name: "Open", exact: true }).click()
+  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByTestId("author-outline").locator('[data-topic-id="stable-setup"]')
+    .getByText("Prepare the Field Kit", { exact: true }).click()
+  await page.getByTestId("author-context-tab-assist").click()
+  const reopenedControls = page.getByTestId("ai-topic-controls")
+  const closeDraftInspectorIfOpen = async () => {
+    const closeButton = page.getByTestId("author-draft-inspector")
+      .getByRole("button", { name: "Close draft inspector" })
+    if (await closeButton.isVisible()) await closeButton.click()
+  }
+  await expect(reopenedControls.getByTestId("ai-topic-background-status")).toContainText("succeeded")
+  await expect(reopenedControls.getByTestId("review-completed-ai-topic-job")).toBeVisible()
+  await expect(page.getByTestId("author-draft-inspector")).toHaveCount(0)
+  expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(retainedProposalId)
+
+  await page.getByTestId("author-outline").locator('[data-topic-id="other-topic"]')
+    .getByText("Other topic", { exact: true }).click()
+  await expect(page.getByTestId("ai-topic-background-status")).toHaveCount(0)
+  await expect(page.getByTestId("review-completed-ai-topic-job")).toHaveCount(0)
+  await page.getByTestId("author-outline").locator('[data-topic-id="stable-setup"]')
+    .getByText("Prepare the Field Kit", { exact: true }).click()
+  await expect(page.getByTestId("ai-topic-background-status")).toContainText("succeeded")
+
+  // Reopening and changing topic can advance the saved project revision. Use
+  // a fresh job for the consent/replacement path so it is current at review.
+  const jobsBeforeCurrentRevisionGeneration = backgroundJobs.length
+  await closeDraftInspectorIfOpen()
+  await reopenedControls.getByTestId("generate-ai-topic-background").click()
+  await expect.poll(() => backgroundJobs.length).toBe(jobsBeforeCurrentRevisionGeneration + 1)
+  const currentRevisionJob = backgroundJobs[jobsBeforeCurrentRevisionGeneration]
+  await expect(reopenedControls.getByTestId("ai-topic-background-status"))
+    .toHaveAttribute("data-job-id", currentRevisionJob.jobId)
+  await expect(reopenedControls.getByTestId("ai-topic-background-status")).toContainText("succeeded")
+  let completedJobDraftId = currentRevisionJob.draft.draftId
+
+  await reopenedControls.getByTestId("review-completed-ai-topic-job").click()
+  await expect(reopenedControls.getByTestId("ai-topic-replacement-confirmation")).toBeVisible()
+  await reopenedControls.getByTestId("cancel-ai-topic-proposal-replacement").click()
+  expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(retainedProposalId)
+  await reopenedControls.getByTestId("review-completed-ai-topic-job").click()
+  await expect(reopenedControls.getByTestId("ai-topic-replacement-confirmation")).toBeVisible()
+  failNextBackgroundProposalSave = true
+  await reopenedControls.getByTestId("confirm-ai-topic-proposal-replacement").click()
+  await expect.poll(() => failNextBackgroundProposalSave).toBe(false)
+  await expect(page.getByTestId("topic-ai-warning")).toContainText("could not be durably saved")
+  expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(retainedProposalId)
+
+  // The failed durable save leaves the prior proposal intact, but retrying its
+  // rollback may advance the project revision. Generate against that revision
+  // rather than bypassing the review-time freshness check with an old job.
+  const jobsBeforeFreshGeneration = backgroundJobs.length
+  await closeDraftInspectorIfOpen()
+  await reopenedControls.getByTestId("generate-ai-topic-background").click()
+  await expect.poll(() => backgroundJobs.length).toBe(jobsBeforeFreshGeneration + 1)
+  const freshJob = backgroundJobs[jobsBeforeFreshGeneration]
+  await expect(reopenedControls.getByTestId("ai-topic-background-status"))
+    .toHaveAttribute("data-job-id", freshJob.jobId)
+  await expect(reopenedControls.getByTestId("ai-topic-background-status")).toContainText("succeeded")
+  completedJobDraftId = freshJob.draft.draftId
+  await reopenedControls.getByTestId("review-completed-ai-topic-job").click()
+  await expect(reopenedControls.getByTestId("ai-topic-replacement-confirmation")).toBeVisible()
+  await reopenedControls.getByTestId("confirm-ai-topic-proposal-replacement").click()
+  await expect.poll(() => projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId)
+    .toBe(completedJobDraftId)
+  expect(projectRecord?.topicContent["stable-setup"]).toEqual(originalContent)
+
+  failNextBackgroundJob = true
+  const jobsBeforeFailure = backgroundJobs.length
+  await closeDraftInspectorIfOpen()
+  await reopenedControls.getByTestId("generate-ai-topic-background").click()
+  await expect.poll(() => backgroundJobs.length).toBe(jobsBeforeFailure + 1)
+  const failedJob = backgroundJobs[jobsBeforeFailure]
+  await expect(reopenedControls.getByTestId("ai-topic-background-status"))
+    .toHaveAttribute("data-job-id", failedJob.jobId)
+  await expect(reopenedControls.getByTestId("ai-topic-background-status")).toContainText("failed")
+  expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(completedJobDraftId)
+  const jobsBeforeRerun = backgroundJobs.length
+  await closeDraftInspectorIfOpen()
+  await reopenedControls.getByTestId("rerun-ai-topic-background").click()
+  await expect.poll(() => backgroundJobs.length).toBe(jobsBeforeRerun + 1)
+  const rerunJob = backgroundJobs[jobsBeforeRerun]
+  await expect(reopenedControls.getByTestId("ai-topic-background-status"))
+    .toHaveAttribute("data-job-id", rerunJob.jobId)
+  await expect(reopenedControls.getByTestId("ai-topic-background-status")).toContainText("succeeded")
+  expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(completedJobDraftId)
 })

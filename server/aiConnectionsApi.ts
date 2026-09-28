@@ -56,6 +56,34 @@ function proof(key: Buffer, row: Pick<Stored, 'workspaceId' | 'providerId' | 're
       row.testedAt === null ? null : new Date(row.testedAt).toISOString()]))
     .digest('hex')
 }
+export function verifyConnectionTestProof(
+  key: Buffer,
+  row: {
+    workspaceId: string
+    providerId: string
+    revision: number
+    state: unknown
+    testedAt: unknown
+    proof: unknown
+  },
+): boolean {
+  if (key.length !== 32 || typeof row.workspaceId !== 'string' || !row.workspaceId
+    || typeof row.providerId !== 'string' || !ID.test(row.providerId)
+    || !Number.isSafeInteger(row.revision) || Number(row.revision) < 1
+    || !['verified', 'failed', 'unavailable'].includes(String(row.state))
+    || typeof row.testedAt !== 'string' || Number.isNaN(Date.parse(row.testedAt))
+    || typeof row.proof !== 'string' || !/^[0-9a-f]{64}$/.test(row.proof))
+    return false
+  const expected = Buffer.from(proof(key, {
+    workspaceId: row.workspaceId,
+    providerId: row.providerId,
+    revision: Number(row.revision),
+    state: row.state as Stored['state'],
+    testedAt: row.testedAt,
+  }), 'hex')
+  const actual = Buffer.from(row.proof, 'hex')
+  return actual.length === expected.length && timingSafeEqual(actual, expected)
+}
 function metadata(value: unknown, workspaceId: string, key: Buffer): ConnectionMetadata {
   if (!object(value) || Object.keys(value).some(k => ![
     'workspaceId', 'providerId', 'revision', 'state', 'proof', 'testedAt', 'updatedAt', 'updatedBy',
@@ -70,8 +98,7 @@ function metadata(value: unknown, workspaceId: string, key: Buffer): ConnectionM
   const row = value as unknown as Stored
   if (row.state === 'untested'
     ? row.proof !== null || row.testedAt !== null
-    : typeof row.proof !== 'string' || !/^[0-9a-f]{64}$/.test(row.proof) || row.testedAt === null
-      || !timingSafeEqual(Buffer.from(row.proof, 'hex'), Buffer.from(proof(key, row), 'hex')))
+    : !verifyConnectionTestProof(key, row))
     return fail(503, 'STORAGE_RESPONSE_INVALID', 'Connection test status could not be verified')
   const { proof: _proof, ...safe } = row
   return safe

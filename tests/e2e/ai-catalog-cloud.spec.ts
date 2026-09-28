@@ -22,10 +22,15 @@ const connectionVersionMigration = await readFile(
   new URL('../../supabase/migrations/20260926000500_ai_connections_schema_version.sql', import.meta.url),
   'utf8',
 )
+const topicJobsMigration = await readFile(
+  new URL('../../supabase/migrations/20260928000200_generate_topic_jobs.sql', import.meta.url),
+  'utf8',
+)
 const api = await readFile(new URL('../../server/aiCatalogApi.ts', import.meta.url), 'utf8')
 const plugin = await readFile(new URL('../../server/projectAccessPlugin.ts', import.meta.url), 'utf8')
 const sql = migration.replace(/--.*$/gm, '').replace(/\s+/g, ' ').toLowerCase()
 const modelPublishSql = modelPublishMigration.replace(/--.*$/gm, '').replace(/\s+/g, ' ').toLowerCase()
+const topicJobsSql = topicJobsMigration.replace(/--.*$/gm, '').replace(/\s+/g, ' ').toLowerCase()
 const execFileAsync = promisify(execFile)
 
 test('AI catalog schema is immutable and has narrowly scoped writes', () => {
@@ -62,6 +67,58 @@ test('AI Connections registers its deployed schema using the existing version pa
   expect(sql).toBe(
     "insert into public.cloud_schema_versions(component, version) values ('ai-connections', 1) on conflict (component) do update set version = excluded.version;",
   )
+})
+
+test('topic generation SQL exposes the shared RPC contract with private worker-only functions', () => {
+  expect(topicJobsSql).toContain('public.gt_job_enqueue( p_project_id text, p_topic_id text, p_workflow_id text, p_workflow_version integer, p_expected_revision bigint )')
+  expect(topicJobsSql).toContain('public.gt_job_get(p_job_id uuid)')
+  expect(topicJobsSql).toContain('public.gt_job_list(p_project_id text, p_topic_id text)')
+  expect(topicJobsSql).toContain('public.gt_job_worker_heartbeat()')
+  expect(topicJobsSql).toContain('public.gt_job_claim(p_lease_seconds integer)')
+  expect(topicJobsSql).toContain('public.gt_job_context(p_job_id uuid, p_lease_token uuid)')
+  expect(topicJobsSql).toContain('public.gt_job_heartbeat( p_job_id uuid, p_lease_token uuid, p_lease_seconds integer )')
+  expect(topicJobsSql).toContain('public.gt_job_finish(p_job_id uuid, p_lease_token uuid, p_draft jsonb)')
+  expect(topicJobsSql).toContain('public.gt_job_fail( p_job_id uuid, p_lease_token uuid, p_error_code text, p_error_message text, p_retryable boolean )')
+  expect(topicJobsSql).toContain('returns jsonb')
+  expect(topicJobsSql).toContain('on conflict do nothing')
+  expect(topicJobsSql).toContain('stable_key := pg_catalog.encode')
+  expect(topicJobsSql).not.toMatch(/p_fingerprint|p_idempotency_key/)
+  expect(topicJobsSql).toContain('create unique index generate_topic_jobs_idempotency_active_unique on public.generate_topic_jobs (idempotency_key) where status in (\'queued\',\'running\',\'retry-wait\')')
+  expect(topicJobsSql).toContain('where idempotency_key = stable_key and status in (\'queued\',\'running\',\'retry-wait\')')
+  expect(topicJobsSql).not.toContain('idempotency_key text not null unique')
+  expect(topicJobsSql).toContain('for update skip locked')
+  expect(topicJobsSql).toContain('lease_token = gen_random_uuid()')
+  expect(topicJobsSql).toContain('revoke all on public.generate_topic_jobs from public, anon, authenticated, generate_topic_worker')
+  expect(topicJobsSql).toContain('revoke all on public.generate_topic_worker_heartbeats from public, anon, authenticated, generate_topic_worker')
+  expect(topicJobsSql).toContain('grant execute on function public.gt_job_claim(integer) to generate_topic_worker')
+  expect(topicJobsSql).toContain('grant execute on function public.gt_job_context(uuid, uuid) to generate_topic_worker')
+  expect(topicJobsSql).toContain('grant execute on function public.gt_job_worker_heartbeat() to generate_topic_worker')
+  expect(topicJobsSql).toContain('session_user <> \'generate_topic_worker\'')
+  expect(topicJobsSql).toContain('public.workspace_can(job_row.workspace_id, \'read\')')
+  expect(topicJobsSql).toContain('membership.user_id = job_row.requester_id')
+  expect(topicJobsSql).toContain('project_row.record_revision <> job_row.input_revision')
+  expect(topicJobsSql).toContain('connection_row.test_state')
+  expect(topicJobsSql).toContain("'proof', case when connection_row.workspace_id is null then null else connection_row.test_proof end")
+  expect(topicJobsSql).toContain("'testedat', case when connection_row.workspace_id is null then null else connection_row.tested_at end")
+  const publicJobJsonSql = topicJobsSql.slice(
+    topicJobsSql.indexOf('create or replace function public.generate_topic_job_json'),
+    topicJobsSql.indexOf('create or replace function public.gt_job_enqueue'),
+  )
+  expect(publicJobJsonSql).not.toContain('test_proof')
+  expect(publicJobJsonSql).not.toContain('tested_at')
+  expect(publicJobJsonSql).not.toContain('ciphertext')
+  expect(topicJobsSql).not.toMatch(/connection_metadata[\s\S]{0,600}ciphertext/)
+  expect(topicJobsSql).toContain("values ('generate-topic-jobs', 1)")
+})
+
+test('topic enqueue fails closed without an initial or fresh worker heartbeat', () => {
+  expect(topicJobsSql).toContain('heartbeat.heartbeat_at > clock_timestamp() - interval \'60 seconds\'')
+  expect(topicJobsSql).toContain("raise exception 'worker_unavailable' using errcode = '55000'")
+  expect(topicJobsSql).toContain('insert into public.generate_topic_worker_heartbeats(worker_name, heartbeat_at)')
+  expect(topicJobsSql).toContain('on conflict (worker_name) do update set heartbeat_at = excluded.heartbeat_at')
+  // The only heartbeat write is inside the worker RPC; applying the migration
+  // never seeds a fresh timestamp that would falsely enable enqueue.
+  expect(topicJobsMigration.match(/insert into public\.generate_topic_worker_heartbeats/gi)).toHaveLength(1)
 })
 
 test('AI catalog RPC creates immutable versions and guards transitions and tombstones', () => {

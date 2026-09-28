@@ -132,7 +132,10 @@ async function prepareAuthor(page: Page, projectName: string) {
   await expect(page.getByTestId('concept-analysis-freshness')).toHaveText('Current')
   await page.getByTestId('analysis-generate-toc').click()
   await expect(page.getByTestId('toc-proposal-review')).toBeVisible()
+  const revisionBeforeCommit = (await readProject(page, projectName)).recordRevision
   await page.getByTestId('commit-toc-proposal').click()
+  await expect.poll(async () => (await readProject(page, projectName)).recordRevision)
+    .toBeGreaterThan(revisionBeforeCommit)
   const project = await readProject(page, projectName)
   const evidenceIndex = project.evidenceIndex
   const accessEvidence = evidenceIndex?.items.find((item: { text: string }) =>
@@ -194,6 +197,7 @@ async function readProject(page: Page, projectName: string): Promise<StoredProje
       request.onerror = () => reject(request.error)
     })
     const project = projects.find(candidate => candidate.projectName === name)
+    db.close()
     if (!project) throw new Error(`Project not found: ${name}`)
     return project
   }, projectName)
@@ -218,8 +222,14 @@ async function patchProject(page: Page, projectName: string, patch: Record<strin
     await new Promise<void>((resolve, reject) => {
       const request = store.put({ ...project, ...values })
       request.onerror = () => reject(request.error)
-      transaction.oncomplete = () => resolve()
-      transaction.onabort = () => reject(transaction.error ?? new Error('Project patch was not committed'))
+      transaction.oncomplete = () => {
+        db.close()
+        resolve()
+      }
+      transaction.onabort = () => {
+        db.close()
+        reject(transaction.error ?? new Error('Project patch was not committed'))
+      }
     })
   }, { name: projectName, values: patch })
 }

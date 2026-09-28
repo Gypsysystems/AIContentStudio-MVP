@@ -34,5 +34,6 @@
 - [Content catalog consistency](content-catalog-consistency.md) — treat reusable content as a derived read model; never let catalog storage failures silently succeed alongside project saves.
 - [Cross-project copy conflict boundary](cross-project-copy-conflict-boundary.md) — copy is server-authoritative; post-copy local edits must survive instead of being overwritten by hydration.
 - [AI connection integrity](ai-connection-integrity.md) — bind requests to a workspace; canonicalize signed timestamps and reject reader URL TLS overrides.
+- [Async AI result boundary](async-ai-result-boundary.md) — worker execution must recheck signed connection readiness and sanitize persisted drafts separately from provider prompts.
 - [Playwright navigation timeouts](playwright-navigation-timeouts.md) — full UI suites can time out during dev-server page loads before assertions; distinguish this from feature failures.
 - [GitHub connector sync](github-connector-sync.md) — an added GitHub connection can write through its proxy even when the HTTPS git remote rejects push authentication.

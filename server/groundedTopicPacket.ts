@@ -40,10 +40,14 @@ function requireText(value: unknown, limit: number): asserts value is string {
   if (!boundedText(value, limit)) throw new GroundedTopicPacketError()
 }
 
-function likelySecret(value: string): boolean {
+export function isLikelySecret(value: string): boolean {
   const explicitSecret = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:bearer|password|passwd|secret|credential|api[_ -]?key|access[_ -]?token)\s*[:=]\s*\S+|\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}\b|\bAKIA[0-9A-Z]{16}\b)/iu.test(value)
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value)
   return explicitSecret || (!isUuid && /\b[A-Za-z0-9+/=_-]{32,}\b/u.test(value))
+}
+
+export function isSensitiveVariableName(name: string): boolean {
+  return /password|passwd|secret|credential|token|api[_ -]?key/iu.test(name)
 }
 
 function normalizedTokens(value: string): Set<string> {
@@ -472,8 +476,8 @@ export function buildGroundedTopicPacket(
   const writingGuidance = context.writingGuidance
   const variables = Object.fromEntries(Object.entries(writingGuidance.variables)
     .sort(([left], [right]) => left.localeCompare(right))
-    .filter(([name, value]) => !/password|passwd|secret|credential|token|api[_ -]?key/iu.test(name)
-      && !likelySecret(name) && !likelySecret(value))
+    .filter(([name, value]) => !isSensitiveVariableName(name)
+      && !isLikelySecret(name) && !isLikelySecret(value))
     .slice(0, MAX_WRITING_VARIABLES)
     .map(([name, value]) => {
       requireText(name, 100)
@@ -481,7 +485,7 @@ export function buildGroundedTopicPacket(
       return [name, value]
     }))
   const brandNames = [...new Set(writingGuidance.brandNames)]
-    .filter(name => !likelySecret(name))
+    .filter(name => !isLikelySecret(name))
     .slice(0, MAX_BRAND_NAMES)
   brandNames.forEach(name => requireText(name, 120))
   const guidanceInstructions = writingGuidance.instructions.slice(0, MAX_WRITING_INSTRUCTIONS)
@@ -493,7 +497,7 @@ export function buildGroundedTopicPacket(
   requireText(writingGuidance.styleProfileScope, 40)
   if ([writingGuidance.language, writingGuidance.contentType, writingGuidance.styleProfileId,
     writingGuidance.styleProfileName, writingGuidance.styleProfileScope, ...guidanceInstructions]
-    .some(likelySecret)) throw new GroundedTopicPacketError()
+    .some(isLikelySecret)) throw new GroundedTopicPacketError()
   const safeWritingGuidance = {
     language: writingGuidance.language,
     contentType: writingGuidance.contentType,

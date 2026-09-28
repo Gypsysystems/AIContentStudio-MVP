@@ -13,6 +13,7 @@ import { handleContentCatalog, sendContentCatalogError } from './contentCatalogA
 import { handleAiConnections, sendConnectionError } from './aiConnectionsApi'
 import { handleGroundedToc } from './groundedTocApi'
 import { handleGroundedTopic } from './groundedTopicApi'
+import { handleGenerateTopicJobs } from './generateTopicJobsApi'
 import { handleGroundedRewrite } from './groundedRewriteApi'
 import { handleGroundedAiReview } from './groundedAiReviewApi'
 
@@ -24,6 +25,7 @@ const CONTENT_CATALOG_ENDPOINT = '/api/content-catalog'
 const AI_CONNECTIONS_ENDPOINT = '/api/ai-connections'
 const GROUNDED_TOC_ENDPOINT = '/api/generate-toc'
 const GROUNDED_TOPIC_ENDPOINT = '/api/generate-topic'
+const GROUNDED_TOPIC_JOBS_ENDPOINT = '/api/generate-topic-jobs'
 const GROUNDED_REWRITE_ENDPOINT = '/api/rewrite-topic'
 const GROUNDED_AI_REVIEW_ENDPOINT = '/api/ai-review'
 const MAX_BODY_BYTES = 16 * 1024
@@ -233,6 +235,7 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
       && pathname !== AI_CATALOG_ENDPOINT && pathname !== CONTENT_CATALOG_ENDPOINT
       && pathname !== AI_CONNECTIONS_ENDPOINT
       && pathname !== GROUNDED_TOC_ENDPOINT && pathname !== GROUNDED_TOPIC_ENDPOINT
+      && pathname !== GROUNDED_TOPIC_JOBS_ENDPOINT
       && pathname !== GROUNDED_REWRITE_ENDPOINT
       && pathname !== GROUNDED_AI_REVIEW_ENDPOINT) return next()
     response.setHeader('Cache-Control', 'no-store')
@@ -253,6 +256,7 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
       return
     }
     if ((pathname === GROUNDED_TOC_ENDPOINT || pathname === GROUNDED_TOPIC_ENDPOINT
+      || pathname === GROUNDED_TOPIC_JOBS_ENDPOINT
       || pathname === GROUNDED_REWRITE_ENDPOINT || pathname === GROUNDED_AI_REVIEW_ENDPOINT) && localDev) {
       sendJson(response, 503, { error: 'Grounded AI generation requires an authenticated cloud project', code: 'CLOUD_PROJECT_REQUIRED' })
       return
@@ -272,6 +276,7 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
     if ((pathname === CLOUD_PROJECTS_ENDPOINT || pathname === AI_CATALOG_ENDPOINT
       || pathname === CONTENT_CATALOG_ENDPOINT
       || pathname === GROUNDED_TOC_ENDPOINT || pathname === GROUNDED_TOPIC_ENDPOINT
+      || pathname === GROUNDED_TOPIC_JOBS_ENDPOINT
       || pathname === GROUNDED_REWRITE_ENDPOINT || pathname === GROUNDED_AI_REVIEW_ENDPOINT)
       || pathname === AI_CONNECTIONS_ENDPOINT) {
       if (request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
@@ -303,6 +308,20 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
       void handleGroundedTopic(request, response).catch(() => {
         if (!response.headersSent) {
           sendJson(response, 503, { error: 'Generate Topic is temporarily unavailable', code: 'GENERATE_TOPIC_UNAVAILABLE' })
+        }
+      })
+      return
+    }
+    if (pathname === GROUNDED_TOPIC_JOBS_ENDPOINT) {
+      const length = request.headers['content-length']
+      if (length !== undefined && Number(length) > 4_096) {
+        request.resume()
+        sendJson(response, 413, { error: 'Generate Topic job request is too large', code: 'REQUEST_TOO_LARGE' })
+        return
+      }
+      void handleGenerateTopicJobs(request, response).catch(() => {
+        if (!response.headersSent) {
+          sendJson(response, 503, { error: 'Generate Topic job service is unavailable', code: 'JOBS_UNAVAILABLE' })
         }
       })
       return

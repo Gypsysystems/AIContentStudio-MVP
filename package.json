@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "worker:generate-topic": "node --experimental-transform-types server/generateTopicWorkerEntrypoint.mjs",
+    "test:server": "playwright test --config=playwright.server.config.ts",
     "test:e2e": "playwright test",
     "format": "oxfmt"
   },

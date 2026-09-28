@@ -7851,18 +7851,26 @@ function AiTopicDraftControls({
   allowed,
   projectSupported,
   hasCurrentTopic,
+  currentTopicId,
+  projectId,
   groundingCurrent,
   hasSubstantiveEvidence,
   existingProposalId,
   onGenerate,
+  onEnqueueBackground,
+  onReviewBackground,
 }: {
   allowed: boolean
   projectSupported: boolean
   hasCurrentTopic: boolean
+  currentTopicId: string
+  projectId: string | null
   groundingCurrent: boolean
   hasSubstantiveEvidence: boolean
   existingProposalId: string | null
   onGenerate: (workflowId: string, workflowVersion: number) => Promise<void>
+  onEnqueueBackground: (workflowId: string, workflowVersion: number) => Promise<GenerateTopicJob>
+  onReviewBackground: (job: GenerateTopicJob) => Promise<void>
 }) {
   const [workflows, setWorkflows] = useState<AiAssetVersion[]>([])
   const [selectedWorkflowKey, setSelectedWorkflowKey] = useState('')
@@ -7872,7 +7880,24 @@ function AiTopicDraftControls({
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [replacementConfirmationFor, setReplacementConfirmationFor] = useState<string | null>(null)
+  const [backgroundJob, setBackgroundJob] = useState<GenerateTopicJob | null>(null)
+  const [backgroundBusy, setBackgroundBusy] = useState(false)
+  const [reviewingBackgroundJob, setReviewingBackgroundJob] = useState<GenerateTopicJob | null>(null)
+  const [replacementAction, setReplacementAction] = useState<'sync' | 'background' | null>(null)
   const generationLockRef = useRef(false)
+  const backgroundScopeKey = JSON.stringify([projectId, currentTopicId])
+  const backgroundScopeRef = useRef(backgroundScopeKey)
+  backgroundScopeRef.current = backgroundScopeKey
+  const scopedBackgroundJob = backgroundJob?.projectId === projectId
+    && backgroundJob.topicId === currentTopicId
+    ? backgroundJob
+    : null
+  const backgroundFailureMessage = (cause: unknown) => {
+    const message = cause instanceof Error ? cause.message : 'Background generation could not be resumed.'
+    return /PROJECT_CONFLICT|stale|changed/iu.test(message) && !/rerun/iu.test(message)
+      ? `${message} Rerun generation after refreshing the current topic.`
+      : message
+  }
   const selectedWorkflow = workflows.find(asset => `${asset.id}@${asset.version}` === selectedWorkflowKey)
   const eligible = allowed && hasCurrentTopic && groundingCurrent && hasSubstantiveEvidence
   const capabilityMatches = (asset: AiAssetVersion): boolean => {
@@ -7935,11 +7960,77 @@ function AiTopicDraftControls({
     return () => { active = false }
   }, [allowed, selectedWorkflow?.id, selectedWorkflow?.version])
 
+  useEffect(() => {
+    setBackgroundJob(null)
+    setBackgroundBusy(false)
+    setReviewingBackgroundJob(null)
+    setReplacementConfirmationFor(null)
+    setReplacementAction(null)
+    setError(null)
+  }, [backgroundScopeKey])
+
+  useEffect(() => {
+    let active = true
+    const requestedScope = backgroundScopeKey
+    if (!projectSupported || !allowed || !hasCurrentTopic || !projectId) {
+      setBackgroundJob(null)
+      return () => { active = false }
+    }
+    void requestGenerateTopicJobs({ action: 'list', projectId, topicId: currentTopicId })
+      .then(jobs => {
+        if (!active || backgroundScopeRef.current !== requestedScope) return
+        const latest = jobs
+          .filter(job => job.projectId === projectId && job.topicId === currentTopicId)
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+        if (!latest) {
+          setBackgroundJob(null)
+          return
+        }
+        setBackgroundJob(latest)
+      })
+      .catch(() => {
+        if (active && backgroundScopeRef.current === requestedScope)
+          setError('Background Generate Topic jobs could not be loaded.')
+      })
+    return () => { active = false }
+  }, [projectSupported, allowed, hasCurrentTopic, projectId, currentTopicId, backgroundScopeKey])
+
+  useEffect(() => {
+    let active = true
+    const job = scopedBackgroundJob
+    const requestedScope = backgroundScopeKey
+    if (!job || !['queued', 'running', 'retry-wait'].includes(job.status)) {
+      return () => { active = false }
+    }
+    let delay = 500
+    const poll = async () => {
+      while (active) {
+        await new Promise(resolve => window.setTimeout(resolve, delay))
+        if (!active) return
+        try {
+          const [updated] = await requestGenerateTopicJobs({ action: 'get', jobId: job.jobId })
+          if (!active || backgroundScopeRef.current !== requestedScope
+            || updated.projectId !== projectId || updated.topicId !== currentTopicId) return
+          setBackgroundJob(updated)
+          if (!['queued', 'running', 'retry-wait'].includes(updated.status)) return
+          delay = Math.min(delay * 2, 5000)
+        } catch (cause) {
+          if (active && backgroundScopeRef.current === requestedScope)
+            setError(backgroundFailureMessage(cause))
+          delay = Math.min(delay * 2, 5000)
+        }
+      }
+    }
+    void poll()
+    return () => { active = false }
+  }, [scopedBackgroundJob?.jobId, scopedBackgroundJob?.status, backgroundScopeKey, projectId, currentTopicId])
+
   const generate = async () => {
     if (!selectedWorkflow || readiness?.status !== 'ready' || !eligible || generating
       || generationLockRef.current) return
     if (existingProposalId) {
       setReplacementConfirmationFor(existingProposalId)
+      setReplacementAction('sync')
       return
     }
     await runGeneration()
@@ -7962,11 +8053,64 @@ function AiTopicDraftControls({
     }
   }
 
+  const runBackgroundGeneration = async () => {
+    if (!selectedWorkflow || readiness?.status !== 'ready' || !eligible || generating || backgroundBusy) return
+    const requestedScope = backgroundScopeKey
+    setBackgroundBusy(true)
+    setError(null)
+    try {
+      const job = await onEnqueueBackground(selectedWorkflow.id, selectedWorkflow.version)
+      if (backgroundScopeRef.current === requestedScope
+        && job.projectId === projectId && job.topicId === currentTopicId)
+        setBackgroundJob(job)
+    } catch (cause) {
+      if (backgroundScopeRef.current === requestedScope)
+        setError(backgroundFailureMessage(cause))
+    } finally {
+      if (backgroundScopeRef.current === requestedScope) setBackgroundBusy(false)
+    }
+  }
+
   const confirmReplacementAndGenerate = async () => {
     if (!existingProposalId || replacementConfirmationFor !== existingProposalId
       || generationLockRef.current) return
     setReplacementConfirmationFor(null)
+    const action = replacementAction
+    setReplacementAction(null)
+    if (action === 'background' && reviewingBackgroundJob) {
+      await runReviewBackgroundDraft(reviewingBackgroundJob)
+      return
+    }
     await runGeneration()
+  }
+
+  const runReviewBackgroundDraft = async (job: GenerateTopicJob) => {
+    if (backgroundBusy) return
+    const requestedScope = backgroundScopeKey
+    setBackgroundBusy(true)
+    setError(null)
+    try {
+      await onReviewBackground(job)
+    } catch (cause) {
+      if (backgroundScopeRef.current === requestedScope)
+        setError(backgroundFailureMessage(cause))
+    } finally {
+      if (backgroundScopeRef.current === requestedScope) {
+        setBackgroundBusy(false)
+        setReviewingBackgroundJob(null)
+      }
+    }
+  }
+
+  const reviewCompletedBackgroundDraft = async () => {
+    if (scopedBackgroundJob?.status !== 'succeeded' || !scopedBackgroundJob.draft || backgroundBusy) return
+    if (existingProposalId) {
+      setReviewingBackgroundJob(scopedBackgroundJob)
+      setReplacementAction('background')
+      setReplacementConfirmationFor(existingProposalId)
+      return
+    }
+    await runReviewBackgroundDraft(scopedBackgroundJob)
   }
 
   if (!hasCurrentTopic) return null
@@ -7988,7 +8132,7 @@ function AiTopicDraftControls({
               aria-label="Published Generate Topic workflow"
               data-testid="ai-topic-workflow-select"
               value={selectedWorkflowKey}
-              disabled={loadingWorkflows || generating || workflows.length === 0}
+              disabled={loadingWorkflows || generating || backgroundBusy || workflows.length === 0}
               onChange={event => setSelectedWorkflowKey(event.target.value)}
               className="mt-1 block w-full rounded-lg border border-[#D8D5CF] bg-white px-3 py-2 text-[11px] text-[#22223A]"
             >
@@ -8004,32 +8148,78 @@ function AiTopicDraftControls({
           <button
             type="button"
             data-testid="generate-ai-topic"
-            disabled={!eligible || readiness?.status !== 'ready' || generating}
+            disabled={!eligible || readiness?.status !== 'ready' || generating || backgroundBusy}
             onClick={() => { void generate() }}
             className="author-context-action mt-2 w-full disabled:cursor-not-allowed disabled:opacity-50"
           >
             {generating ? 'Generating…' : 'Generate with AI'}
           </button>
+          <button
+            type="button"
+            data-testid="generate-ai-topic-background"
+            disabled={!eligible || readiness?.status !== 'ready' || generating || backgroundBusy}
+            onClick={() => { void runBackgroundGeneration() }}
+            className="mt-2 w-full rounded-lg border border-[#D8D5CF] bg-[#F9F8F6] px-3 py-2 text-[10px] font-semibold text-[#555568] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {backgroundBusy ? 'Starting or checking background job…' : 'Generate in background'}
+          </button>
+          {scopedBackgroundJob && (
+            <div data-testid="ai-topic-background-status" data-job-id={scopedBackgroundJob.jobId} role="status" className="mt-2 rounded-md border border-[#E2DED7] bg-[#F9F8F6] p-2 text-[10px] text-[#555568]">
+              <p className="font-semibold">Background job {scopedBackgroundJob.status.replace('-', ' ')}</p>
+              <p>{scopedBackgroundJob.phase || 'Waiting for worker'} · attempt {scopedBackgroundJob.attemptCount}/{scopedBackgroundJob.maxAttempts}</p>
+              {scopedBackgroundJob.status === 'failed' && <p className="mt-1 text-[#9A3412]">{scopedBackgroundJob.errorMessage || 'Generation failed. Rerun to try again.'}</p>}
+              {scopedBackgroundJob.status === 'succeeded' && !scopedBackgroundJob.draft && <p className="mt-1 text-[#9A3412]">The completed job has no reviewable draft. No proposal was installed; rerun generation.</p>}
+              {scopedBackgroundJob.status === 'retry-wait' && <p className="mt-1">Retry scheduled{scopedBackgroundJob.nextAttemptAt ? ` · ${new Date(scopedBackgroundJob.nextAttemptAt).toLocaleString()}` : ''}</p>}
+              {scopedBackgroundJob.status === 'succeeded' && !!scopedBackgroundJob.draft && (
+                <button
+                  type="button"
+                  data-testid="review-completed-ai-topic-job"
+                  disabled={backgroundBusy}
+                  onClick={() => { void reviewCompletedBackgroundDraft() }}
+                  className="mt-2 w-full rounded-md bg-[#5B5BD6] px-2 py-1.5 text-[10px] font-semibold text-white disabled:opacity-50"
+                >
+                  {backgroundBusy ? 'Preparing draft review…' : 'Review completed draft'}
+                </button>
+              )}
+              {(scopedBackgroundJob.status === 'failed' || (scopedBackgroundJob.status === 'succeeded' && !scopedBackgroundJob.draft)) && (
+                <button
+                  type="button"
+                  data-testid="rerun-ai-topic-background"
+                  disabled={!eligible || readiness?.status !== 'ready' || backgroundBusy}
+                  onClick={() => { void runBackgroundGeneration() }}
+                  className="mt-2 w-full rounded-md border border-[#D8D5CF] bg-white px-2 py-1.5 text-[10px] font-semibold text-[#555568] disabled:opacity-50"
+                >
+                  Rerun background generation
+                </button>
+              )}
+            </div>
+          )}
           {existingProposalId && replacementConfirmationFor === existingProposalId && (
             <div data-testid="ai-topic-replacement-confirmation" className="mt-2 rounded-md border border-[#F2C98A] bg-[#FFF8E8] p-2">
               <p className="text-[10px] leading-relaxed text-[#805B18]">
-                A saved draft proposal already exists for this topic. Generating again will replace it only after the new proposal is saved.
+                {replacementAction === 'background'
+                  ? 'A saved draft proposal already exists for this topic. Reviewing this completed draft will replace it only after the new proposal is saved.'
+                  : 'A saved draft proposal already exists for this topic. Generating again will replace it only after the new proposal is saved.'}
               </p>
               <div className="mt-2 flex gap-2">
                 <button
                   type="button"
                   data-testid="confirm-ai-topic-proposal-replacement"
-                  disabled={!eligible || readiness?.status !== 'ready' || generating}
+                  disabled={!eligible || readiness?.status !== 'ready' || generating || backgroundBusy}
                   onClick={() => { void confirmReplacementAndGenerate() }}
                   className="flex-1 rounded-md bg-[#5B5BD6] px-2 py-1.5 text-[10px] font-semibold text-white disabled:opacity-50"
                 >
-                  {generating ? 'Generating…' : 'Replace proposal and generate'}
+                  {generating || backgroundBusy ? 'Working…' : replacementAction === 'background' ? 'Replace proposal and review draft' : 'Replace proposal and generate'}
                 </button>
                 <button
                   type="button"
                   data-testid="cancel-ai-topic-proposal-replacement"
-                  disabled={generating}
-                  onClick={() => setReplacementConfirmationFor(null)}
+                  disabled={generating || backgroundBusy}
+                  onClick={() => {
+                    setReplacementConfirmationFor(null)
+                    setReplacementAction(null)
+                    setReviewingBackgroundJob(null)
+                  }}
                   className="rounded-md border border-[#D8D5CF] bg-white px-2 py-1.5 text-[10px] font-medium text-[#555568] disabled:opacity-50"
                 >
                   Keep current
@@ -8057,6 +8247,86 @@ function AiTopicDraftControls({
       )}
     </section>
   )
+}
+
+type GenerateTopicJob = {
+  jobId: string
+  projectId: string
+  topicId: string
+  workflowId: string
+  workflowVersion: number
+  inputRevision: number
+  status: 'queued' | 'running' | 'retry-wait' | 'succeeded' | 'failed'
+  phase: string
+  attemptCount: number
+  maxAttempts: number
+  nextAttemptAt: string | null
+  createdAt: string
+  updatedAt: string
+  draft?: unknown
+  errorCode?: string | null
+  errorMessage?: string | null
+}
+
+async function requestGenerateTopicJobs(command: Record<string, unknown>): Promise<GenerateTopicJob[]> {
+  let response: Response
+  try {
+    response = await fetch('/api/generate-topic-jobs', {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(command),
+    })
+  } catch {
+    throw new Error('The background Generate Topic service could not be reached.')
+  }
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    throw new Error('The background Generate Topic service returned an invalid response.')
+  }
+  const result = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+  if (!response.ok) {
+    const code = typeof result?.code === 'string'
+      ? result.code
+      : typeof result?.errorCode === 'string' ? result.errorCode : ''
+    const serviceMessage = typeof result?.error === 'string'
+      ? result.error
+      : typeof result?.message === 'string' ? result.message : null
+    const message = code === 'WORKER_UNAVAILABLE'
+      ? 'Background Generate Topic is unavailable because no worker is online. Synchronous Generate with AI remains available.'
+      : serviceMessage ?? 'Background Generate Topic request failed.'
+    throw new Error(message)
+  }
+  if (command.action === 'list') {
+    if (!result || !Array.isArray(result.jobs) || !result.jobs.every(isGenerateTopicJob))
+      throw new Error('The background Generate Topic service returned invalid jobs.')
+    return result.jobs
+  }
+  if (!result?.job || !isGenerateTopicJob(result.job))
+    throw new Error('The background Generate Topic service returned an invalid job.')
+  return [result.job]
+}
+
+function isGenerateTopicJob(value: unknown): value is GenerateTopicJob {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const job = value as Record<string, unknown>
+  return typeof job.jobId === 'string'
+    && typeof job.projectId === 'string'
+    && typeof job.topicId === 'string'
+    && typeof job.workflowId === 'string'
+    && Number.isSafeInteger(job.workflowVersion)
+    && Number.isSafeInteger(job.inputRevision)
+    && ['queued', 'running', 'retry-wait', 'succeeded', 'failed'].includes(String(job.status))
+    && typeof job.phase === 'string'
+    && Number.isSafeInteger(job.attemptCount)
+    && Number.isSafeInteger(job.maxAttempts)
+    && (job.nextAttemptAt === null || typeof job.nextAttemptAt === 'string')
+    && typeof job.createdAt === 'string'
+    && typeof job.updatedAt === 'string'
+    && (job.errorMessage === undefined || job.errorMessage === null || typeof job.errorMessage === 'string')
 }
 
 function AiTopicRewriteControls({
@@ -10168,7 +10438,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, contentExplorer, contentExplorerAssets, onContentExplorerChange, explorerReadOnly, canBrowseCatalog, canCopyCatalog, loadCatalogProjects, loadCatalogItems, loadCatalogPreview, onCatalogCopy, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, onRewriteAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; contentExplorer: ContentExplorerMetadata; contentExplorerAssets: ContentExplorerAssets; onContentExplorerChange: (metadata: ContentExplorerMetadata) => void; explorerReadOnly: boolean; canBrowseCatalog?: boolean; canCopyCatalog?: boolean; loadCatalogProjects?: () => Promise<ResourcePickerSourceProject[]>; loadCatalogItems?: (filters: { projectId?: string; assetType?: ResourcePickerItem['assetType']; search?: string; limit: number; offset: number }) => Promise<ResourcePickerItem[]>; loadCatalogPreview?: (item: ResourcePickerItem) => Promise<ResourcePickerPreview>; onCatalogCopy?: (item: ResourcePickerItem, version: number, afterTopicId: string | null) => Promise<void>; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; onRewriteAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, contentExplorer, contentExplorerAssets, onContentExplorerChange, explorerReadOnly, canBrowseCatalog, canCopyCatalog, loadCatalogProjects, loadCatalogItems, loadCatalogPreview, onCatalogCopy, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, onRewriteAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; contentExplorer: ContentExplorerMetadata; contentExplorerAssets: ContentExplorerAssets; onContentExplorerChange: (metadata: ContentExplorerMetadata) => void; explorerReadOnly: boolean; canBrowseCatalog?: boolean; canCopyCatalog?: boolean; loadCatalogProjects?: () => Promise<ResourcePickerSourceProject[]>; loadCatalogItems?: (filters: { projectId?: string; assetType?: ResourcePickerItem['assetType']; search?: string; limit: number; offset: number }) => Promise<ResourcePickerItem[]>; loadCatalogPreview?: (item: ResourcePickerItem) => Promise<ResourcePickerPreview>; onCatalogCopy?: (item: ResourcePickerItem, version: number, afterTopicId: string | null) => Promise<void>; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number, jobId?: string, onJobUpdate?: (job: GenerateTopicJob) => void) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; onRewriteAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
@@ -10892,7 +11162,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
       )
     : []
 
-  const handleGenerateAiTopicDraft = async (workflowId: string, workflowVersion: number) => {
+  const handleGenerateAiTopicDraft = async (
+    workflowId: string,
+    workflowVersion: number,
+    jobId?: string,
+    onJobUpdate?: (job: GenerateTopicJob) => void,
+  ) => {
     if (!activeStableTopicId || !onGenerateAiTopicDraft) {
       setTopicAiWarning('Select a committed TOC topic before generating an AI draft.')
       return
@@ -10900,20 +11175,32 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     setContentSugLoading(true)
     setTopicAiWarning(null)
     try {
-      const result = await onGenerateAiTopicDraft(activeStableTopicId, workflowId, workflowVersion)
+      const result = await onGenerateAiTopicDraft(activeStableTopicId, workflowId, workflowVersion, jobId, onJobUpdate)
+      if (onJobUpdate) {
+        const job = (result as typeof result & { job?: GenerateTopicJob }).job
+        if (!job) throw new Error('The background service did not return a job to track.')
+        return job
+      }
       if (!result.draft) {
-        setTopicAiWarning(result.error ?? 'AI topic generation failed. No draft proposal was installed.')
-        return
+        throw new Error(result.error ?? 'AI topic generation failed. No draft proposal was installed.')
       }
       setDraftOpen(true)
       setConfirmDraftApply(false)
+      return undefined
     } catch (cause) {
       setTopicAiWarning(cause instanceof Error
         ? cause.message
         : 'AI topic generation failed. No draft proposal was installed.')
+      if (jobId || onJobUpdate) throw cause
     } finally {
       setContentSugLoading(false)
     }
+  }
+
+  const enqueueAiTopicJob = async (workflowId: string, workflowVersion: number) => {
+    const job = await handleGenerateAiTopicDraft(workflowId, workflowVersion, undefined, () => {})
+    if (!job) throw new Error('The background job could not be started.')
+    return job
   }
 
   const handleRewriteAiTopicDraft = async (workflowId: string, workflowVersion: number) => {
@@ -11314,11 +11601,21 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               allowed={!!projectId && !isDemoMode && !!canGenerateAiTopic}
               projectSupported={!!projectId && !isDemoMode && isCloudProjectMode()}
               hasCurrentTopic={!!activeStableTopicId && !!activeTopic}
+              currentTopicId={activeStableTopicId ?? ''}
+              projectId={projectId ?? null}
               groundingCurrent={activeGroundingFresh}
               hasSubstantiveEvidence={hasSubstantiveActiveTopicEvidence}
               existingProposalId={activeRegenerationProposal?.proposalId ?? null}
-              onGenerate={(workflowId, workflowVersion) =>
-                handleGenerateAiTopicDraft(workflowId, workflowVersion)}
+              onGenerate={async (workflowId, workflowVersion) => {
+                await handleGenerateAiTopicDraft(workflowId, workflowVersion)
+              }}
+              onEnqueueBackground={async (workflowId, workflowVersion) => {
+                const job = await enqueueAiTopicJob(workflowId, workflowVersion)
+                if (!job) throw new Error('The background job could not be started.')
+                return job
+              }}
+              onReviewBackground={job =>
+                handleGenerateAiTopicDraft(job.workflowId, job.workflowVersion, job.jobId).then(() => {})}
             />
             <AiTopicRewriteControls
               allowed={!!projectId && !isDemoMode && !!canGenerateAiTopic}
@@ -17724,7 +18021,9 @@ export default function App() {
     topicId: string,
     workflowId: string,
     workflowVersion: number,
-  ): Promise<{ draft: AuthorTopicDraft | null; error: string | null }> => {
+    backgroundJobId?: string,
+    onJobUpdate?: (job: GenerateTopicJob) => void,
+  ): Promise<{ draft: AuthorTopicDraft | null; error: string | null; job?: GenerateTopicJob }> => {
     const targetProjectId = projectIdRef.current
     if (!targetProjectId || !isCloudProjectMode() || isDemoMode)
       throw new Error('AI Generate Topic is available only for a cloud project.')
@@ -17774,28 +18073,57 @@ export default function App() {
       tocRevision: beforeRecord.tocRevision,
     })
 
-    let response: Response
-    try {
-      response = await fetch('/api/generate-topic', {
-        method: 'POST',
-        credentials: 'same-origin',
-        cache: 'no-store',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: targetProjectId, topicId, workflowId, workflowVersion }),
-      })
-    } catch {
-      throw new Error('The AI Generate Topic service could not be reached. No deterministic fallback was used.')
+    let response: Response | null = null
+    let result: Record<string, unknown> | null = null
+    if (onJobUpdate) {
+      const job = (await requestGenerateTopicJobs({
+        action: 'enqueue',
+        projectId: targetProjectId,
+        topicId,
+        workflowId,
+        workflowVersion,
+      }))[0]
+      if (job.projectId !== targetProjectId || job.topicId !== topicId
+        || job.workflowId !== workflowId || job.workflowVersion !== workflowVersion
+        || job.inputRevision !== startingRevision)
+        throw new Error('The background job does not match the current project, topic, workflow, or revision. Rerun generation.')
+      return { draft: null, error: null, job }
+    } else if (backgroundJobId) {
+      const job = (await requestGenerateTopicJobs({ action: 'get', jobId: backgroundJobId }))[0]
+      if (job.projectId !== targetProjectId || job.topicId !== topicId
+        || job.workflowId !== workflowId || job.workflowVersion !== workflowVersion
+        || job.inputRevision !== startingRevision)
+        throw new Error('The background job does not match the current project, topic, workflow, or revision. Rerun generation.')
+      if (job.status !== 'succeeded')
+        throw new Error(job.status === 'failed'
+          ? job.errorMessage || 'Background Generate Topic failed. Rerun generation to try again.'
+          : 'This background draft is not complete yet. Wait for completion and review it again.')
+      if (!job.draft || typeof job.draft !== 'object' || Array.isArray(job.draft))
+        throw new Error('The background job completed without a valid draft. Rerun generation.')
+      result = { draft: job.draft, recordRevision: job.inputRevision }
+    } else {
+      try {
+        response = await fetch('/api/generate-topic', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: targetProjectId, topicId, workflowId, workflowVersion }),
+        })
+      } catch {
+        throw new Error('The AI Generate Topic service could not be reached. No deterministic fallback was used.')
+      }
+      let body: unknown
+      try {
+        body = await response.json()
+      } catch {
+        throw new Error('The AI Generate Topic service returned an invalid response.')
+      }
+      result = body && typeof body === 'object' && !Array.isArray(body)
+        ? body as Record<string, unknown>
+        : null
     }
-    let body: unknown
-    try {
-      body = await response.json()
-    } catch {
-      throw new Error('The AI Generate Topic service returned an invalid response.')
-    }
-    const result = body && typeof body === 'object' && !Array.isArray(body)
-      ? body as Record<string, unknown>
-      : null
-    if (!response.ok) {
+    if (response && !response.ok) {
       const code = result && typeof result.code === 'string' ? result.code : ''
       const messages: Record<string, string> = {
         PROJECT_CONFLICT: 'The project or topic changed during generation. Reload and try again.',
@@ -17827,7 +18155,7 @@ export default function App() {
       }
       throw new Error(messages[code] ?? 'AI topic generation failed. No draft proposal was installed.')
     }
-    if (!result || Object.keys(result).sort().join(',') !== 'draft,recordRevision'
+    if (!result || (!backgroundJobId && !onJobUpdate && Object.keys(result).sort().join(',') !== 'draft,recordRevision')
       || !Number.isSafeInteger(result.recordRevision)
       || result.recordRevision !== startingRevision
       || !result.draft || typeof result.draft !== 'object' || Array.isArray(result.draft))

@@ -202,6 +202,21 @@ export async function executeGroundedTopic(
     undefined,
     true,
   )
+  return executeGroundedTopicWithTrustedContext(value, project, bundle, projectStore, dependencies, snapshot)
+}
+
+export async function executeGroundedTopicWithTrustedContext(
+  value: unknown,
+  project: ProjectContext,
+  bundle: AiWorkflowExecutionBundle,
+  projectStore: GroundedTopicProjectStore,
+  dependencies: Pick<GroundedTopicDependencies, 'generateText' | 'now'> = {},
+  expectedSnapshot?: GroundedTopicSnapshot,
+): Promise<{ draft: ReturnType<typeof makeDraft>; recordRevision: number }> {
+  validateInput(value)
+  if (!['owner', 'admin', 'editor'].includes(project.role))
+    throw new GroundedTopicApiError(403, 'FORBIDDEN', 'Workspace write permission is required to generate a topic draft')
+  const snapshot = expectedSnapshot ?? buildGroundedTopicSnapshot(project.record, value.topicId)
   if (bundle.workflow.state !== 'published'
     || bundle.promptPack.state !== 'published'
     || bundle.referenceSet.state !== 'published'
