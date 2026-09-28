@@ -263,6 +263,8 @@ test('desktop Author workspace prioritizes the editor and opens topic context on
   await expect(outline).toBeVisible()
   await expect(editor).toBeVisible()
   await expect(context).toHaveCount(0)
+  const editorBeforeContext = await editor.boundingBox()
+  expect(editorBeforeContext).not.toBeNull()
   await page.getByTestId('author-ai-assist').click()
   await expect(context).toBeVisible()
 
@@ -277,7 +279,11 @@ test('desktop Author workspace prioritizes the editor and opens topic context on
   expect(outlineBox!.width).toBeLessThanOrEqual(260)
   expect(editorBox!.width).toBeGreaterThan(outlineBox!.width)
   expect(outlineBox!.x + outlineBox!.width).toBeLessThanOrEqual(editorBox!.x + 2)
-  expect(editorBox!.x + editorBox!.width).toBeLessThanOrEqual(contextBox!.x + 2)
+  await expect(context).toHaveAttribute('role', 'dialog')
+  await expect(context).toHaveAttribute('aria-modal', 'false')
+  expect(Math.abs(editorBox!.width - editorBeforeContext!.width)).toBeLessThanOrEqual(2)
+  expect(Math.min(editorBox!.x + editorBox!.width, contextBox!.x + contextBox!.width))
+    .toBeGreaterThan(Math.max(editorBox!.x, contextBox!.x))
 
   const topicRows = outline.locator('[data-topic-id]')
   await expect.poll(() => topicRows.count()).toBeGreaterThanOrEqual(2)
@@ -313,6 +319,39 @@ test('desktop Author workspace prioritizes the editor and opens topic context on
   await page.getByTestId('author-context-tab-assist').click()
 })
 
+test('Author module rail navigates project stages and More opens Knowledge Map', async ({ page }) => {
+  const projectName = `Author module rail ${Date.now()}`
+  await prepareAuthor(page, projectName)
+
+  const rail = page.getByRole('navigation', { name: 'Project modules' })
+  for (const label of ['Project Home', 'Sources', 'Structure — Analyze & Structure', 'Author', 'Review', 'Publish']) {
+    await expect(rail.getByRole('button', { name: label, exact: true })).toBeVisible()
+  }
+  await expect(rail.getByRole('button', { name: 'Author', exact: true }))
+    .toHaveAttribute('aria-current', 'page')
+  await expect(page.locator('header').getByRole('button', { name: /^Author\b/ })).toHaveCount(0)
+  await rail.getByRole('button', { name: 'Review', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Grounded Review' })).toBeVisible()
+
+  await page.locator('header').getByRole('button', { name: /^Author,/ }).click()
+  await expect(page.getByRole('navigation', { name: 'Project modules' })
+    .getByRole('button', { name: 'Author', exact: true })).toHaveAttribute('aria-current', 'page')
+  const moreMenu = page.getByTestId('author-editor')
+    .locator('details:has(> summary:text-is("More"))')
+  await moreMenu.locator('summary').click()
+  await expect(moreMenu).toHaveAttribute('open', '')
+  await expect(moreMenu.getByRole('button', { name: 'Knowledge Map' })).toBeVisible()
+  await expect(moreMenu.getByRole('button', { name: 'Style profile' })).toBeVisible()
+  await expect(moreMenu.getByRole('button', { name: 'Toggle source references' })).toBeVisible()
+  await expect(moreMenu.getByRole('button', { name: 'Conditions' })).toBeVisible()
+  await expect(moreMenu.getByRole('button', { name: 'References', exact: true })).toBeVisible()
+  await moreMenu.getByRole('button', { name: 'Knowledge Map' }).click()
+  const returnToAuthor = page.getByRole('button', { name: '← Author' })
+  await expect(returnToAuthor).toBeVisible()
+  await returnToAuthor.click()
+  await expect(page.getByTestId('author-workspace')).toBeVisible()
+})
+
 test('Author Content Explorer persists project organization without changing committed topics or authored blocks', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   const projectName = `Author explorer ${Date.now()}`
@@ -320,7 +359,12 @@ test('Author Content Explorer persists project organization without changing com
   const original = await readProject(page, projectName)
   await expect(page.getByTestId('author-outline')).toBeVisible()
   await expect(page.getByTestId('content-explorer-panel')).toHaveCount(0)
-  await page.getByRole('button', { name: 'Browse content' }).click()
+  const contentPane = page.locator('.author-outline-shell')
+  const contentOptions = contentPane.locator('details')
+  await contentOptions.locator('summary[title="Content options"]').click()
+  await expect(contentOptions).toHaveAttribute('open', '')
+  await expect(contentOptions.getByRole('button', { name: 'Browse existing content' })).toBeVisible()
+  await contentOptions.getByRole('button', { name: 'Browse existing content' }).click()
   await expect(page.getByTestId('content-explorer-panel')).toBeVisible()
   await expect(page.getByTestId('author-outline')).toHaveCount(0)
 
@@ -354,7 +398,11 @@ test('Author Content Explorer persists project organization without changing com
 
   await page.reload()
   await authorStep(page).click()
-  await page.getByRole('button', { name: 'Browse content' }).click()
+  const restoredContentOptions = page.locator('.author-outline-shell').locator('details')
+  await restoredContentOptions.locator('summary[title="Content options"]').click()
+  await expect(restoredContentOptions).toHaveAttribute('open', '')
+  await expect(restoredContentOptions.getByRole('button', { name: 'Browse existing content' })).toBeVisible()
+  await restoredContentOptions.getByRole('button', { name: 'Browse existing content' }).click()
   const restoredFolder = page.locator('[data-folder-id]').filter({ hasText: 'Working Set' }).first()
   await restoredFolder.getByRole('button', { name: 'Expand Working Set' }).click()
   await expect(restoredFolder.getByTestId('content-explorer-item-topic-topic-recovery')).toBeVisible()
@@ -443,6 +491,8 @@ test('Review finding opens its exact Author topic and preserves manual and appro
   await page.getByTestId('author-ai-assist').click()
   await page.getByTestId('author-context-tab-review').click()
   await expect(page.getByTestId('author-review-finding').filter({ hasText: claim })).toBeVisible()
+  await page.getByTestId('author-context').getByRole('button', { name: 'Close context panel' }).click()
+  await expect(page.getByTestId('author-context')).toHaveCount(0)
   await page.getByTestId('real-review-author-context').getByRole('button', { name: /Back to Review/ }).click()
   await expect(page.getByTestId('real-review-findings')).toBeVisible()
 

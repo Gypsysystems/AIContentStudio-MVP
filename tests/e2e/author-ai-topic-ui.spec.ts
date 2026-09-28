@@ -363,10 +363,16 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
     .getByText("Prepare the Field Kit", { exact: true }).click()
   await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-grounding-toggle").click()
-  await page.getByTestId("refresh-author-grounding").click()
+  const groundingInspector = page.getByTestId("author-grounding-inspector")
+  await expect(groundingInspector).toBeVisible()
+  const refreshGrounding = groundingInspector.getByTestId("refresh-author-grounding")
+  await expect(refreshGrounding).toBeVisible()
+  await expect(refreshGrounding).toBeEnabled()
+  await refreshGrounding.click()
   await expect.poll(() => projectRecord?.authorTopicMetadata?.["stable-setup"]?.groundingContext?.contextId)
     .toMatch(/^grounding-/)
-  await page.getByTestId("author-grounding-inspector").getByRole("button", { name: "Close grounding inspector" }).click()
+  await groundingInspector.getByRole("button", { name: "Close grounding inspector" }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-context-tab-assist").click()
   const controls = page.getByTestId("ai-topic-controls")
   await expect(controls).toContainText("Workflow ready")
@@ -389,6 +395,7 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
 
   await page.getByTestId("author-draft-inspector")
     .getByRole("button", { name: "Close draft inspector" }).click()
+  await page.getByTestId("author-ai-assist").click()
   await controls.getByTestId("generate-ai-topic-background").click()
   await expect(controls.getByTestId("ai-topic-error")).toContainText("no worker is online")
   await expect(controls.getByTestId("generate-ai-topic")).toBeEnabled()
@@ -424,10 +431,13 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-context-tab-assist").click()
   const reopenedControls = page.getByTestId("ai-topic-controls")
-  const closeDraftInspectorIfOpen = async () => {
+  const closeDraftInspectorAndRestoreAssistIfOpen = async () => {
     const closeButton = page.getByTestId("author-draft-inspector")
       .getByRole("button", { name: "Close draft inspector" })
-    if (await closeButton.isVisible()) await closeButton.click()
+    if (await closeButton.isVisible()) {
+      await closeButton.click()
+      await page.getByTestId("author-ai-assist").click()
+    }
   }
   await expect(reopenedControls.getByTestId("ai-topic-background-status")).toContainText("succeeded")
   await expect(reopenedControls.getByTestId("review-completed-ai-topic-job")).toBeVisible()
@@ -445,7 +455,7 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   // Reopening and changing topic can advance the saved project revision. Use
   // a fresh job for the consent/replacement path so it is current at review.
   const jobsBeforeCurrentRevisionGeneration = backgroundJobs.length
-  await closeDraftInspectorIfOpen()
+  await closeDraftInspectorAndRestoreAssistIfOpen()
   await reopenedControls.getByTestId("generate-ai-topic-background").click()
   await expect.poll(() => backgroundJobs.length).toBe(jobsBeforeCurrentRevisionGeneration + 1)
   const currentRevisionJob = backgroundJobs[jobsBeforeCurrentRevisionGeneration]
@@ -470,7 +480,7 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   // rollback may advance the project revision. Generate against that revision
   // rather than bypassing the review-time freshness check with an old job.
   const jobsBeforeFreshGeneration = backgroundJobs.length
-  await closeDraftInspectorIfOpen()
+  await closeDraftInspectorAndRestoreAssistIfOpen()
   await reopenedControls.getByTestId("generate-ai-topic-background").click()
   await expect.poll(() => backgroundJobs.length).toBe(jobsBeforeFreshGeneration + 1)
   const freshJob = backgroundJobs[jobsBeforeFreshGeneration]
@@ -487,7 +497,7 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
 
   failNextBackgroundJob = true
   const jobsBeforeFailure = backgroundJobs.length
-  await closeDraftInspectorIfOpen()
+  await closeDraftInspectorAndRestoreAssistIfOpen()
   await reopenedControls.getByTestId("generate-ai-topic-background").click()
   await expect.poll(() => backgroundJobs.length).toBe(jobsBeforeFailure + 1)
   const failedJob = backgroundJobs[jobsBeforeFailure]
@@ -496,7 +506,7 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   await expect(reopenedControls.getByTestId("ai-topic-background-status")).toContainText("failed")
   expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(completedJobDraftId)
   const jobsBeforeRerun = backgroundJobs.length
-  await closeDraftInspectorIfOpen()
+  await closeDraftInspectorAndRestoreAssistIfOpen()
   await reopenedControls.getByTestId("rerun-ai-topic-background").click()
   await expect.poll(() => backgroundJobs.length).toBe(jobsBeforeRerun + 1)
   const rerunJob = backgroundJobs[jobsBeforeRerun]

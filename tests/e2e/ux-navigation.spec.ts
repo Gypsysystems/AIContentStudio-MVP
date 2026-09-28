@@ -16,6 +16,11 @@ function workflowStep(page: Page, label: string) {
   })
 }
 
+function authorModule(page: Page) {
+  return page.getByRole("navigation", { name: "Project modules" })
+    .getByRole("button", { name: "Author", exact: true })
+}
+
 test("shows five authoring stages and nests Analysis and TOC under Analyze & Structure", async ({ page }) => {
   await createProject(page, `UX workflow ${Date.now()}`)
 
@@ -46,7 +51,7 @@ test("opens project details and theme styling from the project header", async ({
   await expect(page.getByRole("heading", { name: "Theme & Style Profiles" })).toBeVisible()
 })
 
-test("exposes the active stage and completed source state accessibly", async ({ page }) => {
+test("exposes the active Author module after source material is ready", async ({ page }) => {
   await createProject(page, `UX stage states ${Date.now()}`)
 
   const sources = workflowStep(page, "Sources")
@@ -60,11 +65,9 @@ test("exposes the active stage and completed source state accessibly", async ({ 
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current", { timeout: 15_000 })
   await workflowStep(page, "Author").click()
 
-  const completedSources = workflowStep(page, "Sources")
-  await expect(completedSources).not.toHaveAttribute("aria-current", "step")
-  const state = await completedSources.getAttribute("aria-label")
-    ?? await completedSources.getAttribute("title")
-  expect(state).toMatch(/complete/i)
+  await expect(authorModule(page)).toHaveAttribute("aria-current", "page")
+  await expect(page.getByRole("navigation", { name: "Project modules" })
+    .getByRole("button", { name: "Sources", exact: true })).toBeVisible()
 })
 
 test("keeps Review-to-Author navigation and direct stage navigation available", async ({ page }) => {
@@ -73,9 +76,10 @@ test("keeps Review-to-Author navigation and direct stage navigation available", 
   await workflowStep(page, "Review").click()
   await expect(page.getByRole("heading", { name: "Grounded Review" })).toBeVisible()
   await workflowStep(page, "Author").click()
-  await expect(workflowStep(page, "Author")).toHaveAttribute("aria-current", "step")
+  await expect(authorModule(page)).toHaveAttribute("aria-current", "page")
 
-  await workflowStep(page, "Publish").click()
+  await page.getByRole("navigation", { name: "Project modules" })
+    .getByRole("button", { name: "Publish", exact: true }).click()
   await expect(workflowStep(page, "Publish")).toHaveAttribute("aria-current", "step")
   await workflowStep(page, "Sources").click()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
@@ -100,7 +104,7 @@ test("keeps the workflow keyboard accessible and usable at a narrow viewport", a
   await author.focus()
   await expect(author).toBeFocused()
   await page.keyboard.press("Enter")
-  await expect(author).toHaveAttribute("aria-current", "step")
+  await expect(authorModule(page)).toHaveAttribute("aria-current", "page")
 
   const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth)
   expect(documentWidth).toBeLessThanOrEqual(376)
@@ -125,11 +129,12 @@ test("project settings edits the same project and returns to the previous stage"
   const renamed = `${originalName} updated`
   await createProject(page, originalName)
   await workflowStep(page, "Author").click()
-  await page.locator("header").getByRole("button", { name: "Project Settings" }).click()
+  await page.getByRole("navigation", { name: "Project modules" })
+    .getByRole("button", { name: "Settings — Project Settings" }).click()
   await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill(renamed)
   await page.getByRole("button", { name: "Save changes" }).click()
-  await expect(workflowStep(page, "Author")).toHaveAttribute("aria-current", "step")
+  await expect(authorModule(page)).toHaveAttribute("aria-current", "page")
   await page.locator("header").getByRole("button", { name: "Content Studio home" }).click()
   await expect(page.getByText(renamed, { exact: true })).toHaveCount(1)
   await expect(page.getByText(originalName, { exact: true })).toHaveCount(0)

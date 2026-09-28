@@ -14,3 +14,9 @@ Tests that inject authored topic content directly into persisted project records
 **Why:** An artificial record with content but missing metadata has a different Review input fingerprint before and after hydration. A completed run against the pre-hydration fingerprint should not be represented as current.
 
 **How to apply:** Prefer editing through Author in end-to-end tests. If a fixture must patch persisted content directly, normalize the corresponding metadata with the same project context used on hydration before saving the fixture.
+
+Do not assume that reloading a project immediately reconciles persisted generated-freshness metadata before Author is opened. An end-to-end assertion that expects a patched project's freshness to become stale immediately on reload also fails on the clean starting revision, before any Author UI changes.
+
+**Why:** Project loading and Author hydration have distinct timing. A UI layout change cannot establish a pre-Author persistence invariant that the starting revision does not have.
+
+**How to apply:** When investigating a draft-freshness failure, distinguish persisted metadata immediately after reload from what Author displays after topic hydration. Compare against the untouched revision before attributing the failure to an Author UI change.
