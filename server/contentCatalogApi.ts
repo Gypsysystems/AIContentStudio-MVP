@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { copyCatalogAsset, ContentCopyError, type CopyJson, type CopySourceItem } from './contentCatalogCopy'
 
 const ACCESS_COOKIE = 'sb_access_token'
 const MAX_TOKEN_LENGTH = 8192
@@ -82,6 +83,13 @@ function validateTextId(value: unknown, field: string, maximum = 256): string {
   return value
 }
 
+function validateCopyId(value: unknown, field: string, maximum = 512): string {
+  const id = validateTextId(value, field, maximum)
+  if (/[\\/]/.test(id))
+    throw new ContentCatalogApiError(400, 'INVALID_ID', `${field} must be a valid stable ID`)
+  return id
+}
+
 function assertKeys(input: Json, allowed: string[]): void {
   if (Object.keys(input).some(key => !allowed.includes(key)))
     throw new ContentCatalogApiError(400, 'UNEXPECTED_FIELD', 'Unexpected request fields are not allowed')
@@ -91,21 +99,35 @@ type ListInput = {
   action: 'list'
   workspaceId: string
   projectId?: string
+  excludeProjectId?: string
   assetType?: string
   search?: string
   limit: number
   offset: number
 }
 type VersionInput = { action: 'version'; workspaceId: string; itemId: string; version: number }
-type CatalogInput = ListInput | VersionInput
+type CopyInput = {
+  action: 'copy'
+  workspaceId: string
+  sourceItemId: string
+  sourceVersion: number
+  destinationProjectId: string
+  expectedRevision: number
+  insertion?: { afterTopicId: string }
+}
+type CatalogInput = ListInput | VersionInput | CopyInput
 
 function validateRequest(value: unknown): CatalogInput {
   if (!isObject(value) || typeof value.action !== 'string')
     throw new ContentCatalogApiError(400, 'INVALID_REQUEST', 'A JSON content catalog request is required')
   if (value.action === 'list') {
-    assertKeys(value, ['action', 'workspaceId', 'projectId', 'assetType', 'search', 'limit', 'offset'])
+    assertKeys(value, ['action', 'workspaceId', 'projectId', 'excludeProjectId', 'assetType', 'search', 'limit', 'offset'])
     const workspaceId = validateUuid(value.workspaceId, 'workspaceId')
     const projectId = value.projectId === undefined ? undefined : validateTextId(value.projectId, 'projectId')
+    const excludeProjectId = value.excludeProjectId === undefined
+      ? undefined : validateTextId(value.excludeProjectId, 'excludeProjectId')
+    if (projectId !== undefined && projectId === excludeProjectId)
+      throw new ContentCatalogApiError(400, 'PROJECT_FILTER_CONFLICT', 'projectId cannot match excludeProjectId')
     const assetType = value.assetType === undefined ? undefined : validateTextId(value.assetType, 'assetType', 100)
     if (assetType !== undefined && !ASSET_TYPES.includes(assetType as typeof ASSET_TYPES[number]))
       throw new ContentCatalogApiError(400, 'INVALID_ASSET_TYPE', 'assetType must be a supported content catalog type')
@@ -122,7 +144,10 @@ function validateRequest(value: unknown): CatalogInput {
       throw new ContentCatalogApiError(400, 'INVALID_LIMIT', `limit must be an integer from 1 to ${MAX_PAGE_SIZE}`)
     if (!Number.isSafeInteger(offset) || (offset as number) < 0 || (offset as number) > MAX_OFFSET)
       throw new ContentCatalogApiError(400, 'INVALID_OFFSET', `offset must be an integer from 0 to ${MAX_OFFSET}`)
-    return { action: 'list', workspaceId, projectId, assetType, search, limit: limit as number, offset: offset as number }
+    return {
+      action: 'list', workspaceId, projectId, excludeProjectId, assetType, search,
+      limit: limit as number, offset: offset as number,
+    }
   }
   if (value.action === 'version') {
     assertKeys(value, ['action', 'workspaceId', 'itemId', 'version'])
@@ -132,19 +157,46 @@ function validateRequest(value: unknown): CatalogInput {
       throw new ContentCatalogApiError(400, 'INVALID_VERSION', 'version must be a positive 32-bit integer')
     return { action: 'version', workspaceId, itemId, version: value.version as number }
   }
+  if (value.action === 'copy') {
+    assertKeys(value, [
+      'action', 'workspaceId', 'sourceItemId', 'sourceVersion',
+      'destinationProjectId', 'expectedRevision', 'insertion',
+    ])
+    const workspaceId = validateUuid(value.workspaceId, 'workspaceId')
+    const sourceItemId = validateUuid(value.sourceItemId, 'sourceItemId')
+    const destinationProjectId = validateCopyId(value.destinationProjectId, 'destinationProjectId', 256)
+    if (!Number.isSafeInteger(value.sourceVersion) || (value.sourceVersion as number) < 1
+      || (value.sourceVersion as number) > 2_147_483_647)
+      throw new ContentCatalogApiError(400, 'INVALID_VERSION', 'sourceVersion must be a positive 32-bit integer')
+    if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0)
+      throw new ContentCatalogApiError(400, 'INVALID_REVISION', 'expectedRevision must be a nonnegative integer')
+    let insertion: CopyInput['insertion']
+    if (value.insertion !== undefined) {
+      if (!isObject(value.insertion))
+        throw new ContentCatalogApiError(400, 'INVALID_INSERTION', 'insertion must contain afterTopicId')
+      assertKeys(value.insertion, ['afterTopicId'])
+      insertion = { afterTopicId: validateCopyId(value.insertion.afterTopicId, 'afterTopicId') }
+    }
+    return {
+      action: 'copy', workspaceId, sourceItemId, sourceVersion: value.sourceVersion as number,
+      destinationProjectId, expectedRevision: value.expectedRevision as number, insertion,
+    }
+  }
   throw new ContentCatalogApiError(400, 'INVALID_ACTION', 'Unsupported content catalog action')
 }
 
 class ContentCatalogRepository {
   constructor(private readonly settings: Settings, private readonly token: string) {}
 
-  private async request(path: string): Promise<unknown> {
+  private async request(path: string, init: RequestInit = {}): Promise<unknown> {
     let response: Response
     try {
       response = await fetch(`${this.settings.url}${path}`, {
+        ...init,
         headers: {
           apikey: this.settings.anonKey,
           Authorization: `Bearer ${this.token}`,
+          ...(init.headers ?? {}),
         },
         cache: 'no-store',
       })
@@ -159,6 +211,8 @@ class ContentCatalogRepository {
         throw new ContentCatalogApiError(403, 'FORBIDDEN', 'The current workspace role does not allow this action')
       if (response.status === 404)
         throw new ContentCatalogApiError(404, 'ITEM_NOT_FOUND', 'Content catalog item was not found in the workspace')
+      if (response.status === 409)
+        throw new ContentCatalogApiError(409, 'PROJECT_CONFLICT', 'Destination project changed during copy; reload before retrying')
       throw new ContentCatalogApiError(503, 'CONTENT_CATALOG_UNAVAILABLE', 'Content catalog storage could not complete the request')
     }
     return body
@@ -194,6 +248,20 @@ class ContentCatalogRepository {
     return membership as Membership
   }
 
+  async verifyWriteRole(membership: Membership): Promise<void> {
+    if (!['owner', 'admin', 'editor'].includes(membership.role))
+      throw new ContentCatalogApiError(403, 'FORBIDDEN', 'Workspace editor permission is required to copy content')
+    const permissionQuery = new URLSearchParams({
+      select: 'permission',
+      role: `eq.${membership.role}`,
+      permission: 'eq.write',
+      limit: '1',
+    })
+    const permissions = await this.request(`/rest/v1/workspace_role_permissions?${permissionQuery}`)
+    if (!Array.isArray(permissions) || !permissions.some(row => isObject(row) && row.permission === 'write'))
+      throw new ContentCatalogApiError(403, 'FORBIDDEN', 'Workspace write permission is required to copy content')
+  }
+
   async list(input: ListInput): Promise<Json> {
     const query = new URLSearchParams({
       select: ITEM_SELECT,
@@ -204,6 +272,10 @@ class ContentCatalogRepository {
       offset: String(input.offset),
     })
     if (input.projectId !== undefined) query.set('project_id', `eq.${input.projectId}`)
+    if (input.excludeProjectId !== undefined) {
+      if (input.projectId === undefined) query.set('project_id', `neq.${input.excludeProjectId}`)
+      else query.append('project_id', `neq.${input.excludeProjectId}`)
+    }
     if (input.assetType !== undefined) query.set('asset_type', `eq.${input.assetType}`)
     if (input.search !== undefined) {
       const escaped = input.search.replace(/[\\%_*"]/g, character => `\\${character}`)
@@ -282,6 +354,165 @@ class ContentCatalogRepository {
       throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Content catalog returned oversized version metadata')
     return result
   }
+
+  async copy(input: CopyInput, membership: Membership): Promise<Json> {
+    await this.verifyWriteRole(membership)
+    const itemQuery = new URLSearchParams({
+      select: ITEM_SELECT,
+      item_id: `eq.${input.sourceItemId}`,
+      workspace_id: `eq.${input.workspaceId}`,
+      limit: '1',
+    })
+    const itemRows = await this.request(`/rest/v1/content_catalog_items?${itemQuery}`)
+    if (!Array.isArray(itemRows))
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Content catalog returned invalid item metadata')
+    const item = itemRows[0]
+    if (!isObject(item) || item.item_id !== input.sourceItemId || item.workspace_id !== input.workspaceId)
+      throw new ContentCatalogApiError(404, 'ITEM_NOT_FOUND', 'Active source item was not found in the workspace')
+    if (!validItemMetadata(item, input.workspaceId))
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Content catalog returned invalid item metadata')
+    if (item.status !== 'active')
+      throw new ContentCatalogApiError(404, 'ITEM_NOT_FOUND', 'Active source item was not found in the workspace')
+    if (item.project_id === input.destinationProjectId)
+      throw new ContentCatalogApiError(400, 'SAME_PROJECT_COPY', 'Content cannot be copied into its source project')
+
+    const versionQuery = new URLSearchParams({
+      select: VERSION_SELECT,
+      item_id: `eq.${input.sourceItemId}`,
+      workspace_id: `eq.${input.workspaceId}`,
+      version: `eq.${input.sourceVersion}`,
+      limit: '1',
+    })
+    const versions = await this.request(`/rest/v1/content_catalog_versions?${versionQuery}`)
+    if (!Array.isArray(versions))
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Content catalog returned invalid version data')
+    const sourceVersion = versions[0]
+    if (!isObject(sourceVersion) || sourceVersion.item_id !== item.item_id
+      || sourceVersion.workspace_id !== input.workspaceId || sourceVersion.project_id !== item.project_id
+      || sourceVersion.version !== input.sourceVersion)
+      throw new ContentCatalogApiError(404, 'VERSION_NOT_FOUND', 'Exact source version was not found in the workspace')
+    let payloadBytes: number
+    try {
+      payloadBytes = Buffer.byteLength(JSON.stringify(sourceVersion.payload))
+    } catch {
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Content catalog returned invalid version content')
+    }
+    if (payloadBytes > MAX_PAYLOAD_BYTES)
+      throw new ContentCatalogApiError(413, 'PAYLOAD_TOO_LARGE', 'Content catalog version payload exceeds the 512 KB limit')
+    if (typeof sourceVersion.content_hash !== 'string' || !sourceVersion.content_hash
+      || sourceVersion.content_hash.length > 256
+      || !Number.isSafeInteger(sourceVersion.source_project_revision)
+      || (sourceVersion.source_project_revision as number) < 0
+      || typeof sourceVersion.created_at !== 'string' || Number.isNaN(Date.parse(sourceVersion.created_at))
+      || (sourceVersion.created_by !== null && sourceVersion.created_by !== undefined
+        && !(typeof sourceVersion.created_by === 'string' && UUID_PATTERN.test(sourceVersion.created_by))))
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Content catalog returned invalid version metadata')
+
+    const destinationQuery = new URLSearchParams({
+      select: 'project_id,workspace_id,owner_user_id,record_revision,status,record',
+      project_id: `eq.${input.destinationProjectId}`,
+      workspace_id: `eq.${input.workspaceId}`,
+      status: 'eq.active',
+      limit: '1',
+    })
+    const destinationRows = await this.request(`/rest/v1/cloud_projects?${destinationQuery}`)
+    if (!Array.isArray(destinationRows))
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid destination project')
+    const destination = destinationRows[0]
+    if (!isObject(destination) || destination.project_id !== input.destinationProjectId
+      || destination.workspace_id !== input.workspaceId || destination.status !== 'active') {
+      throw new ContentCatalogApiError(404, 'PROJECT_NOT_FOUND', 'Destination project was not found in the active workspace')
+    }
+    if (typeof destination.owner_user_id !== 'string' || !destination.owner_user_id
+      || !Number.isSafeInteger(destination.record_revision) || (destination.record_revision as number) < 0
+      || !isObject(destination.record)) {
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Stored destination project identity or revision is invalid')
+    }
+    let destinationBytes: number
+    try {
+      destinationBytes = Buffer.byteLength(JSON.stringify(destination.record))
+    } catch {
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Stored destination record is invalid')
+    }
+    if (destinationBytes > 16 * 1024 * 1024)
+      throw new ContentCatalogApiError(413, 'PROJECT_TOO_LARGE', 'Destination project record exceeds the 16 MB limit')
+    const current = destination.record as CopyJson
+    if (current.projectId !== input.destinationProjectId || current.workspaceId !== input.workspaceId
+      || current.ownerUserId !== destination.owner_user_id
+      || current.recordRevision !== destination.record_revision) {
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Stored destination project identity or revision is invalid')
+    }
+    if (destination.record_revision !== input.expectedRevision)
+      throw new ContentCatalogApiError(409, 'PROJECT_CONFLICT', 'Destination project changed; reload before copying')
+
+    const sourceForCopy: CopySourceItem = {
+      item_id: item.item_id as string,
+      workspace_id: item.workspace_id as string,
+      project_id: item.project_id as string,
+      asset_type: item.asset_type as string,
+      local_asset_id: item.local_asset_id as string,
+      display_name: item.display_name as string,
+      status: item.status as string,
+      current_version: input.sourceVersion,
+    }
+    const copied = copyCatalogAsset(current, sourceVersion.payload, sourceForCopy, input.insertion)
+    if (copied.asset.alreadyAvailable === true) {
+      return {
+        projectId: input.destinationProjectId,
+        recordRevision: input.expectedRevision,
+        assetType: item.asset_type,
+        asset: copied.asset,
+      }
+    }
+    const nextRevision = input.expectedRevision + 1
+    const updated = {
+      ...copied.record,
+      projectId: input.destinationProjectId,
+      workspaceId: input.workspaceId,
+      ownerUserId: destination.owner_user_id,
+      recordRevision: nextRevision,
+      modifiedAt: Date.now(),
+    }
+    let nextBytes: number
+    try {
+      nextBytes = Buffer.byteLength(JSON.stringify(updated))
+    } catch {
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Updated destination record is invalid')
+    }
+    if (nextBytes > 16 * 1024 * 1024)
+      throw new ContentCatalogApiError(413, 'PROJECT_TOO_LARGE', 'Updated destination record exceeds the 16 MB limit')
+    const updateQuery = new URLSearchParams({
+      project_id: `eq.${input.destinationProjectId}`,
+      workspace_id: `eq.${input.workspaceId}`,
+      status: 'eq.active',
+      record_revision: `eq.${input.expectedRevision}`,
+      select: 'project_id,record_revision',
+    })
+    const updatedRows = await this.request(`/rest/v1/cloud_projects?${updateQuery}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+      body: JSON.stringify({
+        record_revision: nextRevision,
+        record: updated,
+        updated_at: new Date().toISOString(),
+      }),
+    })
+    if (!Array.isArray(updatedRows) || !isObject(updatedRows[0])
+      || updatedRows[0].project_id !== input.destinationProjectId
+      || updatedRows[0].record_revision !== nextRevision) {
+      throw new ContentCatalogApiError(409, 'PROJECT_CONFLICT', 'Destination project changed during copy; reload before retrying')
+    }
+    const result = {
+      projectId: input.destinationProjectId,
+      recordRevision: nextRevision,
+      assetType: item.asset_type,
+      asset: copied.asset,
+    }
+    if (Buffer.byteLength(JSON.stringify(result)) > 16 * 1024 * 1024)
+      throw new ContentCatalogApiError(503, 'STORAGE_RESPONSE_INVALID', 'Copy result exceeds the response limit')
+    return result
+  }
+
 }
 
 function validItemMetadata(row: Json, workspaceId: string): boolean {
@@ -370,8 +601,12 @@ export async function handleContentCatalog(request: IncomingMessage, response: S
   if (!token) throw new ContentCatalogApiError(401, 'UNAUTHENTICATED', 'A valid authenticated session is required')
   const input = validateRequest(await readBody(request))
   const repository = new ContentCatalogRepository(settings, token)
-  await repository.verifyMembership(input.workspaceId)
-  const result = input.action === 'list' ? await repository.list(input) : await repository.version(input)
+  const membership = await repository.verifyMembership(input.workspaceId)
+  const result = input.action === 'list'
+    ? await repository.list(input)
+    : input.action === 'version'
+      ? await repository.version(input)
+      : await repository.copy(input, membership)
   response.statusCode = 200
   response.setHeader('Content-Type', 'application/json; charset=utf-8')
   response.setHeader('Cache-Control', 'no-store')
@@ -381,7 +616,9 @@ export async function handleContentCatalog(request: IncomingMessage, response: S
 export function sendContentCatalogError(response: ServerResponse, error: unknown): void {
   const apiError = error instanceof ContentCatalogApiError
     ? error
-    : new ContentCatalogApiError(503, 'CONTENT_CATALOG_UNAVAILABLE', 'Content catalog storage is unavailable')
+    : error instanceof ContentCopyError
+      ? new ContentCatalogApiError(error.status, error.code, error.message)
+      : new ContentCatalogApiError(503, 'CONTENT_CATALOG_UNAVAILABLE', 'Content catalog storage is unavailable')
   response.statusCode = apiError.status
   response.setHeader('Content-Type', 'application/json; charset=utf-8')
   response.setHeader('Cache-Control', 'no-store')

@@ -5,6 +5,7 @@ import {
   ProjectConflictError,
   type ProjectRecord, type ProjectSummary, type StoredFile,
 } from './projectService'
+import type { ContentOrigins } from './projectRepository'
 import {
   inspectProjectBackup,
   type BackupSummary, type RestoreOptions,
@@ -24,6 +25,13 @@ import {
   type ContentExplorerMetadata,
 } from './contentExplorerModel'
 import { ContentExplorerPanel } from './ContentExplorerPanel'
+import {
+  copyContentCatalogItem,
+  listContentCatalogItems,
+  loadContentCatalogVersion,
+  type ContentCatalogItem,
+} from './contentCatalogClient'
+import type { ResourcePickerItem, ResourcePickerPreview, ResourcePickerSourceProject } from './ResourcePicker'
 import { LOCAL_ACCESS_CONTEXT } from './ownership'
 import { getAccessContext } from './authSession'
 import type { ProjectOwnership } from './ownership'
@@ -9956,7 +9964,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, contentExplorer, contentExplorerAssets, onContentExplorerChange, explorerReadOnly, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; contentExplorer: ContentExplorerMetadata; contentExplorerAssets: ContentExplorerAssets; onContentExplorerChange: (metadata: ContentExplorerMetadata) => void; explorerReadOnly: boolean; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, contentExplorer, contentExplorerAssets, onContentExplorerChange, explorerReadOnly, canBrowseCatalog, canCopyCatalog, loadCatalogProjects, loadCatalogItems, loadCatalogPreview, onCatalogCopy, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; contentExplorer: ContentExplorerMetadata; contentExplorerAssets: ContentExplorerAssets; onContentExplorerChange: (metadata: ContentExplorerMetadata) => void; explorerReadOnly: boolean; canBrowseCatalog?: boolean; canCopyCatalog?: boolean; loadCatalogProjects?: () => Promise<ResourcePickerSourceProject[]>; loadCatalogItems?: (filters: { projectId?: string; assetType?: ResourcePickerItem['assetType']; search?: string; limit: number; offset: number }) => Promise<ResourcePickerItem[]>; loadCatalogPreview?: (item: ResourcePickerItem) => Promise<ResourcePickerPreview>; onCatalogCopy?: (item: ResourcePickerItem, version: number, afterTopicId: string | null) => Promise<void>; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
@@ -11306,6 +11314,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               onOpenTopic={openExplorerTopic}
               onChange={onContentExplorerChange}
               readOnly={explorerReadOnly}
+              canBrowseCatalog={canBrowseCatalog}
+              canCopyCatalog={canCopyCatalog}
+              loadCatalogProjects={loadCatalogProjects}
+              loadCatalogItems={loadCatalogItems}
+              loadCatalogPreview={loadCatalogPreview}
+              onCatalogCopy={onCatalogCopy}
               onCollapse={collapsed => { if (collapsed) closeOutlineDrawer(true) }}
             />
             <OutlineTocPanel
@@ -16205,6 +16219,8 @@ export default function App() {
     () => hydrateContentExplorerMetadata(null, EMPTY_EXPLORER_ASSETS),
   )
   const contentExplorerRef = useRef(contentExplorer)
+  const contentOriginsRef = useRef<ContentOrigins>({ topic: {}, snippet: {}, variable: {}, condition: {} })
+  const catalogSourceProjectIdsRef = useRef<Set<string>>(new Set())
 
   // ── Master page topic assignments ──────────────────────────────────────────
   const [masterAssignments, setMasterAssignments] = useState<Record<number, string>>({}) // topicId → masterPageId
@@ -16511,6 +16527,121 @@ export default function App() {
     setContentExplorer(next)
     triggerAutosave()
   }
+  const loadCatalogProjects = async (): Promise<ResourcePickerSourceProject[]> => {
+    const activeProjectId = projectIdRef.current
+    const projects = await listProjects()
+    const sourceProjects = projects.filter(project => project.projectId !== activeProjectId)
+    catalogSourceProjectIdsRef.current = new Set(sourceProjects.map(project => project.projectId))
+    return sourceProjects.map(project => ({ projectId: project.projectId, projectName: project.projectName }))
+  }
+  const loadCatalogItems = async (filters: {
+    projectId?: string
+    assetType?: ResourcePickerItem['assetType']
+    search?: string
+    limit: number
+    offset: number
+  }): Promise<ContentCatalogItem[]> => {
+    const destinationProjectId = projectIdRef.current
+    if (!destinationProjectId)
+      throw new Error('A saved destination project is required to browse reusable content.')
+    if (filters.projectId && (filters.projectId === destinationProjectId
+      || !catalogSourceProjectIdsRef.current.has(filters.projectId)))
+      throw new Error('Choose a source project from the current workspace project list.')
+    return listContentCatalogItems(getAccessContext().workspace.id, {
+      ...filters,
+      excludeProjectId: destinationProjectId,
+    })
+  }
+  const loadCatalogPreview = async (item: ResourcePickerItem): Promise<ResourcePickerPreview> => {
+    const preview = await loadContentCatalogVersion(getAccessContext().workspace.id, item)
+    return preview
+  }
+  const handleCatalogCopy = async (
+    item: ResourcePickerItem,
+    version: number,
+    afterTopicId: string | null,
+  ): Promise<void> => {
+    const destinationProjectId = projectIdRef.current
+    const startingEpoch = saveEpochRef.current
+    if (!destinationProjectId || !isCloudProjectMode() || isDemoMode)
+      throw new Error('Content reuse is available only in a saved cloud project.')
+    if (getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true)
+      throw new Error('You can preview shared content, but you do not have permission to copy it.')
+
+    if (!await persistCurrentProject())
+      throw new Error('The project could not be saved, so no content was copied.')
+    await saveQueueRef.current
+    if (projectIdRef.current !== destinationProjectId || saveEpochRef.current !== startingEpoch)
+      throw new Error('The active project changed before the content copy could start.')
+    if (savedVersionRef.current < saveVersionRef.current)
+      throw new Error('The latest project changes are still saving. Try copying again after saving finishes.')
+
+    const copyBarrierSaveVersion = saveVersionRef.current
+    const expectedRevision = projectRevisionRef.current
+    const copied = await copyContentCatalogItem({
+      workspaceId: getAccessContext().workspace.id,
+      sourceItemId: item.itemId,
+      sourceVersion: version,
+      destinationProjectId,
+      expectedRevision,
+      ...(item.assetType === 'topic' && afterTopicId
+        ? { insertion: { afterTopicId } }
+        : {}),
+    })
+    if (saveVersionRef.current !== copyBarrierSaveVersion)
+      throw new Error('The copy may have succeeded, but local edits made while it was in progress were preserved. Resolve the project save conflict before retrying.')
+    if (copied.projectId !== destinationProjectId || copied.assetType !== item.assetType
+      || copied.recordRevision < expectedRevision)
+      throw new Error('The content catalog confirmed a copy for an unexpected project or revision.')
+    if (projectIdRef.current !== destinationProjectId || saveEpochRef.current !== startingEpoch)
+      throw new Error('Content was copied, but the active project changed before the result could be refreshed.')
+
+    // Fence off all queued snapshots built from the pre-copy in-memory project.
+    saveEpochRef.current++
+    const copyEpoch = saveEpochRef.current
+    await saveQueueRef.current
+    if (projectIdRef.current !== destinationProjectId || saveEpochRef.current !== copyEpoch)
+      throw new Error('Content was copied, but the active project changed before it could be refreshed.')
+
+    const authoritative = await projectRepository.loadProject(destinationProjectId)
+    if (!authoritative || authoritative.projectId !== destinationProjectId
+      || authoritative.recordRevision < copied.recordRevision)
+      throw new Error('Content was copied, but the destination project could not be reloaded authoritatively.')
+    if (projectIdRef.current !== destinationProjectId || saveEpochRef.current !== copyEpoch)
+      throw new Error('Content was copied, but the active project changed before it could be refreshed.')
+
+    const assets = contentExplorerAssetsForProject(authoritative)
+    const references = {
+      topic: assets.topics,
+      snippet: assets.snippets,
+      variable: assets.variables,
+      condition: assets.conditions,
+    }
+    const returnedId = item.assetType === 'topic'
+      ? copied.asset.topicId ?? copied.asset.id
+      : copied.asset.id
+    const candidateIds = item.assetType === 'topic' && /^\d+$/.test(returnedId)
+      ? [returnedId, `legacy-${returnedId}`]
+      : [returnedId]
+    const localId = references[item.assetType].find(reference => candidateIds.includes(reference.id))?.id
+    if (!localId)
+      throw new Error('Content was copied, but its local project asset could not be matched for origin tracking.')
+    const storedOrigin = authoritative.contentOrigins[item.assetType][localId]
+    if (!copied.asset.alreadyAvailable && (!storedOrigin
+      || storedOrigin.originItemId !== item.itemId
+      || storedOrigin.originProjectId !== item.projectId
+      || storedOrigin.originVersion !== version))
+      throw new Error('Content was copied, but the destination origin metadata did not match the selected source version.')
+    if (projectIdRef.current !== destinationProjectId || saveEpochRef.current !== copyEpoch)
+      throw new Error('Content was copied, but the active project changed before it could be refreshed.')
+    if (saveVersionRef.current !== copyBarrierSaveVersion)
+      throw new Error('The copy may have succeeded, but local edits made while it was being refreshed were preserved. Resolve the project save conflict before retrying.')
+
+    saveVersionRef.current = 0
+    savedVersionRef.current = 0
+    await hydrateFromRecord(authoritative)
+    setSaveStatus('saved')
+  }
   const [docComments, setDocComments] = useState<DocComment[]>([])
   const [publishConfig, setPublishConfig] = useState<PublishConfig>({ selectedFormats: [], activeVariant: '' })
   const [navError, setNavError] = useState<string | null>(null)
@@ -16567,6 +16698,7 @@ export default function App() {
       topicContent: topicContentRef.current as Record<string, unknown[]>,
       authorTopicMetadata: authorTopicMetadataRef.current,
       contentExplorer: hydrateContentExplorerMetadata(contentExplorerRef.current, contentExplorerAssets),
+      contentOrigins: contentOriginsRef.current,
       contentRevision,
       reviewModel,
       findingStatuses: findingStatuses as Record<number, string>,
@@ -18133,6 +18265,8 @@ export default function App() {
     )
     contentExplorerRef.current = restoredExplorer
     setContentExplorer(restoredExplorer)
+    contentOriginsRef.current = record.contentOrigins
+      ?? { topic: {}, snippet: {}, variable: {}, condition: {} }
     const restoredProposal = (record.tocProposal as TocProposal | null) ?? null
     setTocProposal(restoredProposal
       ? { ...restoredProposal, items: normalizeTopicIds(restoredProposal.items) as ProposedTopic[] }
@@ -18250,6 +18384,7 @@ export default function App() {
     const emptyExplorer = hydrateContentExplorerMetadata(null, EMPTY_EXPLORER_ASSETS)
     contentExplorerRef.current = emptyExplorer
     setContentExplorer(emptyExplorer)
+    contentOriginsRef.current = { topic: {}, snippet: {}, variable: {}, condition: {} }
     setTocProposal(null)
     setAiTocRecovery(null)
     setTocRevision(0)
@@ -18472,7 +18607,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} canGenerateAi={canGenerateAiToc} recovery={activeAiTocRecovery} onDismissRecovery={handleDiscardAiTocRecovery} onRecoverRecovery={handleRecoverAiTocProposal} onGenerate={handleGenerateTocProposal} onGenerateAi={handleGenerateAiTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} contentExplorer={resolvedContentExplorer} contentExplorerAssets={contentExplorerAssets} onContentExplorerChange={handleContentExplorerChange} explorerReadOnly={isCloudProjectMode() && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
+       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} contentExplorer={resolvedContentExplorer} contentExplorerAssets={contentExplorerAssets} onContentExplorerChange={handleContentExplorerChange} explorerReadOnly={isCloudProjectMode() && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true} canBrowseCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).workspace.read} canCopyCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true} loadCatalogProjects={loadCatalogProjects} loadCatalogItems={loadCatalogItems} loadCatalogPreview={loadCatalogPreview} onCatalogCopy={handleCatalogCopy} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {

@@ -146,10 +146,13 @@ export function migrateProjectRecord(raw: unknown): {
   if (record.schemaVersion === 4 || record.schemaVersion === 5) {
     const assets = contentExplorerAssetsForProject(record)
     const contentExplorer = hydrateContentExplorerMetadata(record.contentExplorer, assets)
+    const contentOrigins = hydrateContentOrigins(record.contentOrigins)
     contentExplorerChanged = JSON.stringify(record.contentExplorer) !== JSON.stringify(contentExplorer)
+      || JSON.stringify(record.contentOrigins) !== JSON.stringify(contentOrigins)
     record = {
       ...record,
       contentExplorer,
+      contentOrigins,
       schemaVersion: 5,
     }
   }
@@ -160,6 +163,39 @@ export function migrateProjectRecord(raw: unknown): {
     throw new Error('Invalid project record revision.')
   return { record: record as unknown as ProjectRecord, fromVersion: fromVersion as number,
     changed: fromVersion !== CURRENT_PROJECT_SCHEMA_VERSION || contentExplorerChanged }
+}
+
+function hydrateContentOrigins(value: unknown): ProjectRecord['contentOrigins'] {
+  const empty: ProjectRecord['contentOrigins'] = {
+    topic: {}, snippet: {}, variable: {}, condition: {},
+  }
+  if (value === undefined || value === null) return empty
+  if (!isObject(value)) throw new Error('Project record has invalid content origin metadata.')
+  for (const key of Object.keys(value))
+    if (!['topic', 'snippet', 'variable', 'condition'].includes(key))
+      throw new Error('Project record has invalid content origin metadata.')
+  const result = { ...empty }
+  for (const type of ['topic', 'snippet', 'variable', 'condition'] as const) {
+    const entries = value[type]
+    if (entries === undefined) continue
+    if (!isObject(entries)) throw new Error('Project record has invalid content origin metadata.')
+    const normalized: ProjectRecord['contentOrigins'][typeof type] = {}
+    for (const [localId, origin] of Object.entries(entries)) {
+      if (!localId || localId.length > 512 || !isObject(origin)
+        || Object.keys(origin).sort().join(',') !== 'originItemId,originProjectId,originVersion'
+        || typeof origin.originItemId !== 'string' || !origin.originItemId.trim()
+        || typeof origin.originProjectId !== 'string' || !origin.originProjectId.trim()
+        || !Number.isSafeInteger(origin.originVersion) || (origin.originVersion as number) < 1)
+        throw new Error('Project record has invalid content origin metadata.')
+      normalized[localId] = {
+        originItemId: origin.originItemId,
+        originProjectId: origin.originProjectId,
+        originVersion: origin.originVersion as number,
+      }
+    }
+    result[type] = normalized
+  }
+  return result
 }
 
 /** Check untrusted backup content before it can enter the live repository. */
@@ -177,6 +213,11 @@ export function validateRestorableProjectRecord(record: ProjectRecord): void {
     )
   } catch {
     fail('contentExplorer')
+  }
+  try {
+    hydrateContentOrigins(fields.contentOrigins)
+  } catch {
+    fail('contentOrigins')
   }
   const arrays = ['sourceFileIds', 'appToc', 'docBlocks', 'snippets', 'docComments']
   for (const field of arrays) if (!Array.isArray(fields[field])) fail(field)

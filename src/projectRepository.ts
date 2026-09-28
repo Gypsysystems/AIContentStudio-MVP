@@ -81,6 +81,16 @@ export type RestoreProjectSnapshotOptions =
   | { mode: 'new'; newName: string; newProjectId?: string }
   | { mode: 'replace'; expectedRevision: number; expectedFileIds: string[] }
 
+export type ContentOrigin = {
+  originItemId: string
+  originProjectId: string
+  originVersion: number
+}
+export type ContentOrigins = Record<
+  'topic' | 'snippet' | 'variable' | 'condition',
+  Record<string, ContentOrigin>
+>
+
 export type ProjectRecord = ProjectOwnership & {
   projectId: string
   schemaVersion: number
@@ -145,6 +155,7 @@ export type ProjectRecord = ProjectOwnership & {
   docComments: unknown[]
   publishConfig: unknown
   contentExplorer: ContentExplorerMetadata
+  contentOrigins: ContentOrigins
 }
 
 export type ProjectSummary = ProjectOwnership & {
@@ -360,6 +371,7 @@ export function createProjectRecord(
     conditionGroups: [],
     docComments: [],
     publishConfig: { selectedFormats: [], activeVariant: '' },
+    contentOrigins: { topic: {}, snippet: {}, variable: {}, condition: {} },
     ...partial,
     contentExplorer: hydrateContentExplorerMetadata(
       partial.contentExplorer,

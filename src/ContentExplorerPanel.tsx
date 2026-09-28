@@ -9,6 +9,7 @@ import {
   type ContentExplorerAssets,
   type ContentExplorerMetadata,
 } from './contentExplorerModel'
+import { ResourcePicker, type ResourcePickerItem, type ResourcePickerPreview, type ResourcePickerSourceProject } from './ResourcePicker'
 
 export type ContentExplorerPanelProps = {
   metadata: ContentExplorerMetadata
@@ -17,6 +18,18 @@ export type ContentExplorerPanelProps = {
   onOpenTopic: (topicId: string) => void
   onChange: (metadata: ContentExplorerMetadata) => void
   readOnly?: boolean
+  canBrowseCatalog?: boolean
+  canCopyCatalog?: boolean
+  loadCatalogProjects?: () => Promise<ResourcePickerSourceProject[]>
+  loadCatalogItems?: (filters: {
+    projectId?: string
+    assetType?: ResourcePickerItem['assetType']
+    search?: string
+    limit: number
+    offset: number
+  }) => Promise<ResourcePickerItem[]>
+  loadCatalogPreview?: (item: ResourcePickerItem) => Promise<ResourcePickerPreview>
+  onCatalogCopy?: (item: ResourcePickerItem, version: number, afterTopicId: string | null) => Promise<void>
   collapsed?: boolean
   onCollapse?: (collapsed: boolean) => void
 }
@@ -142,6 +155,12 @@ export function ContentExplorerPanel({
   onOpenTopic,
   onChange,
   readOnly = false,
+  canBrowseCatalog = false,
+  canCopyCatalog = false,
+  loadCatalogProjects,
+  loadCatalogItems,
+  loadCatalogPreview,
+  onCatalogCopy,
   collapsed,
   onCollapse,
 }: ContentExplorerPanelProps) {
@@ -161,6 +180,8 @@ export function ContentExplorerPanel({
   } | null>(null)
   const [notice, setNotice] = useState('')
   const [newFolderParent, setNewFolderParent] = useState('topics')
+  const [pickerProjects, setPickerProjects] = useState<ResourcePickerSourceProject[] | null>(null)
+  const [pickerLoading, setPickerLoading] = useState(false)
 
   const tree = useMemo(
     () => normalizeDerivedTree(deriveContentExplorerTree(metadata, assets)),
@@ -181,6 +202,19 @@ export function ContentExplorerPanel({
   const setCollapsed = (next: boolean) => {
     if (collapsed === undefined) setLocalCollapsed(next)
     onCollapse?.(next)
+  }
+
+  const openResourcePicker = async () => {
+    if (!canBrowseCatalog || !loadCatalogProjects || !loadCatalogItems || !loadCatalogPreview || !onCatalogCopy) return
+    setPickerLoading(true)
+    setNotice('')
+    try {
+      setPickerProjects(await loadCatalogProjects())
+    } catch (error) {
+      setNotice(errorMessage(error))
+    } finally {
+      setPickerLoading(false)
+    }
   }
 
   const toggleExpanded = (id: string) => {
@@ -486,6 +520,15 @@ export function ContentExplorerPanel({
             </label>
             <button type="button" data-testid="content-explorer-new-folder" onClick={() => beginNewFolder(newFolderParent)}>+ Add</button>
           </div>}
+          {canBrowseCatalog && (
+            <button
+              type="button"
+              className="ce-reuse-action"
+              data-testid="content-explorer-reuse"
+              onClick={() => void openResourcePicker()}
+              disabled={pickerLoading}
+            >{pickerLoading ? 'Loading projects…' : '+ Add existing'}</button>
+          )}
         </div>
       </header>
       {notice && <div className="ce-notice" role="status">{notice}</div>}
@@ -496,6 +539,16 @@ export function ContentExplorerPanel({
             : <p className="ce-empty">{query.trim() ? 'No matching content.' : 'No project content is available.'}</p>}
         </div>
       </div>
+      {pickerProjects && loadCatalogItems && loadCatalogPreview && onCatalogCopy && (
+        <ResourcePicker
+          projects={pickerProjects}
+          canCopy={canCopyCatalog}
+          loadItems={loadCatalogItems}
+          loadPreview={loadCatalogPreview}
+          onCopy={(item, version) => onCatalogCopy(item, version, selectedTopicId)}
+          onClose={() => setPickerProjects(null)}
+        />
+      )}
       <style>{`
         .content-explorer {
           display:flex; flex:0 0 260px; flex-direction:column; min-width:0; width:260px;
@@ -520,6 +573,8 @@ export function ContentExplorerPanel({
         .ce-add-control label { flex:1; min-width:0; }
         .ce-add-control select { width:100%; height:27px; border:1px solid #e0e4dd; border-radius:4px; background:#fff; color:#616b61; padding:0 5px; font-size:9px!important; }
         .ce-add-control > button,.ce-folder-form button { min-height:27px; border:1px solid #54745a; border-radius:4px; background:#54745a; padding:0 8px; color:white; cursor:pointer; font-size:9px!important; font-weight:600; white-space:nowrap; }
+        .ce-reuse-action { min-height:27px; border:1px solid #dce2da; border-radius:4px; background:#fff; padding:0 8px; color:#435846; cursor:pointer; font-size:9px!important; font-weight:600; text-align:left; }
+        .ce-reuse-action:disabled { cursor:wait; opacity:.65; }
         .ce-tree-scroll { min-height:0; flex:1; overflow:auto; padding:7px 4px 14px 0; overscroll-behavior:contain; }
         .ce-row { position:relative; min-width:0; }
         .ce-row-main { position:relative; display:flex; min-width:0; min-height:29px; align-items:center; gap:2px; border-radius:4px; padding-right:4px; }
