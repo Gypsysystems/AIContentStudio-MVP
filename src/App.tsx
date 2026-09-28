@@ -10527,9 +10527,19 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null)
   // Guard ref: set true during topic hydration load so the sync effect doesn't fire for the load itself
   const isHydratingTopicRef = useRef(false)
+  const hasCompletedInitialDocBlocksSyncRef = useRef(false)
 
-  // Keep parent ref in sync so PublishScreen can read current blocks
-  useEffect(() => { onDocBlocksChange?.(docBlocks) }, [docBlocks])
+  // Keep document-level blocks in sync, but don't replace them with the blank
+  // initial canvas or an inspected topic's blocks. Topic content has its own
+  // persisted map and can be viewed from Review without changing global inputs.
+  useEffect(() => {
+    if (!hasCompletedInitialDocBlocksSyncRef.current) {
+      hasCompletedInitialDocBlocksSyncRef.current = true
+      return
+    }
+    if (activeTopicId !== null || isHydratingTopicRef.current) return
+    onDocBlocksChange?.(docBlocks)
+  }, [docBlocks, activeTopicId])
 
   // Continuously sync active topic's blocks to central topicContent — do not wait for topic switch
   useEffect(() => {
@@ -14407,6 +14417,200 @@ function KnowledgeMapScreen({ onNav, onBack }: { onNav: (s: Screen) => void; onB
 // ── Screen: Quality Review ────────────────────────────────────────────────────
 const DISMISS_REASONS = ['Intentional', 'Not applicable', 'False positive', 'Approved exception', 'Other']
 
+type AiReviewRunUi = ReviewModel['runs'][number] & {
+  method?: string
+  aiProvenance?: {
+    providerId?: string
+    modelId?: string
+    workflow?: { id: string; version: number }
+    promptPack?: { id: string; version: number }
+    referenceSet?: { id: string; version: number }
+    blueprint?: { id: string; version: number }
+  }
+}
+
+function stableReviewSerialization(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableReviewSerialization).join(',')}]`
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map(key =>
+      `${JSON.stringify(key)}:${stableReviewSerialization(record[key])}`,
+    ).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function aiReviewCapabilityMatches(asset: AiAssetVersion): boolean {
+  if (asset.kind !== 'workflow' || !('steps' in asset.definition)) return false
+  const normalize = (value: string) => value.trim().toLocaleLowerCase('en-US').replace(/[\s_-]+/gu, '')
+  const definition = asset.definition as WorkflowDefinition
+  return normalize(definition.capability) === 'aireview'
+    && definition.model.mode === 'pinned'
+    && definition.steps.length > 0
+    && definition.steps.every(step => normalize(step.capability) === 'aireview')
+}
+
+function AiReviewControls({
+  allowed,
+  projectId,
+  snapshot,
+  onRun,
+}: {
+  allowed: boolean
+  projectId: string | null
+  snapshot: ReviewInputSnapshot | null
+  onRun: (workflowId: string, workflowVersion: number, inputSnapshotId: string) => Promise<void>
+}) {
+  const [workflows, setWorkflows] = useState<AiAssetVersion[]>([])
+  const [selectedWorkflowKey, setSelectedWorkflowKey] = useState('')
+  const [readiness, setReadiness] = useState<WorkflowReadiness | null>(null)
+  const [loadingWorkflows, setLoadingWorkflows] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [completed, setCompleted] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const requestLockRef = useRef(false)
+  const eligible = allowed && !!projectId && snapshot?.readiness === 'ready'
+  const selectedWorkflow = workflows.find(asset => `${asset.id}@${asset.version}` === selectedWorkflowKey)
+
+  useEffect(() => {
+    let active = true
+    setWorkflows([])
+    setSelectedWorkflowKey('')
+    setReadiness(null)
+    setCompleted(false)
+    setError(null)
+    if (!eligible) {
+      setLoadingWorkflows(false)
+      return () => { active = false }
+    }
+    setLoadingWorkflows(true)
+    void listAiAssets().then(async assets => {
+      if (!active) return
+      const histories = await Promise.all(
+        assets.filter(asset => asset.kind === 'workflow').map(asset => historyAiAsset(asset.id)),
+      )
+      const available = histories.flat()
+        .filter(asset => asset.state === 'published' && aiReviewCapabilityMatches(asset))
+        .sort((left, right) => left.name.localeCompare(right.name)
+          || left.id.localeCompare(right.id) || right.version - left.version)
+      if (!active) return
+      setWorkflows(available)
+      setSelectedWorkflowKey(current => available.some(asset => `${asset.id}@${asset.version}` === current)
+        ? current
+        : available[0] ? `${available[0].id}@${available[0].version}` : '')
+    }).catch(() => {
+      if (active) setError('Published AI Review workflows could not be loaded. Try again later.')
+    }).finally(() => {
+      if (active) setLoadingWorkflows(false)
+    })
+    return () => { active = false }
+  }, [eligible])
+
+  useEffect(() => {
+    let active = true
+    setReadiness(null)
+    if (!eligible || !selectedWorkflow) {
+      setChecking(false)
+      return () => { active = false }
+    }
+    setChecking(true)
+    void checkAiWorkflowReadiness(selectedWorkflow.id, selectedWorkflow.version).then(result => {
+      if (active) setReadiness(result)
+    }).catch(() => {
+      if (active) setError('AI Review workflow readiness could not be verified.')
+    }).finally(() => {
+      if (active) setChecking(false)
+    })
+    return () => { active = false }
+  }, [eligible, selectedWorkflow?.id, selectedWorkflow?.version])
+
+  if (!eligible) return null
+  const run = async () => {
+    if (!selectedWorkflow || readiness?.status !== 'ready' || running || requestLockRef.current
+      || !snapshot || snapshot.readiness !== 'ready') return
+    requestLockRef.current = true
+    setRunning(true)
+    setCompleted(false)
+    setError(null)
+    try {
+      await onRun(selectedWorkflow.id, selectedWorkflow.version, snapshot.snapshotId)
+      setCompleted(true)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'AI Review failed. No findings were installed.')
+    } finally {
+      requestLockRef.current = false
+      setRunning(false)
+    }
+  }
+  const canRun = !!selectedWorkflow && readiness?.status === 'ready' && !checking && !running
+  return (
+    <section data-testid="ai-review-controls" className="mb-5 rounded-xl border border-[#C8C4EE] bg-[#F7F6FF] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[12px] font-semibold text-[#403B85]">AI Review · advisory only</p>
+          <p className="mt-1 max-w-2xl text-[11px] leading-relaxed text-[#626277]">
+            AI observations are grounded in this project’s current Review inputs. Verify each finding against its cited evidence; AI findings never edit content.
+          </p>
+        </div>
+        <span className="rounded-full border border-[#D8D5F4] bg-white px-2.5 py-1 text-[9px] font-semibold uppercase tracking-wide text-[#514188]">
+          Separate from deterministic Review
+        </span>
+      </div>
+      <label className="mt-3 block text-[10px] font-medium text-[#575766]">
+        Published AI Review workflow
+        <select
+          aria-label="Published AI Review workflow"
+          data-testid="ai-review-workflow-select"
+          value={selectedWorkflowKey}
+          disabled={loadingWorkflows || running || workflows.length === 0}
+          onChange={event => {
+            setSelectedWorkflowKey(event.target.value)
+            setCompleted(false)
+            setError(null)
+          }}
+          className="mt-1 block w-full rounded-lg border border-[#D8D5F4] bg-white px-3 py-2 text-[11px] text-[#22223A]"
+        >
+          {workflows.length === 0
+            ? <option value="">{loadingWorkflows ? 'Loading published workflows…' : 'No published AI Review workflows'}</option>
+            : workflows.map(workflow => (
+              <option key={`${workflow.id}@${workflow.version}`} value={`${workflow.id}@${workflow.version}`}>
+                {workflow.name} · v{workflow.version}
+              </option>
+            ))}
+        </select>
+      </label>
+      {checking && <p role="status" className="mt-2 text-[10px] text-[#626277]">Checking workflow and provider readiness…</p>}
+      {readiness && (
+        <div data-testid="ai-review-readiness" className={`mt-2 rounded-md px-2 py-1.5 text-[10px] ${readiness.status === 'ready' ? 'bg-[#ECFDF3] text-[#166534]' : 'bg-[#FFF7ED] text-[#9A3412]'}`}>
+          <p className="font-semibold">{readiness.status === 'ready' ? 'Workflow ready' : 'Workflow blocked'}
+            {readiness.model ? ` · ${readiness.model.providerId} / ${readiness.model.modelId}` : ''}
+          </p>
+          {readiness.blockers.map(blocker => <p key={blocker.code} className="mt-1">{blocker.message}</p>)}
+        </div>
+      )}
+      {error && <p role="alert" data-testid="ai-review-error" className="mt-2 rounded-md bg-[#FEF2F2] px-2 py-1.5 text-[10px] text-[#B42318]">{error}</p>}
+      {completed && (
+        <p role="status" data-testid="ai-review-completed" className="mt-2 text-[10px] font-semibold text-[#166534]">
+          Completed — advisory findings were persisted in Review history.
+        </p>
+      )}
+      {canRun && (
+        <button
+          type="button"
+          data-testid="run-ai-review"
+          disabled={!canRun}
+          onClick={() => { void run() }}
+          className="mt-3 rounded-lg border border-[#5B5BD6] bg-[#5B5BD6] px-4 py-2 text-[11px] font-semibold text-white hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {running ? 'Running AI Review…' : 'Run AI Review'}
+        </button>
+      )}
+      {running && <p role="status" data-testid="ai-review-running" className="mt-2 text-[10px] text-[#514188]">Running grounded AI Review… Keep this project open; current content must remain unchanged.</p>}
+    </section>
+  )
+}
+
 function RealReviewFindingsPanel({
   onNav,
   reviewModel,
@@ -14417,6 +14621,9 @@ function RealReviewFindingsPanel({
   onSetStatus,
   onApplyFinding,
   onOpenFinding,
+  canRunAiReview,
+  projectId,
+  onRunAiReview,
   requestedFindingId,
   onRequestedFindingOpened,
 }: {
@@ -14429,19 +14636,27 @@ function RealReviewFindingsPanel({
   onSetStatus: (findingId: string, status: ReviewFindingStatus) => string | null
   onApplyFinding: (findingId: string) => string | null
   onOpenFinding: (finding: ReviewFinding) => Promise<string | null>
+  canRunAiReview: boolean
+  projectId: string | null
+  onRunAiReview: (workflowId: string, workflowVersion: number, inputSnapshotId: string) => Promise<void>
   requestedFindingId?: string | null
   onRequestedFindingOpened?: () => void
 }) {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [statusFilter, setStatusFilter] = useState('active')
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null)
-  const [viewRunId, setViewRunId] = useState<string | null>(reviewModel.activeReviewRunId)
+  const latestRunId = reviewModel.runs[reviewModel.runs.length - 1]?.reviewRunId ?? reviewModel.activeReviewRunId
+  const [viewRunId, setViewRunId] = useState<string | null>(latestRunId)
+  const previousLatestRunIdRef = useRef(latestRunId)
   const [runError, setRunError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   useEffect(() => {
-    setViewRunId(reviewModel.activeReviewRunId)
-    setSelectedFindingId(null)
-  }, [reviewModel.activeReviewRunId])
+    if (latestRunId && latestRunId !== previousLatestRunIdRef.current) {
+      previousLatestRunIdRef.current = latestRunId
+      setViewRunId(latestRunId)
+      setSelectedFindingId(null)
+    }
+  }, [latestRunId])
   useEffect(() => {
     if (!requestedFindingId) return
     const finding = reviewModel.findings.find(item => item.findingId === requestedFindingId)
@@ -14456,6 +14671,13 @@ function RealReviewFindingsPanel({
   const run = reviewModel.runs.find(item => item.reviewRunId === selectedRunId) ?? null
   const runFindings = run
     ? run.findingIds.flatMap(id => {
+        const finding = reviewModel.findings.find(item => item.findingId === id)
+        return finding ? [finding] : []
+      })
+    : []
+  const deterministicRun = reviewModel.runs.find(item => item.reviewRunId === reviewModel.activeReviewRunId) ?? null
+  const deterministicFindings = deterministicRun
+    ? deterministicRun.findingIds.flatMap(id => {
         const finding = reviewModel.findings.find(item => item.findingId === id)
         return finding ? [finding] : []
       })
@@ -14479,12 +14701,11 @@ function RealReviewFindingsPanel({
     'Formatting / Standards': 'bg-[#FCE7F3] text-[#9D174D]',
   }
   const canRun = snapshot?.readiness === 'ready'
-  const hasCurrentRun = !!run
+  const hasCurrentRun = !!deterministicRun
     && canRun
-    && run.reviewRunId === reviewModel.activeReviewRunId
-    && run.inputSnapshotId === snapshot?.snapshotId
+    && deterministicRun.inputSnapshotId === snapshot?.snapshotId
   const requiredReviewBlockers = hasCurrentRun
-    ? runFindings.filter(finding =>
+    ? deterministicFindings.filter(finding =>
         finding.required && (finding.status === 'open' || finding.status === 'in-review')).length
     : 0
   const canPreviewPublish = hasCurrentRun && requiredReviewBlockers === 0
@@ -14517,6 +14738,12 @@ function RealReviewFindingsPanel({
           {reviewModel.activeReviewRunId ? 'Run Review Again' : 'Run Grounded Review'}
         </button>
       </div>
+      <AiReviewControls
+        allowed={canRunAiReview}
+        projectId={projectId}
+        snapshot={snapshot}
+        onRun={onRunAiReview}
+      />
 
       {!canRun && (
         <div data-testid="review-run-blocked" className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-[#E2DED7] bg-[#F9F8F6] p-4 text-[12px] text-[#575766]">
@@ -14553,7 +14780,11 @@ function RealReviewFindingsPanel({
               >
                 {[...reviewModel.runs].reverse().map((item, index) => (
                   <option key={item.reviewRunId} value={item.reviewRunId}>
-                    {item.reviewRunId === reviewModel.activeReviewRunId ? 'Current' : `History ${index}`} · {item.status}
+                    {item.reviewRunId === reviewModel.activeReviewRunId
+                      ? 'Current deterministic'
+                      : (item as AiReviewRunUi).method === 'ai-grounded-review-v1'
+                        ? 'AI advisory'
+                        : `History ${index}`} · {item.status}
                   </option>
                 ))}
               </select>
@@ -14594,6 +14825,17 @@ function RealReviewFindingsPanel({
               <span>Content revision {run.inputProvenance.contentRevision}</span>
               <span>Analysis revision {run.inputProvenance.analysisRevision ?? 'N/A'}</span>
               <span>{run.findingIds.length} findings</span>
+            {(run as AiReviewRunUi).method === 'ai-grounded-review-v1' && (
+              <>
+                <span className="rounded bg-[#EEEEFF] px-1.5 py-0.5 font-semibold text-[#514188]">AI advisory run</span>
+                {(run as AiReviewRunUi).aiProvenance?.providerId && (
+                  <span>
+                    {(run as AiReviewRunUi).aiProvenance?.providerId} / {(run as AiReviewRunUi).aiProvenance?.modelId}
+                    {' · '}workflow {(run as AiReviewRunUi).aiProvenance?.workflow?.id} v{(run as AiReviewRunUi).aiProvenance?.workflow?.version}
+                  </span>
+                )}
+              </>
+            )}
             </div>
           )}
 
@@ -14607,6 +14849,8 @@ function RealReviewFindingsPanel({
               const eligibility = checkReviewActionEligibility(reviewModel, finding.findingId, snapshot, topics, topicContent)
               const navigation = resolveReviewAuthorTarget(finding, reviewModel, snapshot, topics, topicContent)
               const actionDisabled = !eligibility.ok
+              const findingRun = reviewModel.runs.find(item => item.reviewRunId === finding.reviewRunId) as AiReviewRunUi | undefined
+              const isAiFinding = findingRun?.method === 'ai-grounded-review-v1'
               return (
               <article id={`review-finding-${finding.findingId}`} tabIndex={-1} data-testid="grounded-review-finding" key={finding.findingId} className="rounded-xl border border-[#E2DED7] bg-white p-4 outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
                 <div className="flex items-start justify-between gap-3">
@@ -14618,6 +14862,7 @@ function RealReviewFindingsPanel({
                       <span className="text-[10px] font-semibold uppercase text-[#6B6B7E]">{finding.severity}</span>
                       <span className="text-[10px] text-[#9898AB]">{finding.required ? 'Required' : 'Optional'}</span>
                       <span className="text-[10px] text-[#9898AB]">{finding.status}</span>
+                      {isAiFinding && <span data-testid="ai-review-advisory-badge" className="rounded bg-[#EEEEFF] px-1.5 py-0.5 text-[10px] font-semibold text-[#514188]">AI advisory · verify evidence</span>}
                       {finding.freshness.status === 'stale' && <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-semibold text-[#92400E]">Stale history</span>}
                       {finding.reviewRunId !== reviewModel.activeReviewRunId && <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-semibold text-[#92400E]">Earlier run · read-only</span>}
                     </div>
@@ -14656,6 +14901,12 @@ function RealReviewFindingsPanel({
 
                 {selectedFindingId === finding.findingId && selectedFinding && (
                   <div data-testid="review-finding-inspector" className="mt-4 border-t border-[#F4F2EE] pt-4">
+                    {isAiFinding && (
+                      <div data-testid="ai-review-advisory-notice" className="mb-3 rounded-lg border border-[#D8D5F4] bg-[#F7F6FF] p-3 text-[10px] text-[#514188]">
+                        <p className="font-semibold">Advisory AI finding — not an authoritative fact</p>
+                        <p className="mt-1">Check the cited project evidence before acting. This finding has no AI-generated edit or Apply action.</p>
+                      </div>
+                    )}
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Rationale</p>
                     <p className="mt-1 text-[12px] text-[#3D3D4E]">{selectedFinding.rationale}</p>
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -14734,7 +14985,7 @@ function RealReviewFindingsPanel({
                     )}
                     {selectedFinding.status !== 'retired' && (
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {selectedFinding.status !== 'resolved' && selectedFinding.category !== 'Spelling' && (
+                        {selectedFinding.status !== 'resolved' && (selectedFinding.category !== 'Spelling' || isAiFinding) && (
                           <button type="button" disabled={actionDisabled} onClick={() => setActionError(onSetStatus(selectedFinding.findingId, 'resolved'))} className="rounded-lg border border-[#86EFAC] bg-[#F0FDF4] px-3 py-1.5 text-[11px] font-medium text-[#15803D] disabled:cursor-not-allowed disabled:opacity-40">Mark resolved</button>
                         )}
                         {selectedFinding.status !== 'dismissed' && (
@@ -14771,9 +15022,9 @@ function RealReviewFindingsPanel({
               type="button"
               onClick={() => {
                 if (requiredReviewBlockers > 0) {
-                  const first = runFindings.find(finding => finding.required && (finding.status === 'open' || finding.status === 'in-review'))
+                  const first = deterministicFindings.find(finding => finding.required && (finding.status === 'open' || finding.status === 'in-review'))
                   if (!first) return
-                  setViewRunId(run?.reviewRunId ?? reviewModel.activeReviewRunId)
+                  setViewRunId(deterministicRun?.reviewRunId ?? reviewModel.activeReviewRunId)
                   setCategoryFilter('All')
                   setStatusFilter('active')
                   setSelectedFindingId(first.findingId)
@@ -14834,6 +15085,9 @@ function QualityScreen({
   topics,
   topicContent,
   onRunGroundedReview,
+  canRunAiReview,
+  projectId,
+  onRunAiReview,
   onSetGroundedFindingStatus,
   onApplyGroundedFinding,
   onOpenGroundedFinding,
@@ -14855,6 +15109,9 @@ function QualityScreen({
   topics: TocItem[]
   topicContent: Record<string, DocBlock[]>
   onRunGroundedReview: () => string | null
+  canRunAiReview: boolean
+  projectId: string | null
+  onRunAiReview: (workflowId: string, workflowVersion: number, inputSnapshotId: string) => Promise<void>
   onSetGroundedFindingStatus: (findingId: string, status: ReviewFindingStatus) => string | null
   onApplyGroundedFinding: (findingId: string) => string | null
   onOpenGroundedFinding: (finding: ReviewFinding) => Promise<string | null>
@@ -15340,6 +15597,9 @@ function QualityScreen({
       topics={topics}
       topicContent={topicContent}
       onRun={onRunGroundedReview}
+      canRunAiReview={canRunAiReview}
+      projectId={projectId}
+      onRunAiReview={onRunAiReview}
       onSetStatus={onSetGroundedFindingStatus}
       onApplyFinding={onApplyGroundedFinding}
       onOpenFinding={onOpenGroundedFinding}
@@ -17118,6 +17378,11 @@ export default function App() {
     groundingStyleProfile,
     authorTopicMetadata,
   ])
+  const canRunAiReview = !!projectId
+    && isCloudProjectMode()
+    && !isDemoMode
+    && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true
+    && currentReviewInputSnapshot?.readiness === 'ready'
   const reviewActionContextRef = useRef({ model: reviewModel, snapshot: currentReviewInputSnapshot, topics: appToc })
   reviewActionContextRef.current = { model: reviewModel, snapshot: currentReviewInputSnapshot, topics: appToc }
   const currentFindingEligibility = (findingId: string, target: 'exists' | 'exact' = 'exists') => {
@@ -17184,6 +17449,150 @@ export default function App() {
     reviewModel,
     triggerAutosave,
     unsupportedAnalysis,
+  ])
+  const handleRunAiReview = useCallback(async (
+    workflowId: string,
+    workflowVersion: number,
+    inputSnapshotId: string,
+  ): Promise<void> => {
+    const targetProjectId = projectIdRef.current
+    const snapshot = currentReviewInputSnapshot
+    if (!targetProjectId || !isCloudProjectMode() || isDemoMode)
+      throw new Error('AI Review is available only for a saved cloud project.')
+    if (getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true)
+      throw new Error('Workspace write permission is required to run AI Review.')
+    if (!snapshot || snapshot.readiness !== 'ready' || snapshot.snapshotId !== inputSnapshotId)
+      throw new Error('Review inputs are missing, stale, or changed. Refresh Review inputs before running AI Review.')
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/u.test(workflowId)
+      || !Number.isSafeInteger(workflowVersion) || workflowVersion < 1)
+      throw new Error('Select a published, ready AI Review workflow.')
+
+    if (!await persistCurrentProject())
+      throw new Error('Your latest project changes could not be saved. Retry saving before running AI Review.')
+    try {
+      await saveQueueRef.current
+    } catch {
+      throw new Error('Your latest project changes could not be saved. Retry saving before running AI Review.')
+    }
+    const beforeRecord = await projectRepository.loadProject(targetProjectId)
+    if (!beforeRecord || projectIdRef.current !== targetProjectId
+      || beforeRecord.recordRevision !== projectRevisionRef.current)
+      throw new Error('PROJECT_CONFLICT: The project changed. Reload it before running AI Review.')
+    if (beforeRecord.reviewModel?.inputSnapshot?.snapshotId !== snapshot.snapshotId)
+      throw new Error('Review inputs have not been saved at this project revision. Save and retry AI Review.')
+
+    const startingRevision = beforeRecord.recordRevision
+    const startingSaveVersion = saveVersionRef.current
+    const startingSnapshotId = snapshot.snapshotId
+    const previousModel = reviewModel
+    const previousRunIds = new Set(previousModel.runs.map(run => run.reviewRunId))
+    const previousFindingIds = new Set(previousModel.findings.map(finding => finding.findingId))
+    let response: Response
+    try {
+      response = await fetch('/api/ai-review', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: targetProjectId,
+          workflowId,
+          workflowVersion,
+          inputSnapshotId: startingSnapshotId,
+        }),
+      })
+    } catch {
+      throw new Error('The AI Review service could not be reached. No findings were installed.')
+    }
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch {
+      throw new Error('The AI Review service returned an invalid response. No findings were installed.')
+    }
+    const result = body && typeof body === 'object' && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : null
+    if (!response.ok) {
+      const code = result && typeof result.code === 'string' ? result.code : ''
+      const messages: Record<string, string> = {
+        PROJECT_CONFLICT: 'The project changed during AI Review. Reload and try again; no current findings were installed.',
+        REVIEW_INPUT_STALE: 'Review inputs changed during AI Review. Refresh inputs and run again.',
+        INPUT_STALE: 'Review inputs changed during AI Review. Refresh inputs and run again.',
+        WORKFLOW_NOT_READY: 'The published AI Review workflow is no longer ready. Check its dependencies and try again.',
+        INVALID_WORKFLOW_CAPABILITY: 'The selected workflow is not a published AI Review workflow.',
+        FORBIDDEN: 'Workspace write permission is required to run AI Review.',
+        TOO_LARGE: 'The current Review inputs exceed the supported AI Review limits.',
+        MODEL_OUTPUT_INVALID: 'The provider did not return valid grounded advisory findings.',
+        PROVIDER_REFUSED: 'The provider declined this AI Review request.',
+        REFUSED: 'The provider declined this AI Review request.',
+        PROVIDER_ERROR: 'The provider could not complete AI Review.',
+        PROVIDER_FAILURE: 'The provider did not complete AI Review.',
+        DEMO_PROJECT_UNSUPPORTED: 'AI Review is unavailable for demo or local projects.',
+      }
+      throw new Error(messages[code] ?? 'AI Review failed. No findings were installed.')
+    }
+    if (!result
+      || Object.keys(result).sort().join(',') !== 'findings,recordRevision,reviewModel,run'
+      || !Number.isSafeInteger(result.recordRevision)
+      || result.recordRevision !== startingRevision + 1
+      || !result.run || typeof result.run !== 'object' || Array.isArray(result.run)
+      || !Array.isArray(result.findings)
+      || !result.reviewModel || typeof result.reviewModel !== 'object' || Array.isArray(result.reviewModel))
+      throw new Error('The AI Review service returned invalid persistence metadata. No findings were installed.')
+
+    const savedRun = result.run as AiReviewRunUi
+    const savedModel = result.reviewModel as ReviewModel
+    const savedFindings = result.findings as ReviewFinding[]
+    if (savedRun.method !== 'ai-grounded-review-v1'
+      || !savedRun.reviewRunId
+      || savedRun.projectId !== targetProjectId
+      || savedRun.inputSnapshotId !== startingSnapshotId
+      || savedRun.status !== 'complete'
+      || savedModel.projectId !== targetProjectId
+      || savedModel.activeReviewRunId !== previousModel.activeReviewRunId
+      || savedModel.inputSnapshot?.snapshotId !== startingSnapshotId
+      || !Array.isArray(savedModel.runs)
+      || !Array.isArray(savedModel.findings)
+      || !savedModel.runs.some(run => run.reviewRunId === savedRun.reviewRunId)
+      || !savedFindings.every(finding => finding.reviewRunId === savedRun.reviewRunId
+        && finding.projectId === targetProjectId
+        && finding.inputSnapshotId === startingSnapshotId
+        && finding.suggestion === null)
+      || savedRun.findingIds.length !== savedFindings.length
+      || savedRun.findingIds.some(id => !savedFindings.some(finding => finding.findingId === id))
+      || [...previousRunIds].some(id => !savedModel.runs.some(run => run.reviewRunId === id))
+      || [...previousFindingIds].some(id => !savedModel.findings.some(finding => finding.findingId === id)))
+      throw new Error('The AI Review service returned findings outside the expected advisory Review contract.')
+
+    // Server persistence is authoritative. Verify its returned revision and stored
+    // Review model before advancing the local save queue to that revision.
+    const afterRecord = await projectRepository.loadProject(targetProjectId)
+    if (!afterRecord
+      || afterRecord.recordRevision !== result.recordRevision
+      || stableReviewSerialization(afterRecord.reviewModel) !== stableReviewSerialization(savedModel))
+      throw new Error('AI Review persistence could not be verified. Reload the project before continuing.')
+
+    // Never install a result over local edits made while inference was running.
+    // Leaving the local revision unchanged also makes subsequent saves fail closed
+    // rather than overwriting the server-persisted run with an older model.
+    if (projectIdRef.current !== targetProjectId
+      || projectRevisionRef.current !== startingRevision
+      || saveVersionRef.current !== startingSaveVersion
+      || currentReviewInputSnapshot?.snapshotId !== startingSnapshotId) {
+      throw new Error('The project or Review inputs changed while AI Review was running. The result was not installed here; reload the project before continuing.')
+    }
+
+    reviewActionContextRef.current.model = savedModel
+    setReviewModel(savedModel)
+    projectRevisionRef.current = Number(result.recordRevision)
+    savedVersionRef.current = startingSaveVersion
+    setSaveStatus('saved')
+  }, [
+    currentReviewInputSnapshot,
+    isDemoMode,
+    persistCurrentProject,
+    reviewModel,
   ])
   const handleSetGroundedFindingStatus = useCallback((
     findingId: string,
@@ -19265,7 +19674,7 @@ export default function App() {
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} canGenerateAi={canGenerateAiToc} recovery={activeAiTocRecovery} onDismissRecovery={handleDiscardAiTocRecovery} onRecoverRecovery={handleRecoverAiTocProposal} onGenerate={handleGenerateTocProposal} onGenerateAi={handleGenerateAiTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
        case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} contentExplorer={resolvedContentExplorer} contentExplorerAssets={contentExplorerAssets} onContentExplorerChange={handleContentExplorerChange} explorerReadOnly={isCloudProjectMode() && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true} canBrowseCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).workspace.read} canCopyCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true} loadCatalogProjects={loadCatalogProjects} loadCatalogItems={loadCatalogItems} loadCatalogPreview={loadCatalogPreview} onCatalogCopy={handleCatalogCopy} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} onRewriteAiTopicDraft={handleRewriteAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
-      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
+      case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} canRunAiReview={canRunAiReview} projectId={projectId} onRunAiReview={handleRunAiReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {
         const projection = publishProjection()

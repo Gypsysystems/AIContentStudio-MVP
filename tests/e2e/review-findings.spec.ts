@@ -776,6 +776,46 @@ test('shared Review eligibility locks stale and superseded history but permits a
     .toMatchObject({ ok: false, code: 'missing-topic' })
 })
 
+test('AI advisory findings remain actionable without replacing the active deterministic run', () => {
+  const data = fixtures()
+  const deterministic = buildGroundedReviewRun(
+    createEmptyReviewModel(data.projectId), data.snapshot,
+    data.evidenceIndex, data.conceptAnalysis, data.unsupportedAnalysis,
+  )
+  expect(deterministic.ok).toBe(true)
+  if (!deterministic.ok) return
+  const source = deterministic.findings.find(item => item.topicId && item.blockId)!
+  const aiRun = {
+    ...deterministic.run,
+    reviewRunId: 'ai-run-1',
+    findingIds: ['ai-finding-1'],
+    method: 'ai-grounded-review-v1' as const,
+  }
+  const aiFinding = {
+    ...source,
+    reviewRunId: aiRun.reviewRunId,
+    findingId: 'ai-finding-1',
+    category: 'AI Advisory',
+    required: false,
+    suggestion: null,
+  }
+  const model = {
+    ...deterministic.model,
+    runs: [...deterministic.model.runs, aiRun],
+    findings: [...deterministic.model.findings, aiFinding],
+  }
+  const topics = [{ id: 1, topicId: source.topicId! }]
+  const block = data.snapshot.topics[0].blocks.find(item => item.blockId === source.blockId)!
+  const content = { [source.topicId!]: [{ id: block.blockId, type: block.type, content: block.content }] }
+  expect(model.activeReviewRunId).toBe(deterministic.run.reviewRunId)
+  expect(checkReviewActionEligibility(model, source.findingId, data.snapshot, topics, content)).toEqual({ ok: true })
+  expect(checkReviewActionEligibility(model, aiFinding.findingId, data.snapshot, topics, content)).toEqual({ ok: true })
+  expect(checkReviewActionEligibility({
+    ...model,
+    runs: [...model.runs, { ...aiRun, reviewRunId: 'ai-run-2', findingIds: [] }],
+  }, aiFinding.findingId, data.snapshot, topics, content)).toMatchObject({ ok: false, code: 'stale' })
+})
+
 test('navigation checks its exact target again after an awaited save', async () => {
   const data = fixtures()
   const first = buildGroundedReviewRun(

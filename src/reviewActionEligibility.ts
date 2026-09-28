@@ -20,6 +20,11 @@ export function checkReviewActionEligibility(
 ): ReviewActionEligibility {
   const finding = model.findings.find(item => item.findingId === findingId)
   const run = model.runs.find(item => item.reviewRunId === finding?.reviewRunId)
+  // AI findings have their own most-recent-run boundary. The deterministic
+  // active run remains authoritative for required blockers and publishing.
+  const actionableRunId = run?.method === 'ai-grounded-review-v1'
+    ? model.runs.filter(item => item.method === 'ai-grounded-review-v1').at(-1)?.reviewRunId
+    : model.activeReviewRunId
   if (!finding || !snapshot || snapshot.readiness !== 'ready'
     || model.projectId !== snapshot.projectId
     || model.inputSnapshot?.snapshotId !== snapshot.snapshotId
@@ -27,7 +32,7 @@ export function checkReviewActionEligibility(
     || finding.inputSnapshotId !== snapshot.snapshotId
     || finding.freshness.status !== 'current'
     || finding.status === 'retired'
-    || model.activeReviewRunId !== finding.reviewRunId
+    || actionableRunId !== finding.reviewRunId
     || !run || run.status !== 'complete'
     || run.projectId !== snapshot.projectId
     || run.inputSnapshotId !== snapshot.snapshotId

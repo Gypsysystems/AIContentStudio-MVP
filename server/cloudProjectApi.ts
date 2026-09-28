@@ -494,6 +494,30 @@ export class CloudProjectApi {
     return this.client.saveProject(projectId, this.workspaceId, updated, expectedRevision)
   }
 
+  /** Atomically append a validated Review run to the existing project record. */
+  async saveGroundedReviewModel(
+    projectIdValue: unknown,
+    expectedRevision: number,
+    reviewModel: unknown,
+  ): Promise<Json> {
+    this.client.assertPermission(this.role, 'write')
+    const projectId = validateId(projectIdValue, 'projectId')
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || !isObject(reviewModel))
+      throw new CloudApiError(400, 'INVALID_REVIEW', 'Review result is invalid')
+    const current = await this.client.getProject(projectId, this.workspaceId)
+    if (!current) throw new CloudApiError(404, 'PROJECT_NOT_FOUND', 'Project was not found in the active workspace')
+    if (current.recordRevision !== expectedRevision)
+      throw new CloudApiError(409, 'PROJECT_CONFLICT', 'Project changed during AI Review; reload before retrying')
+    if (current.projectId !== projectId || current.workspaceId !== this.workspaceId
+      || typeof current.ownerUserId !== 'string' || !current.ownerUserId)
+      throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Stored project identity is invalid')
+    return this.client.saveProject(projectId, this.workspaceId, {
+      ...current,
+      reviewModel,
+      modifiedAt: Date.now(),
+    }, expectedRevision)
+  }
+
   private async projectNameConflict(name: string, excludedProjectId?: string): Promise<CloudApiError> {
     let names: string[] = []
     try {

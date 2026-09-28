@@ -118,6 +118,17 @@ export type ReviewRun = {
   createdAt: number
   updatedAt: number
   completedAt: number | null
+  method?: 'grounded-review-v1' | 'ai-grounded-review-v1'
+  aiProvenance?: {
+    providerId: string
+    modelId: string
+    workflow: { id: string; version: number }
+    promptPack: { id: string; version: number }
+    referenceSet: { id: string; version: number }
+    blueprint: { id: string; version: number }
+    inputSnapshotId: string
+    inputFingerprint: string
+  }
 }
 
 export type ReviewModel = {
