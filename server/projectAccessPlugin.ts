@@ -9,6 +9,7 @@ import { createLocalDevProjectAccessService } from './localDevProjectAccess'
 import { handleSupabaseAuthRequest, isLocalDevAllowed } from './supabaseProjectAccess'
 import { handleCloudFiles, handleCloudProjects } from './cloudProjectApi'
 import { handleAiCatalog, sendAiCatalogError } from './aiCatalogApi'
+import { handleContentCatalog, sendContentCatalogError } from './contentCatalogApi'
 import { handleAiConnections, sendConnectionError } from './aiConnectionsApi'
 import { handleGroundedToc } from './groundedTocApi'
 import { handleGroundedTopic } from './groundedTopicApi'
@@ -17,6 +18,7 @@ const ENDPOINT = '/api/project-access'
 const CLOUD_PROJECTS_ENDPOINT = '/api/cloud-projects'
 const CLOUD_FILES_ENDPOINT = '/api/cloud-files'
 const AI_CATALOG_ENDPOINT = '/api/ai-catalog'
+const CONTENT_CATALOG_ENDPOINT = '/api/content-catalog'
 const AI_CONNECTIONS_ENDPOINT = '/api/ai-connections'
 const GROUNDED_TOC_ENDPOINT = '/api/generate-toc'
 const GROUNDED_TOPIC_ENDPOINT = '/api/generate-topic'
@@ -224,7 +226,8 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
   server.middlewares.use((request, response, next) => {
     const pathname = request.url?.split('?')[0]
     if (pathname !== CLOUD_PROJECTS_ENDPOINT && pathname !== CLOUD_FILES_ENDPOINT
-      && pathname !== AI_CATALOG_ENDPOINT && pathname !== AI_CONNECTIONS_ENDPOINT
+      && pathname !== AI_CATALOG_ENDPOINT && pathname !== CONTENT_CATALOG_ENDPOINT
+      && pathname !== AI_CONNECTIONS_ENDPOINT
       && pathname !== GROUNDED_TOC_ENDPOINT && pathname !== GROUNDED_TOPIC_ENDPOINT) return next()
     response.setHeader('Cache-Control', 'no-store')
     const allowed = pathname === CLOUD_FILES_ENDPOINT ? ['GET', 'POST'] : ['POST']
@@ -251,11 +254,16 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
       sendJson(response, 503, { error: 'AI catalog cloud persistence is unavailable in local mode', code: 'AI_CATALOG_UNAVAILABLE' })
       return
     }
+    if (pathname === CONTENT_CATALOG_ENDPOINT && localDev) {
+      sendJson(response, 503, { error: 'Content catalog cloud persistence is unavailable in local mode', code: 'CONTENT_CATALOG_UNAVAILABLE' })
+      return
+    }
     if (pathname === AI_CONNECTIONS_ENDPOINT && localDev) {
       sendJson(response, 503, { error: 'Cloud AI connections are unavailable in local mode', code: 'CONNECTIONS_UNAVAILABLE' })
       return
     }
     if ((pathname === CLOUD_PROJECTS_ENDPOINT || pathname === AI_CATALOG_ENDPOINT
+      || pathname === CONTENT_CATALOG_ENDPOINT
       || pathname === GROUNDED_TOC_ENDPOINT || pathname === GROUNDED_TOPIC_ENDPOINT)
       || pathname === AI_CONNECTIONS_ENDPOINT) {
       if (request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
@@ -299,6 +307,16 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
         return
       }
       void handleAiCatalog(request, response).catch((error) => sendAiCatalogError(response, error))
+      return
+    }
+    if (pathname === CONTENT_CATALOG_ENDPOINT) {
+      const length = request.headers['content-length']
+      if (length !== undefined && Number(length) > 16_384) {
+        request.resume()
+        sendJson(response, 413, { error: 'Content catalog request exceeds the 16 KB limit', code: 'REQUEST_TOO_LARGE' })
+        return
+      }
+      void handleContentCatalog(request, response).catch(error => sendContentCatalogError(response, error))
       return
     }
     if (pathname === AI_CONNECTIONS_ENDPOINT) {
