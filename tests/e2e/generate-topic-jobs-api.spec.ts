@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
-import { createHmac, hkdfSync } from 'node:crypto'
+import { createHmac, hkdfSync, X509Certificate } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
+import { rootCertificates } from 'node:tls'
 import {
   executeGenerateTopicJobCommand,
   GenerateTopicJobsApiError,
@@ -248,8 +249,62 @@ test('enqueue maps a stale worker heartbeat to a safe unavailable response', asy
 test('worker connection validation requires its dedicated restricted database identity', () => {
   expect(() => workerDatabaseConfig('postgresql://user:password@db.example/worker')).toThrow()
   expect(() => workerDatabaseConfig('postgresql://generate_topic_worker:password@db.example/worker?sslmode=disable')).toThrow()
-  expect(workerDatabaseConfig('postgresql://generate_topic_worker:password@db.example/worker').ssl)
-    .toEqual({ rejectUnauthorized: true })
+})
+
+const workerDatabaseUrl = 'postgresql://generate_topic_worker:fixture-password@db.example/worker'
+
+function withWorkerCaSecrets(workerCa: string | undefined, fallbackCa: string | undefined, check: () => void) {
+  const previousWorkerCa = process.env.GENERATE_TOPIC_WORKER_DATABASE_CA
+  const previousFallbackCa = process.env.AI_CONNECTION_DATABASE_CA
+  try {
+    if (workerCa === undefined) delete process.env.GENERATE_TOPIC_WORKER_DATABASE_CA
+    else process.env.GENERATE_TOPIC_WORKER_DATABASE_CA = workerCa
+    if (fallbackCa === undefined) delete process.env.AI_CONNECTION_DATABASE_CA
+    else process.env.AI_CONNECTION_DATABASE_CA = fallbackCa
+    check()
+  } finally {
+    if (previousWorkerCa === undefined) delete process.env.GENERATE_TOPIC_WORKER_DATABASE_CA
+    else process.env.GENERATE_TOPIC_WORKER_DATABASE_CA = previousWorkerCa
+    if (previousFallbackCa === undefined) delete process.env.AI_CONNECTION_DATABASE_CA
+    else process.env.AI_CONNECTION_DATABASE_CA = previousFallbackCa
+  }
+}
+
+test('explicit worker CA takes precedence over the AI connection CA', () => {
+  const workerCa = rootCertificates[0]
+  const fallbackCa = rootCertificates[1]
+  withWorkerCaSecrets(workerCa, fallbackCa, () => {
+    const ssl = workerDatabaseConfig(workerDatabaseUrl).ssl
+    expect(ssl.rejectUnauthorized).toBe(true)
+    expect(new X509Certificate(ssl.ca!).fingerprint256)
+      .toBe(new X509Certificate(workerCa).fingerprint256)
+    expect(new X509Certificate(ssl.ca!).fingerprint256)
+      .not.toBe(new X509Certificate(fallbackCa).fingerprint256)
+  })
+})
+
+test('worker falls back to the AI connection CA when its own CA is absent', () => {
+  const fallbackCa = rootCertificates[0]
+  withWorkerCaSecrets(undefined, fallbackCa, () => {
+    const ssl = workerDatabaseConfig(workerDatabaseUrl).ssl
+    expect(ssl.rejectUnauthorized).toBe(true)
+    expect(new X509Certificate(ssl.ca!).fingerprint256)
+      .toBe(new X509Certificate(fallbackCa).fingerprint256)
+  })
+})
+
+test('invalid fallback CA fails closed', () => {
+  withWorkerCaSecrets(undefined, 'not-a-certificate', () => {
+    expect(() => workerDatabaseConfig(workerDatabaseUrl))
+      .toThrow('Generate Topic worker database is not configured')
+  })
+})
+
+test('worker uses system trust with certificate verification when both CAs are absent', () => {
+  withWorkerCaSecrets(undefined, undefined, () => {
+    expect(workerDatabaseConfig(workerDatabaseUrl).ssl)
+      .toEqual({ rejectUnauthorized: true })
+  })
 })
 
 test('worker refreshes the SQL liveness heartbeat when the queue is idle', async () => {

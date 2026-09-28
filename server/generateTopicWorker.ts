@@ -55,7 +55,7 @@ function failConfig(): never {
 
 export function workerDatabaseConfig(
   raw = process.env.GENERATE_TOPIC_WORKER_DATABASE_URL,
-  ca = process.env.GENERATE_TOPIC_WORKER_DATABASE_CA,
+  ca = process.env.GENERATE_TOPIC_WORKER_DATABASE_CA ?? process.env.AI_CONNECTION_DATABASE_CA,
 ): { connectionString: string; ssl: { rejectUnauthorized: true; ca?: string } } {
   if (!raw) return failConfig()
   try {
