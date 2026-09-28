@@ -74,6 +74,16 @@ export type AuthorMetadataContext = {
   variables: Array<{ name: string; value: string }>
 }
 
+export function preserveAuthorBlockStateOnUnchangedContent(
+  state: unknown,
+  legacyHydrated: boolean,
+): AuthorBlockState {
+  if (state === 'generated' || state === 'approved'
+    || state === 'manually-edited' || state === 'mixed' || state === 'legacy')
+    return state
+  return legacyHydrated ? 'legacy' : 'manually-edited'
+}
+
 function variableSnapshot(
   variables: Array<{ name: string; value: string }>,
 ): Record<string, string> {

@@ -5,6 +5,7 @@ import type {
 
 export type AuthorDraftBlock = {
   id: string
+  sourceBlockId?: string
   type: 'h1' | 'h2' | 'h3' | 'para' | 'procedure' | 'callout'
   content: string
   calloutVariant?: 'note' | 'warning'
@@ -23,7 +24,9 @@ export type AuthorTopicDraft = {
   version: 1
   draftId: string
   topicId: string
-  method: 'deterministic-evidence-draft-v1' | 'ai-grounded-topic-v1'
+  method: 'deterministic-evidence-draft-v1' | 'ai-grounded-topic-v1' | 'ai-grounded-rewrite-topic-v1'
+  rewriteSourceBlockIds?: string[]
+  rewriteProtectionFingerprint?: string
   modelLabel: string
   aiProvenance?: {
     providerId: string
@@ -146,6 +149,90 @@ export function authorContentFingerprint(blocks: AuthorComparableBlock[]): strin
   }))))
 }
 
+export function authorRewriteProtectionFingerprint(
+  baseline: AuthorAppliedBaseline | null | undefined,
+  blockStates: Record<string, AuthorBlockState> | null | undefined,
+): string {
+  return `rewrite-protection-v1-${stableHash(stableStringify({
+    baseline: baseline ?? null,
+    blockStates: blockStates ?? {},
+  }))}`
+}
+
+/**
+ * A rewrite target must have a persisted source-to-applied mapping, an exact
+ * current-content match to its baseline, and an explicit generated/approved
+ * block state. Everything else remains protected from this first rewrite
+ * batch.
+ */
+export function eligibleAuthorRewriteSourceBlockIds(
+  baseline: AuthorAppliedBaseline | null | undefined,
+  currentBlocks: AuthorComparableBlock[],
+  blockStates: Record<string, AuthorBlockState> = {},
+): string[] {
+  if (!baseline) return []
+  const currentById = new Map(currentBlocks.map(block => [block.id, block]))
+  if (currentById.size !== currentBlocks.length) return []
+  const seenSources = new Set<string>()
+  const seenApplied = new Set<string>()
+  for (const entry of baseline.blocks) {
+    if (!entry.sourceBlockId?.trim() || !entry.appliedBlockId?.trim()
+      || seenSources.has(entry.sourceBlockId)
+      || seenApplied.has(entry.appliedBlockId)) return []
+    seenSources.add(entry.sourceBlockId)
+    seenApplied.add(entry.appliedBlockId)
+  }
+  return baseline.blocks.flatMap(entry => {
+    const current = currentById.get(entry.appliedBlockId)
+    const state = blockStates[entry.appliedBlockId]
+    return current
+      && (state === 'generated' || state === 'approved')
+      && isSameBlock(current, entry.block)
+      && JSON.stringify(('evidenceIds' in current ? current.evidenceIds : []) ?? [])
+        === JSON.stringify(entry.block.evidenceIds ?? [])
+      ? [entry.sourceBlockId]
+      : []
+  })
+}
+
+/**
+ * Compose the server's source-block-mapped rewrites with unchanged baseline
+ * blocks. This ensures the normal regeneration diff sees protected/manual
+ * content and cannot interpret an omitted rewrite target as a deletion.
+ */
+export function composeAuthorRewriteDraftBlocks(
+  baseline: AuthorAppliedBaseline | null | undefined,
+  eligibleSourceBlockIds: string[],
+  rewrittenBlocks: AuthorDraftBlock[],
+): AuthorDraftBlock[] {
+  if (!baseline) throw new Error('A saved applied baseline is required for grounded rewriting.')
+  const expected = new Set(eligibleSourceBlockIds)
+  const replacementBySource = new Map<string, AuthorDraftBlock>()
+  for (const block of rewrittenBlocks) {
+    const sourceBlockId = block.sourceBlockId ?? block.id
+    if (!sourceBlockId || !expected.has(sourceBlockId) || replacementBySource.has(sourceBlockId))
+      throw new Error('The rewrite proposal contains an unknown or duplicate source block.')
+    replacementBySource.set(sourceBlockId, {
+      ...block,
+      id: sourceBlockId,
+      sourceBlockId,
+    })
+  }
+  if (replacementBySource.size !== expected.size
+    || eligibleSourceBlockIds.some(sourceBlockId => !replacementBySource.has(sourceBlockId)))
+    throw new Error('The rewrite proposal does not match the eligible source blocks.')
+  return baseline.blocks.map(entry => {
+    const rewritten = replacementBySource.get(entry.sourceBlockId)
+    return rewritten ?? {
+      ...entry.block,
+      id: entry.sourceBlockId,
+      sourceBlockId: entry.sourceBlockId,
+      evidenceIds: [...entry.block.evidenceIds],
+      ...(entry.block.procedureSteps ? { procedureSteps: [...entry.block.procedureSteps] } : {}),
+    }
+  })
+}
+
 function draftAsComparable(block: AuthorDraftBlock): AuthorComparableBlock {
   return {
     id: block.id,
@@ -179,6 +266,8 @@ export function buildAuthorRegenerationProposal(
   blockStates: Record<string, AuthorBlockState> = {},
 ): AuthorRegenerationProposal {
   const baselineBySource = new Map((baseline?.blocks ?? []).map(item => [item.sourceBlockId, item]))
+  const isRewrite = proposedDraft.method === 'ai-grounded-rewrite-topic-v1'
+  const rewriteSourceBlockIds = new Set(proposedDraft.rewriteSourceBlockIds ?? [])
   const currentById = new Map(currentBlocks.map(block => [block.id, block]))
   const matchedCurrent = new Set<string>()
   const diffs: AuthorDraftDiff[] = []
@@ -195,10 +284,12 @@ export function buildAuthorRegenerationProposal(
     const state = currentBlock
       ? blockStates[currentBlock.id]
       : undefined
+    const rewriteTarget = isRewrite && rewriteSourceBlockIds.has(proposed.id)
     const manual = !!baselineBlock && !!currentBlock && !isSameBlock(currentBlock, baselineBlock)
     const approved = !!baselineBlock
       && !!currentBlock
       && !manual
+      && !rewriteTarget
       && (topicApproved || state === 'approved')
 
     let status: AuthorDraftDiffStatus
@@ -207,6 +298,10 @@ export function buildAuthorRegenerationProposal(
     if (manual) {
       status = 'manually-edited'
       protection = state === 'legacy' ? 'legacy' : 'manual'
+      selected = false
+    } else if (isRewrite && !rewriteTarget) {
+      status = 'protected'
+      protection = state === 'legacy' ? 'legacy' : 'approved'
       selected = false
     } else if (approved && !isSameBlock(currentBlock, proposed)) {
       status = 'protected'

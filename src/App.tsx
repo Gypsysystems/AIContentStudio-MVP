@@ -83,6 +83,7 @@ import {
   evaluateAuthorGeneratedFreshness,
   hydrateAuthorTopicMetadata,
   pruneAuthorTopicMetadata,
+  preserveAuthorBlockStateOnUnchangedContent,
   stableAuthorTopicId,
   type AuthorTopicMetadata,
   type AuthorTopicMetadataMap,
@@ -96,9 +97,13 @@ import {
 import {
   authorBlockFingerprint,
   authorContentFingerprint,
+  authorRewriteProtectionFingerprint,
   buildAuthorRegenerationProposal,
   buildDeterministicAuthorDraft,
+  composeAuthorRewriteDraftBlocks,
+  eligibleAuthorRewriteSourceBlockIds,
   isAuthorDraftFresh,
+  type AuthorDraftBlock,
   type AuthorBlockState,
   type AuthorDraftDiff,
   type AuthorTopicDraft,
@@ -8054,6 +8059,205 @@ function AiTopicDraftControls({
   )
 }
 
+function AiTopicRewriteControls({
+  allowed,
+  projectSupported,
+  hasCurrentTopic,
+  groundingCurrent,
+  hasSubstantiveEvidence,
+  eligibleBlockCount,
+  existingProposalId,
+  onRewrite,
+}: {
+  allowed: boolean
+  projectSupported: boolean
+  hasCurrentTopic: boolean
+  groundingCurrent: boolean
+  hasSubstantiveEvidence: boolean
+  eligibleBlockCount: number
+  existingProposalId: string | null
+  onRewrite: (workflowId: string, workflowVersion: number) => Promise<void>
+}) {
+  const [workflows, setWorkflows] = useState<AiAssetVersion[]>([])
+  const [selectedWorkflowKey, setSelectedWorkflowKey] = useState('')
+  const [readiness, setReadiness] = useState<WorkflowReadiness | null>(null)
+  const [loadingWorkflows, setLoadingWorkflows] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [rewriting, setRewriting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [replacementConfirmationFor, setReplacementConfirmationFor] = useState<string | null>(null)
+  const rewriteLockRef = useRef(false)
+  const selectedWorkflow = workflows.find(asset => `${asset.id}@${asset.version}` === selectedWorkflowKey)
+  const eligible = allowed && hasCurrentTopic && groundingCurrent
+    && hasSubstantiveEvidence && eligibleBlockCount > 0
+  const capabilityMatches = (asset: AiAssetVersion): boolean => {
+    if (asset.kind !== 'workflow' || !('steps' in asset.definition)) return false
+    const normalize = (value: string) => value.trim().toLocaleLowerCase('en-US').replace(/[\s_-]+/gu, '')
+    const definition = asset.definition as WorkflowDefinition
+    return normalize(definition.capability) === 'rewritetopic'
+      && definition.steps.length > 0
+      && definition.steps.every(step => normalize(step.capability) === 'rewritetopic')
+  }
+
+  useEffect(() => {
+    let active = true
+    if (!allowed) {
+      setWorkflows([])
+      setSelectedWorkflowKey('')
+      setReadiness(null)
+      return () => { active = false }
+    }
+    setLoadingWorkflows(true)
+    setError(null)
+    void listAiAssets().then(async assets => {
+      if (!active) return
+      const workflowHeads = assets.filter(asset => asset.kind === 'workflow')
+      const histories = await Promise.all(workflowHeads.map(asset => historyAiAsset(asset.id)))
+      const available = histories.flat().filter(asset => asset.kind === 'workflow'
+        && asset.state === 'published'
+        && capabilityMatches(asset))
+        .sort((left, right) => left.name.localeCompare(right.name)
+          || left.id.localeCompare(right.id) || right.version - left.version)
+      if (!active) return
+      setWorkflows(available)
+      setSelectedWorkflowKey(current => available.some(asset => `${asset.id}@${asset.version}` === current)
+        ? current
+        : available[0] ? `${available[0].id}@${available[0].version}` : '')
+    }).catch(() => {
+      if (active) setError('Published Rewrite Topic workflows could not be loaded. Try again later.')
+    }).finally(() => {
+      if (active) setLoadingWorkflows(false)
+    })
+    return () => { active = false }
+  }, [allowed])
+
+  useEffect(() => {
+    let active = true
+    setReadiness(null)
+    if (!allowed || !selectedWorkflow) {
+      setChecking(false)
+      return () => { active = false }
+    }
+    setChecking(true)
+    setError(null)
+    void checkAiWorkflowReadiness(selectedWorkflow.id, selectedWorkflow.version).then(result => {
+      if (active) setReadiness(result)
+    }).catch(() => {
+      if (active) setError('Workflow readiness could not be verified. Check the published workflow and provider connection.')
+    }).finally(() => {
+      if (active) setChecking(false)
+    })
+    return () => { active = false }
+  }, [allowed, selectedWorkflow?.id, selectedWorkflow?.version])
+
+  const runRewrite = async () => {
+    if (!selectedWorkflow || readiness?.status !== 'ready' || !eligible || rewriteLockRef.current) return
+    rewriteLockRef.current = true
+    setRewriting(true)
+    setError(null)
+    try {
+      await onRewrite(selectedWorkflow.id, selectedWorkflow.version)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Grounded Rewrite Topic failed. No proposal was installed.')
+    } finally {
+      rewriteLockRef.current = false
+      setRewriting(false)
+    }
+  }
+
+  const requestRewrite = () => {
+    if (!selectedWorkflow || readiness?.status !== 'ready' || !eligible || rewriting) return
+    if (existingProposalId) {
+      setReplacementConfirmationFor(existingProposalId)
+      return
+    }
+    void runRewrite()
+  }
+
+  if (!hasCurrentTopic) return null
+  return (
+    <section data-testid="ai-topic-rewrite-controls" className="rounded-lg border border-[#D8D0F0] bg-white p-3">
+      <p className="text-[10px] font-semibold text-[#514188]">Rewrite Topic with AI</p>
+      <p className="mt-1 text-[10px] leading-relaxed text-[#7D788E]">
+        Proposes evidence-grounded rewrites only for unchanged generated or approved blocks. Manual and protected content stays untouched until you explicitly apply selected changes.
+      </p>
+      {!projectSupported ? (
+        <p role="status" className="mt-2 text-[10px] text-[#9A3412]">Grounded Rewrite Topic requires a saved cloud project.</p>
+      ) : !allowed ? (
+        <p role="status" className="mt-2 text-[10px] text-[#9A3412]">Write permission is required to create a rewrite proposal.</p>
+      ) : (
+        <>
+          <label className="mt-3 block text-[10px] font-medium text-[#575766]">
+            Published Rewrite Topic workflow
+            <select
+              aria-label="Published Rewrite Topic workflow"
+              data-testid="ai-topic-rewrite-workflow-select"
+              value={selectedWorkflowKey}
+              disabled={loadingWorkflows || rewriting || workflows.length === 0}
+              onChange={event => setSelectedWorkflowKey(event.target.value)}
+              className="mt-1 block w-full rounded-lg border border-[#D8D5CF] bg-white px-3 py-2 text-[11px] text-[#22223A]"
+            >
+              {workflows.length === 0
+                ? <option value="">{loadingWorkflows ? 'Loading published workflows…' : 'No published Rewrite Topic workflows'}</option>
+                : workflows.map(workflow => (
+                  <option key={`${workflow.id}@${workflow.version}`} value={`${workflow.id}@${workflow.version}`}>
+                    {workflow.name} · v{workflow.version}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <p className="mt-2 text-[9px] text-[#6F6C7E]">
+            {eligibleBlockCount} eligible baseline block{eligibleBlockCount === 1 ? '' : 's'}
+          </p>
+          <button
+            type="button"
+            data-testid="rewrite-ai-topic"
+            disabled={!eligible || readiness?.status !== 'ready' || rewriting}
+            onClick={requestRewrite}
+            className="author-context-action mt-2 w-full disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {rewriting ? 'Preparing rewrite proposal…' : 'Propose grounded rewrite'}
+          </button>
+          {existingProposalId && replacementConfirmationFor === existingProposalId && (
+            <div data-testid="ai-topic-rewrite-replacement-confirmation" className="mt-2 rounded-md border border-[#F2C98A] bg-[#FFF8E8] p-2">
+              <p className="text-[10px] leading-relaxed text-[#805B18]">A saved topic proposal already exists. Replace it only after the rewrite proposal is saved?</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  data-testid="confirm-ai-topic-rewrite-replacement"
+                  disabled={!eligible || readiness?.status !== 'ready' || rewriting}
+                  onClick={() => { setReplacementConfirmationFor(null); void runRewrite() }}
+                  className="flex-1 rounded-md bg-[#5B5BD6] px-2 py-1.5 text-[10px] font-semibold text-white disabled:opacity-50"
+                >
+                  Replace proposal and rewrite
+                </button>
+                <button type="button" disabled={rewriting} onClick={() => setReplacementConfirmationFor(null)} className="rounded-md border border-[#D8D5CF] bg-white px-2 py-1.5 text-[10px] font-medium text-[#555568] disabled:opacity-50">
+                  Keep current
+                </button>
+              </div>
+            </div>
+          )}
+          {!groundingCurrent && <p role="status" className="mt-2 text-[10px] text-[#9A3412]">Current topic grounding is missing or stale.</p>}
+          {groundingCurrent && !hasSubstantiveEvidence && <p role="status" className="mt-2 text-[10px] text-[#9A3412]">No substantive evidence is committed to this topic.</p>}
+          {groundingCurrent && hasSubstantiveEvidence && eligibleBlockCount === 0 && <p role="status" data-testid="ai-topic-rewrite-no-eligible-blocks" className="mt-2 text-[10px] text-[#9A3412]">No unchanged generated or approved baseline blocks are eligible to rewrite. Manual and protected blocks are preserved.</p>}
+          {loadingWorkflows && <p role="status" className="mt-2 text-[10px] text-[#626277]">Loading published workflows…</p>}
+          {checking && <p role="status" className="mt-2 text-[10px] text-[#626277]">Checking workflow and provider readiness…</p>}
+          {readiness && (
+            <div data-testid="ai-topic-rewrite-readiness" className={`mt-2 rounded-md px-2 py-1.5 text-[10px] ${readiness.status === 'ready' ? 'bg-[#ECFDF3] text-[#166534]' : 'bg-[#FFF7ED] text-[#9A3412]'}`}>
+              <p className="font-semibold">{readiness.status === 'ready' ? 'Workflow ready' : 'Workflow blocked'}
+                {readiness.model ? ` · ${readiness.model.providerId} / ${readiness.model.modelId}` : ''}
+              </p>
+              {readiness.blockers.map(blocker => <p key={blocker.code} className="mt-1">{blocker.message}</p>)}
+            </div>
+          )}
+          {!loadingWorkflows && workflows.length === 0 && !error && <p role="status" className="mt-2 text-[10px] text-[#9A3412]">No published Rewrite Topic workflow is available.</p>}
+          {error && <p role="alert" data-testid="ai-topic-rewrite-error" className="mt-2 text-[10px] text-[#B42318]">{error}</p>}
+        </>
+      )}
+    </section>
+  )
+}
+
 function RealTocProposalScreen({
   onNav,
   toc,
@@ -9964,7 +10168,7 @@ function OutlineTocPanel({
 }
 
 // ── Screen: Studio ────────────────────────────────────────────────────────────
-function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, contentExplorer, contentExplorerAssets, onContentExplorerChange, explorerReadOnly, canBrowseCatalog, canCopyCatalog, loadCatalogProjects, loadCatalogItems, loadCatalogPreview, onCatalogCopy, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; contentExplorer: ContentExplorerMetadata; contentExplorerAssets: ContentExplorerAssets; onContentExplorerChange: (metadata: ContentExplorerMetadata) => void; explorerReadOnly: boolean; canBrowseCatalog?: boolean; canCopyCatalog?: boolean; loadCatalogProjects?: () => Promise<ResourcePickerSourceProject[]>; loadCatalogItems?: (filters: { projectId?: string; assetType?: ResourcePickerItem['assetType']; search?: string; limit: number; offset: number }) => Promise<ResourcePickerItem[]>; loadCatalogPreview?: (item: ResourcePickerItem) => Promise<ResourcePickerPreview>; onCatalogCopy?: (item: ResourcePickerItem, version: number, afterTopicId: string | null) => Promise<void>; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
+function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, contentExplorer, contentExplorerAssets, onContentExplorerChange, explorerReadOnly, canBrowseCatalog, canCopyCatalog, loadCatalogProjects, loadCatalogItems, loadCatalogPreview, onCatalogCopy, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, onRewriteAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; contentExplorer: ContentExplorerMetadata; contentExplorerAssets: ContentExplorerAssets; onContentExplorerChange: (metadata: ContentExplorerMetadata) => void; explorerReadOnly: boolean; canBrowseCatalog?: boolean; canCopyCatalog?: boolean; loadCatalogProjects?: () => Promise<ResourcePickerSourceProject[]>; loadCatalogItems?: (filters: { projectId?: string; assetType?: ResourcePickerItem['assetType']; search?: string; limit: number; offset: number }) => Promise<ResourcePickerItem[]>; loadCatalogPreview?: (item: ResourcePickerItem) => Promise<ResourcePickerPreview>; onCatalogCopy?: (item: ResourcePickerItem, version: number, afterTopicId: string | null) => Promise<void>; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; onRewriteAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
@@ -10670,6 +10874,13 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   const hasSubstantiveActiveTopicEvidence = !!activeTopic
     && (activeTopic.supportingEvidenceIds ?? []).some(id =>
       evidenceIndex?.items.some(item => item.id === id && item.blockType !== 'heading'))
+  const eligibleRewriteSourceBlockIds = activeAuthorMetadata
+    ? eligibleAuthorRewriteSourceBlockIds(
+        activeAuthorMetadata.appliedBaseline,
+        docBlocks,
+        activeAuthorMetadata.blockStates,
+      )
+    : []
 
   const handleGenerateAiTopicDraft = async (workflowId: string, workflowVersion: number) => {
     if (!activeStableTopicId || !onGenerateAiTopicDraft) {
@@ -10690,6 +10901,30 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
       setTopicAiWarning(cause instanceof Error
         ? cause.message
         : 'AI topic generation failed. No draft proposal was installed.')
+    } finally {
+      setContentSugLoading(false)
+    }
+  }
+
+  const handleRewriteAiTopicDraft = async (workflowId: string, workflowVersion: number) => {
+    if (!activeStableTopicId || !onRewriteAiTopicDraft) {
+      setTopicAiWarning('Select a committed topic with generated baseline content before rewriting.')
+      return
+    }
+    setContentSugLoading(true)
+    setTopicAiWarning(null)
+    try {
+      const result = await onRewriteAiTopicDraft(activeStableTopicId, workflowId, workflowVersion)
+      if (!result.draft) {
+        setTopicAiWarning(result.error ?? 'Grounded Rewrite Topic failed. No proposal was installed.')
+        return
+      }
+      setDraftOpen(true)
+      setConfirmDraftApply(false)
+    } catch (cause) {
+      setTopicAiWarning(cause instanceof Error
+        ? cause.message
+        : 'Grounded Rewrite Topic failed. No proposal was installed.')
     } finally {
       setContentSugLoading(false)
     }
@@ -11074,6 +11309,17 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               existingProposalId={activeRegenerationProposal?.proposalId ?? null}
               onGenerate={(workflowId, workflowVersion) =>
                 handleGenerateAiTopicDraft(workflowId, workflowVersion)}
+            />
+            <AiTopicRewriteControls
+              allowed={!!projectId && !isDemoMode && !!canGenerateAiTopic}
+              projectSupported={!!projectId && !isDemoMode && isCloudProjectMode()}
+              hasCurrentTopic={!!activeStableTopicId && !!activeTopic}
+              groundingCurrent={activeGroundingFresh}
+              hasSubstantiveEvidence={hasSubstantiveActiveTopicEvidence}
+              eligibleBlockCount={eligibleRewriteSourceBlockIds.length}
+              existingProposalId={activeRegenerationProposal?.proposalId ?? null}
+              onRewrite={(workflowId, workflowVersion) =>
+                handleRewriteAiTopicDraft(workflowId, workflowVersion)}
             />
             {topicAiWarning && <p role="status" data-testid="topic-ai-warning" className="rounded-lg border border-[#E7DCC7] bg-[#FBF7EC] p-3 text-[10px] leading-relaxed text-[#765F37]">{topicAiWarning}</p>}
           </div>
@@ -13148,7 +13394,11 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <h2 className="text-[13px] font-semibold text-[#111218]">
-                  {activeDraft?.method === 'ai-grounded-topic-v1' ? 'Review AI-generated draft proposal' : 'Review grounded draft'}
+                  {activeDraft?.method === 'ai-grounded-rewrite-topic-v1'
+                    ? 'Review grounded rewrite proposal'
+                    : activeDraft?.method === 'ai-grounded-topic-v1'
+                      ? 'Review AI-generated draft proposal'
+                      : 'Review grounded draft'}
                 </h2>
                 {activeDraft && (
                   <span data-testid="author-draft-freshness" className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded ${activeDraftFresh ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEF3C7] text-[#B45309]'}`}>
@@ -13193,6 +13443,11 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                       AI-generated draft proposal · not applied to authored content
                     </p>
                   )}
+                  {activeDraft.method === 'ai-grounded-rewrite-topic-v1' && (
+                    <p data-testid="ai-rewrite-topic-not-applied" className="mt-1 text-[10px] font-semibold text-[#9A3412]">
+                      Grounded rewrite proposal · not applied to authored content
+                    </p>
+                  )}
                   <p className="text-[11px] font-semibold text-[#3D3D4E] mt-1">{activeDraft.modelLabel}</p>
                   <p className="text-[9px] text-[#9898AB] mt-1">{activeDraft.method} · {new Date(activeDraft.generatedAt).toLocaleString()}</p>
                   <p className="text-[9px] text-[#9898AB] mt-1">Content type: {activeDraft.contentType} · Language: {activeDraft.language || 'Project language'}</p>
@@ -13225,7 +13480,11 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                     )}
                     <div className="space-y-2">
                       {activeRegenerationProposal.diffs.map(diff => {
-                        const selectable = diff.status !== 'unchanged' && diff.status !== 'manually-edited'
+                        const rewriteProtected = activeDraft.method === 'ai-grounded-rewrite-topic-v1'
+                          && diff.status === 'protected'
+                        const selectable = diff.status !== 'unchanged'
+                          && diff.status !== 'manually-edited'
+                          && !rewriteProtected
                         const labels: Record<AuthorDraftDiff['status'], string> = {
                           added: 'Added',
                           changed: 'Changed',
@@ -13273,7 +13532,9 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                                 )}
                                 {(diff.status === 'manually-edited' || diff.status === 'protected') && (
                                   <p className="text-[9px] text-[#B45309] mt-1">
-                                    Preserved by default. {diff.status === 'protected' ? 'Select to approve this replacement.' : 'Manual content cannot be replaced from this proposal.'}
+                                    {rewriteProtected
+                                      ? 'Protected from Rewrite Topic and preserved unchanged.'
+                                      : `Preserved by default. ${diff.status === 'protected' ? 'Select to approve this replacement.' : 'Manual content cannot be replaced from this proposal.'}`}
                                   </p>
                                 )}
                                 {diff.status === 'removed' && diff.protection === 'approved' && (
@@ -16441,10 +16702,13 @@ export default function App() {
             const unchanged = authorBlockFingerprint(block)
               === authorBlockFingerprint(baselineEntry.block)
             if (unchanged) {
-              blockStates[block.id] = existing.blockStates?.[block.id] === 'generated'
-                ? 'generated'
-                : 'approved'
-              generatedCount += 1
+              const priorState = preserveAuthorBlockStateOnUnchangedContent(
+                existing.blockStates?.[block.id],
+                existing.legacyHydrated,
+              )
+              blockStates[block.id] = priorState
+              if (priorState === 'generated' || priorState === 'approved') generatedCount += 1
+              else manualCount += 1
             } else {
               blockStates[block.id] = 'manually-edited'
               manualCount += 1
@@ -17386,6 +17650,372 @@ export default function App() {
     triggerAutosave,
   ])
 
+  const handleRewriteAiTopicDraft = useCallback(async (
+    topicId: string,
+    workflowId: string,
+    workflowVersion: number,
+  ): Promise<{ draft: AuthorTopicDraft | null; error: string | null }> => {
+    const targetProjectId = projectIdRef.current
+    if (!targetProjectId || !isCloudProjectMode() || isDemoMode)
+      throw new Error('Grounded Rewrite Topic is available only for a cloud project.')
+    if (getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true)
+      throw new Error('Write permission is required to create a grounded rewrite proposal.')
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/u.test(workflowId)
+      || !Number.isSafeInteger(workflowVersion) || workflowVersion < 1)
+      throw new Error('Select a published Rewrite Topic workflow.')
+
+    const topic = appToc.find(candidate => stableAuthorTopicId(candidate) === topicId)
+    if (!topic) throw new Error('The selected TOC topic no longer exists.')
+    const beforeMetadata = authorTopicMetadataRef.current[topicId]
+    const beforeContext = beforeMetadata?.groundingContext
+    if (!beforeContext || !isTopicGroundingContextFresh(beforeContext, buildGroundingInput(topic)))
+      throw new Error('Topic grounding is missing or stale. Refresh grounding before rewriting.')
+    const currentBlocks = topicContentRef.current[topicId]
+      ?? topicContentRef.current[String(topic.id)]
+      ?? []
+    const eligibleSourceBlockIds = eligibleAuthorRewriteSourceBlockIds(
+      beforeMetadata.appliedBaseline,
+      currentBlocks,
+      beforeMetadata.blockStates,
+    )
+    if (eligibleSourceBlockIds.length === 0)
+      throw new Error('No unchanged generated or approved baseline blocks are eligible to rewrite.')
+    const startingProtectionFingerprint = authorRewriteProtectionFingerprint(
+      beforeMetadata.appliedBaseline,
+      beforeMetadata.blockStates,
+    )
+    const startingEligibilitySnapshot = JSON.stringify([...eligibleSourceBlockIds].sort())
+    const committedEvidenceIds = new Set(topic.supportingEvidenceIds ?? [])
+    const substantiveEvidenceIds = new Set((evidenceIndex?.items ?? [])
+      .filter(item => item.blockType !== 'heading' && committedEvidenceIds.has(item.id))
+      .map(item => item.id))
+    if (substantiveEvidenceIds.size === 0)
+      throw new Error('No substantive evidence is committed to this topic.')
+
+    if (!await persistCurrentProject())
+      throw new Error('Your latest project changes could not be saved. Retry saving before rewriting.')
+    await saveQueueRef.current
+    const beforeRecord = await projectRepository.loadProject(targetProjectId)
+    if (!beforeRecord || projectIdRef.current !== targetProjectId
+      || beforeRecord.recordRevision !== projectRevisionRef.current)
+      throw new Error('PROJECT_CONFLICT: The project changed. Reload it before creating a rewrite proposal.')
+    const savedTopic = (beforeRecord.appToc ?? []).find((candidate): candidate is { id: number; topicId?: string } =>
+      isAuthorMetadataTopic(candidate) && stableAuthorTopicId(candidate) === topicId)
+    if (!savedTopic || JSON.stringify(savedTopic) !== JSON.stringify(topic))
+      throw new Error('PROJECT_CONFLICT: The committed topic changed. Reload it before rewriting.')
+    const savedMetadata = beforeRecord.authorTopicMetadata?.[topicId]
+    const savedBlocks = (beforeRecord.topicContent?.[topicId]
+      ?? beforeRecord.topicContent?.[String(topic.id)]
+      ?? []) as DocBlock[]
+    const startingBlocks = topicContentRef.current[topicId]
+      ?? topicContentRef.current[String(topic.id)]
+      ?? []
+    const startingContentFingerprint = authorContentFingerprint(startingBlocks)
+    if (authorContentFingerprint(savedBlocks) !== startingContentFingerprint
+      || !savedMetadata
+      || savedMetadata.groundingContext?.contextId !== beforeContext.contextId
+      || JSON.stringify(savedMetadata.appliedBaseline) !== JSON.stringify(beforeMetadata.appliedBaseline)
+      || JSON.stringify(savedMetadata.blockStates) !== JSON.stringify(beforeMetadata.blockStates)
+      || JSON.stringify(eligibleAuthorRewriteSourceBlockIds(
+        savedMetadata.appliedBaseline,
+        savedBlocks,
+        savedMetadata.blockStates,
+      ).sort()) !== JSON.stringify([...eligibleSourceBlockIds].sort()))
+      throw new Error('PROJECT_CONFLICT: Saved authored content or rewrite baseline changed. Reload before rewriting.')
+
+    const startingRevision = beforeRecord.recordRevision
+    const startingSaveVersion = saveVersionRef.current
+    const startingContextId = beforeContext.contextId
+    const startingGroundingFingerprint = JSON.stringify(beforeContext.provenance)
+    const beforeRecordGrounding = JSON.stringify({
+      sourcesRevision: beforeRecord.sourcesRevision,
+      evidenceIndex: beforeRecord.evidenceIndex,
+      conceptAnalysis: beforeRecord.conceptAnalysis,
+      tocRevision: beforeRecord.tocRevision,
+    })
+    let response: Response
+    try {
+      response = await fetch('/api/rewrite-topic', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: targetProjectId, topicId, workflowId, workflowVersion }),
+      })
+    } catch {
+      throw new Error('The AI Rewrite Topic service could not be reached. No proposal was installed.')
+    }
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch {
+      throw new Error('The AI Rewrite Topic service returned an invalid response.')
+    }
+    const result = body && typeof body === 'object' && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : null
+    if (!response.ok) {
+      const code = result && typeof result.code === 'string' ? result.code : ''
+      const messages: Record<string, string> = {
+        PROJECT_CONFLICT: 'The project, grounding, or authored content changed during rewriting. Reload and try again.',
+        GROUNDING_STALE: 'Topic grounding is stale. Refresh grounding before rewriting.',
+        EVIDENCE_STALE: 'Source evidence changed. Rebuild the Evidence Index and grounded analysis.',
+        ANALYSIS_STALE: 'Grounded analysis changed. Rebuild analysis before rewriting.',
+        NO_SUPPORTING_EVIDENCE: 'No substantive evidence is committed to this topic.',
+        WORKFLOW_NOT_READY: 'The published Rewrite Topic workflow is not ready. Check its readiness and try again.',
+        INVALID_WORKFLOW_CAPABILITY: 'The selected workflow is not a supported Rewrite Topic workflow.',
+        TOO_LARGE: 'The current grounded rewrite packet exceeds the supported limit.',
+        MODEL_OUTPUT_INVALID: 'The provider did not return a valid evidence-grounded rewrite.',
+        DEMO_PROJECT_UNSUPPORTED: 'Grounded Rewrite Topic is unavailable for demo or local projects.',
+      }
+      throw new Error(messages[code] ?? 'AI topic rewriting failed. No draft proposal was installed.')
+    }
+    if (!result || Object.keys(result).sort().join(',') !== 'draft,recordRevision'
+      || !Number.isSafeInteger(result.recordRevision)
+      || result.recordRevision !== startingRevision
+      || !result.draft || typeof result.draft !== 'object' || Array.isArray(result.draft))
+      throw new Error('The AI Rewrite Topic service returned invalid draft revision metadata.')
+
+    const serverDraft = result.draft as AuthorTopicDraft
+    const currentMetadata = authorTopicMetadataRef.current[topicId]
+    const currentContext = currentMetadata?.groundingContext
+    const currentTopic = appToc.find(candidate => stableAuthorTopicId(candidate) === topicId)
+    const afterBlocks = topicContentRef.current[topicId]
+      ?? topicContentRef.current[String(topic.id)]
+      ?? []
+    const currentEligibilitySnapshot = JSON.stringify(eligibleAuthorRewriteSourceBlockIds(
+      currentMetadata?.appliedBaseline,
+      afterBlocks,
+      currentMetadata?.blockStates,
+    ).sort())
+    if (projectIdRef.current !== targetProjectId
+      || projectRevisionRef.current !== startingRevision
+      || saveVersionRef.current !== startingSaveVersion
+      || !currentTopic
+      || JSON.stringify(currentTopic) !== JSON.stringify(topic)
+      || !currentContext
+      || currentContext.contextId !== startingContextId
+      || JSON.stringify(currentContext.provenance) !== startingGroundingFingerprint
+      || !isTopicGroundingContextFresh(currentContext, buildGroundingInput(currentTopic))
+      || authorContentFingerprint(afterBlocks) !== startingContentFingerprint
+      || authorRewriteProtectionFingerprint(currentMetadata?.appliedBaseline, currentMetadata?.blockStates)
+        !== startingProtectionFingerprint
+      || currentEligibilitySnapshot !== startingEligibilitySnapshot)
+      throw new Error('PROJECT_CONFLICT: The topic, grounding, or authored content changed during rewriting. No proposal was installed.')
+    const afterRecord = await projectRepository.loadProject(targetProjectId)
+    const savedAfterMetadata = afterRecord?.authorTopicMetadata?.[topicId]
+    const savedAfterBlocks = (afterRecord
+      ? afterRecord.topicContent?.[topicId]
+        ?? afterRecord.topicContent?.[String(topic.id)]
+        ?? []
+      : []) as DocBlock[]
+    const savedAfterEligibilitySnapshot = savedAfterMetadata
+      ? JSON.stringify(eligibleAuthorRewriteSourceBlockIds(
+          savedAfterMetadata.appliedBaseline,
+          savedAfterBlocks,
+          savedAfterMetadata.blockStates,
+        ).sort())
+      : '[]'
+    if (!afterRecord
+      || projectIdRef.current !== targetProjectId
+      || afterRecord.recordRevision !== startingRevision
+      || projectRevisionRef.current !== startingRevision
+      || saveVersionRef.current !== startingSaveVersion
+      || authorContentFingerprint(topicContentRef.current[topicId]
+        ?? topicContentRef.current[String(topic.id)]
+        ?? []) !== startingContentFingerprint
+      || authorTopicMetadataRef.current[topicId]?.groundingContext?.contextId !== startingContextId
+      || JSON.stringify({
+        sourcesRevision: afterRecord.sourcesRevision,
+        evidenceIndex: afterRecord.evidenceIndex,
+        conceptAnalysis: afterRecord.conceptAnalysis,
+        tocRevision: afterRecord.tocRevision,
+      }) !== beforeRecordGrounding
+      || JSON.stringify((afterRecord.appToc ?? []).find((candidate): candidate is { id: number; topicId?: string } =>
+        isAuthorMetadataTopic(candidate) && stableAuthorTopicId(candidate) === topicId)) !== JSON.stringify(topic)
+      || !savedAfterMetadata
+      || authorRewriteProtectionFingerprint(savedAfterMetadata.appliedBaseline, savedAfterMetadata.blockStates)
+        !== startingProtectionFingerprint
+      || savedAfterEligibilitySnapshot !== startingEligibilitySnapshot) {
+      throw new Error('PROJECT_CONFLICT: Project grounding or authored content changed during rewriting. No proposal was installed.')
+    }
+
+    const aiProvenance = serverDraft.aiProvenance
+    if (serverDraft.version !== 1
+      || serverDraft.method !== 'ai-grounded-rewrite-topic-v1'
+      || serverDraft.topicId !== topicId
+      || typeof serverDraft.draftId !== 'string'
+      || !Number.isSafeInteger(serverDraft.generatedAt)
+      || typeof serverDraft.groundingRevision !== 'string'
+      || serverDraft.groundingContextId !== startingContextId
+      || !Array.isArray(serverDraft.blocks)
+      || !Array.isArray(serverDraft.evidenceIdsUsed)
+      || !aiProvenance
+      || typeof aiProvenance.providerId !== 'string'
+      || typeof aiProvenance.modelId !== 'string'
+      || !aiProvenance.promptPack
+      || !aiProvenance.referenceSet
+      || !aiProvenance.blueprint
+      || !aiProvenance.workflow
+      || aiProvenance.workflow.id !== workflowId
+      || aiProvenance.workflow.version !== workflowVersion)
+      throw new Error('The AI Rewrite Topic service returned an invalid grounded draft.')
+
+    const mappedBlocks = serverDraft.blocks.map(block => {
+      if (!block || typeof block !== 'object') throw new Error('The AI Rewrite Topic service returned an invalid block mapping.')
+      const sourceBlockId = block.sourceBlockId ?? block.id
+      if (typeof sourceBlockId !== 'string')
+        throw new Error('The AI Rewrite Topic service omitted a source block mapping.')
+      return { ...block, id: sourceBlockId, sourceBlockId } as AuthorDraftBlock
+    })
+    const actualSourceIds = mappedBlocks.map(block => block.sourceBlockId!)
+    if (new Set(actualSourceIds).size !== eligibleSourceBlockIds.length
+      || JSON.stringify([...actualSourceIds].sort()) !== JSON.stringify([...eligibleSourceBlockIds].sort())
+      || (serverDraft.rewriteSourceBlockIds
+        && JSON.stringify([...serverDraft.rewriteSourceBlockIds].sort()) !== JSON.stringify([...eligibleSourceBlockIds].sort())))
+      throw new Error('The rewrite proposal source blocks do not match the current eligible baseline.')
+
+    const allowedEvidence = new Set([
+      ...beforeContext.requiredEvidence.map(item => item.evidenceId),
+      ...beforeContext.optionalSupportingEvidence.map(item => item.evidenceId),
+    ])
+    const citedEvidence = new Set<string>()
+    const safeBlocks = mappedBlocks.map((block, index) => {
+      if (!['para', 'procedure', 'callout'].includes(block.type)
+        || typeof block.content !== 'string'
+        || !Array.isArray(block.evidenceIds) || block.evidenceIds.length === 0
+        || block.evidenceIds.some(id => typeof id !== 'string' || !allowedEvidence.has(id))
+        || (block.type === 'callout' && !['note', 'warning'].includes(block.calloutVariant ?? ''))
+        || (block.type === 'procedure'
+          && (!Array.isArray(block.procedureSteps)
+            || block.procedureSteps.length < 2
+            || block.procedureSteps.some(step => typeof step !== 'string' || !step.trim()))))
+        throw new Error(`The AI Rewrite Topic service returned an invalid evidence-backed block (${index + 1}).`)
+      block.evidenceIds.forEach(id => citedEvidence.add(id))
+      return {
+        type: block.type,
+        content: block.content,
+        id: block.sourceBlockId!,
+        sourceBlockId: block.sourceBlockId!,
+        evidenceIds: [...block.evidenceIds],
+        ...(block.calloutVariant ? { calloutVariant: block.calloutVariant } : {}),
+        ...(block.procedureSteps ? { procedureSteps: [...block.procedureSteps] } : {}),
+      }
+    })
+    const evidenceIdsUsed = [...new Set(serverDraft.evidenceIdsUsed)]
+    if (evidenceIdsUsed.length !== citedEvidence.size
+      || evidenceIdsUsed.some(id => !allowedEvidence.has(id) || !citedEvidence.has(id))
+      || [...citedEvidence].some(id => !evidenceIdsUsed.includes(id)))
+      throw new Error('The AI Rewrite Topic service returned unsupported evidence references.')
+    const safeRefs = (ref: { id: string; version: number } | null) => {
+      if (ref === null) return null
+      if (!ref || typeof ref.id !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/u.test(ref.id)
+        || !Number.isSafeInteger(ref.version) || ref.version < 1)
+        throw new Error('The AI Rewrite Topic service returned invalid safe provenance.')
+      return { id: ref.id, version: ref.version }
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,89}$/u.test(aiProvenance.providerId)
+      || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/u.test(aiProvenance.modelId)
+      || !Array.isArray(serverDraft.warnings)
+      || serverDraft.warnings.some(warning => !warning
+        || typeof warning.id !== 'string'
+        || !['no-evidence', 'conflict', 'gap', 'unavailable', 'language'].includes(warning.kind)
+        || typeof warning.message !== 'string'
+        || !Array.isArray(warning.evidenceIds)
+        || warning.evidenceIds.some(id => !allowedEvidence.has(id))))
+      throw new Error('The AI Rewrite Topic service returned invalid safe provenance or warnings.')
+    const base = currentMetadata ?? createManualAuthorTopicMetadata(topicId, authorMetadataContext(), false)
+    const draft: AuthorTopicDraft = {
+      version: 1,
+      draftId: serverDraft.draftId,
+      topicId,
+      method: 'ai-grounded-rewrite-topic-v1',
+      rewriteSourceBlockIds: [...eligibleSourceBlockIds],
+      rewriteProtectionFingerprint: startingProtectionFingerprint,
+      modelLabel: `AI rewrite · ${aiProvenance.providerId} / ${aiProvenance.modelId}`,
+      aiProvenance: {
+        providerId: aiProvenance.providerId,
+        modelId: aiProvenance.modelId,
+        workflow: { id: workflowId, version: workflowVersion },
+        promptPack: safeRefs(aiProvenance.promptPack),
+        referenceSet: safeRefs(aiProvenance.referenceSet),
+        blueprint: safeRefs(aiProvenance.blueprint),
+      },
+      generatedAt: serverDraft.generatedAt,
+      groundingContextId: startingContextId,
+      groundingRevision: serverDraft.groundingRevision,
+      contentType: beforeContext.writingGuidance.contentType,
+      language: beforeContext.writingGuidance.language,
+      variableSnapshot: { ...beforeContext.writingGuidance.variables },
+      styleProvenance: {
+        styleProfileId: beforeContext.writingGuidance.styleProfileId,
+        styleProfileName: beforeContext.writingGuidance.styleProfileName,
+        styleProfileScope: beforeContext.writingGuidance.styleProfileScope,
+        styleFingerprint: beforeContext.provenance.styleFingerprint,
+        brandNames: [...beforeContext.writingGuidance.brandNames],
+      },
+      evidenceIdsUsed,
+      requiredEvidenceIdsUsed: evidenceIdsUsed.filter(id =>
+        beforeContext.requiredEvidence.some(item => item.evidenceId === id)),
+      optionalEvidenceIdsUsed: evidenceIdsUsed.filter(id =>
+        beforeContext.optionalSupportingEvidence.some(item => item.evidenceId === id)),
+      warnings: serverDraft.warnings.map(warning => ({
+        id: warning.id,
+        kind: warning.kind,
+        message: warning.message,
+        evidenceIds: [...warning.evidenceIds],
+      })),
+      blocks: composeAuthorRewriteDraftBlocks(base.appliedBaseline, eligibleSourceBlockIds, safeBlocks),
+    }
+    const usedEvidence = [
+      ...beforeContext.requiredEvidence,
+      ...beforeContext.optionalSupportingEvidence,
+    ].filter(item => evidenceIdsUsed.includes(item.evidenceId))
+    const regenerationProposal = buildAuthorRegenerationProposal(
+      draft,
+      currentBlocks,
+      base.appliedBaseline,
+      base.approved,
+      base.blockStates,
+    )
+    const previousMetadataMap = authorTopicMetadataRef.current
+    const nextMetadata = {
+      ...previousMetadataMap,
+      [topicId]: {
+        ...base,
+        generationStatus: 'draft' as const,
+        draft,
+        regenerationProposal,
+        evidenceIds: [...draft.evidenceIdsUsed],
+        sourcePaths: usedEvidence.map(item => [...item.sectionPath]),
+        sourceFileIds: [...new Set(usedEvidence.map(item => item.fileId))],
+        generatedAt: draft.generatedAt,
+      },
+    }
+    authorTopicMetadataRef.current = nextMetadata
+    setAuthorTopicMetadata(nextMetadata)
+    triggerAutosave(true)
+    if (!await persistCurrentProject()) {
+      if (projectIdRef.current === targetProjectId) {
+        authorTopicMetadataRef.current = previousMetadataMap
+        setAuthorTopicMetadata(previousMetadataMap)
+      }
+      throw new Error('The rewrite proposal could not be durably saved. The previous proposal remains in place; reload or retry saving.')
+    }
+    return { draft, error: null }
+  }, [
+    appToc,
+    authorMetadataContext,
+    buildGroundingInput,
+    evidenceIndex,
+    isDemoMode,
+    persistCurrentProject,
+    projectRepository,
+    setAuthorTopicMetadata,
+    triggerAutosave,
+  ])
+
   const handleGenerateTopicDraft = useCallback((topicId: string): {
     draft: AuthorTopicDraft | null
     error: string | null
@@ -17496,7 +18126,11 @@ export default function App() {
           regenerationProposal: {
             ...metadata.regenerationProposal,
             diffs: metadata.regenerationProposal.diffs.map(diff =>
-              diff.id === diffId && diff.status !== 'unchanged' && diff.status !== 'manually-edited'
+              diff.id === diffId
+                && diff.status !== 'unchanged'
+                && diff.status !== 'manually-edited'
+                && !(metadata.draft?.method === 'ai-grounded-rewrite-topic-v1'
+                  && diff.status === 'protected')
                 ? { ...diff, selected }
                 : diff),
           },
@@ -17535,6 +18169,29 @@ export default function App() {
       return {
         blocks: null,
         error: 'Authored content changed after this proposal was created. Regenerate to review a current diff.',
+      }
+    }
+    if (draft.method === 'ai-grounded-rewrite-topic-v1') {
+      const sourceBlockIds = draft.rewriteSourceBlockIds
+      const currentEligibleSourceBlockIds = eligibleAuthorRewriteSourceBlockIds(
+        metadata.appliedBaseline,
+        existing,
+        metadata.blockStates,
+      )
+      if (!Array.isArray(sourceBlockIds)
+        || sourceBlockIds.some(sourceBlockId => typeof sourceBlockId !== 'string')
+        || new Set(sourceBlockIds).size !== sourceBlockIds.length
+        || !draft.rewriteProtectionFingerprint
+        || draft.rewriteProtectionFingerprint !== authorRewriteProtectionFingerprint(
+          metadata.appliedBaseline,
+          metadata.blockStates,
+        )
+        || JSON.stringify([...sourceBlockIds].sort())
+          !== JSON.stringify([...currentEligibleSourceBlockIds].sort())) {
+        return {
+          blocks: null,
+          error: 'Rewrite protection or source-block mapping changed after this proposal was created. Regenerate to review a current diff.',
+        }
       }
     }
     const toDocBlock = (block: NonNullable<AuthorDraftDiff['proposedBlock']>, id: string): DocBlock => ({
@@ -18607,7 +19264,7 @@ export default function App() {
       case 'structure': return isDemoMode
         ? <StructureScreen onNav={navigate} isDemoMode={isDemoMode} toc={appToc} onTocChange={handleTocChange} analysisResult={analysisResult} analysisRevision={analysisRevision} sourcesRevision={sourcesRevision} tocGeneratedFromRev={tocGeneratedFromRev} tocHumanModified={tocHumanModified} onTocAccepted={handleTocAccepted} />
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} canGenerateAi={canGenerateAiToc} recovery={activeAiTocRecovery} onDismissRecovery={handleDiscardAiTocRecovery} onRecoverRecovery={handleRecoverAiTocProposal} onGenerate={handleGenerateTocProposal} onGenerateAi={handleGenerateAiTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
-       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} contentExplorer={resolvedContentExplorer} contentExplorerAssets={contentExplorerAssets} onContentExplorerChange={handleContentExplorerChange} explorerReadOnly={isCloudProjectMode() && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true} canBrowseCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).workspace.read} canCopyCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true} loadCatalogProjects={loadCatalogProjects} loadCatalogItems={loadCatalogItems} loadCatalogPreview={loadCatalogPreview} onCatalogCopy={handleCatalogCopy} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
+       case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} contentExplorer={resolvedContentExplorer} contentExplorerAssets={contentExplorerAssets} onContentExplorerChange={handleContentExplorerChange} explorerReadOnly={isCloudProjectMode() && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true} canBrowseCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).workspace.read} canCopyCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true} loadCatalogProjects={loadCatalogProjects} loadCatalogItems={loadCatalogItems} loadCatalogPreview={loadCatalogPreview} onCatalogCopy={handleCatalogCopy} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} onRewriteAiTopicDraft={handleRewriteAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
       case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {
