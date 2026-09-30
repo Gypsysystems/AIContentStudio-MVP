@@ -58,7 +58,7 @@ test('Home management starts at cross-project and workspace defaults', async ({ 
   await expect(page.getByText('Review Status')).toBeVisible()
   await page.getByRole('button', { name: 'Close', exact: true }).click()
 
-  await management(page, 'Administration').click()
+  await page.getByTestId('topbar-administration').click()
   await expect(page.getByRole('combobox', { name: 'Project' })).toHaveValue('')
   await expect(page.getByText('No project selected')).toBeVisible()
   await page.getByRole('combobox', { name: 'Project' }).selectOption({ label: name })

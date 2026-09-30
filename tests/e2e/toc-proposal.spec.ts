@@ -62,7 +62,7 @@ type TocArchitectureFixtureResult = {
 async function openAnalysis(page: Page) {
   await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
     .getByRole("button", { name: "Project Home" }).click()
-  await page.getByTestId("project-home-stage-analysis").click()
+  await page.getByRole("button", { name: "Open analysis", exact: true }).click()
 }
 
 async function openTableOfContents(page: Page) {
@@ -367,6 +367,7 @@ test("committing evidence-backed topics opens editable initial drafts without fi
   expect(stored.authorTopicMetadata[topicId].generatedFreshness).toBe("current")
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
+  await page.getByLabel(`Project actions for ${projectName}`).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
   const duplicateName = `${projectName} Copy`
   await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
@@ -481,6 +482,7 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
   const originalTopicIds = original.tocProposal.items.map(item => item.topicId)
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
+  await page.getByLabel(`Project actions for ${projectName}`).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
   await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
   await page.getByLabel("Name for copy").fill(duplicateName)
@@ -497,7 +499,7 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
   expect(duplicate.tocProposal.evidenceExtractionRevision).not.toBe(duplicate.evidenceIndex.extractionRevision)
   expect(duplicate.tocProposal.items.map(item => item.topicId)).toEqual(originalTopicIds)
 
-  await page.getByText(duplicateName, { exact: true }).click()
+  await page.getByRole("button", { name: `Open project ${duplicateName}`, exact: true }).click()
   await openTableOfContents(page)
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("commit-toc-proposal")).toBeDisabled()

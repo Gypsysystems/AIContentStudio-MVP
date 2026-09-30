@@ -329,7 +329,7 @@ test('Author module rail navigates project stages and More opens Knowledge Map',
     'Project Home', 'Sources', 'Structure', 'Author', 'Review', 'Publish',
     'History', 'Project Settings', 'Brand & Output', 'Administration', 'Diagnostics',
   ]) {
-    await expect(rail.getByRole('button', { name: label, exact: true })).toBeVisible()
+    await expect(rail.getByRole('button', { name: label === 'Structure' ? /^Structure/ : label, exact: label !== 'Structure' })).toBeVisible()
   }
   await expect(rail.getByRole('button', { name: 'Author', exact: true }))
     .toHaveAttribute('aria-current', 'page')
@@ -469,7 +469,7 @@ test('Review finding opens its exact Author topic and preserves manual and appro
   await page.reload()
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Project Home', exact: true }).click()
-  await page.getByTestId('project-home-stage-analysis').click()
+  await page.getByRole('button', { name: 'Open analysis', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Source-backed Analysis' })).toBeVisible()
   await page.getByRole('button', { name: /Recheck Content|Check Content/ }).click()
   await expect.poll(async () => {

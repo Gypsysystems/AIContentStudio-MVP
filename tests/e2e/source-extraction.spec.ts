@@ -430,6 +430,7 @@ test("duplicates extracted sources with copied file IDs and preserves searchable
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
+  await page.getByLabel(`Project actions for ${projectName}`).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
   await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
   await page.getByLabel("Name for copy").fill(duplicateName)
@@ -456,9 +457,9 @@ test("duplicates extracted sources with copied file IDs and preserves searchable
   expect(originalAfter.sourceFileIds).toEqual(originalBefore.sourceFileIds)
   expect(originalAfter.sourceExtractions).toEqual(originalBefore.sourceExtractions)
 
-  await page.getByText(duplicateName, { exact: true }).click()
+  await page.getByRole("button", { name: `Open project ${duplicateName}`, exact: true }).click()
   await expect(page.getByTestId("project-home")).toBeVisible()
-  await page.getByTestId("project-home-stage-sources").click()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Sources" }).click()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   await page.reload()
   const duplicateRow = page.getByTestId("source-file-row").filter({ hasText: "duplicate-source.md" })

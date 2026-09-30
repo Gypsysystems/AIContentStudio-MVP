@@ -510,42 +510,22 @@ test("project-list reopen lands on Home while active-project reload preserves So
   await expect(homeProjectHeading(page, name)).toBeVisible()
 })
 
-test("Home stage links preserve direct workflow navigation for every stage", async ({ page }) => {
+test("Home shows read-only workflow status while the rail and unique analysis action handle navigation", async ({ page }) => {
   const name = `Home stage links ${Date.now()}`
   await createProject(page, name)
   await openProjectHome(page, name)
 
-  const cases = [
-    {
-      stage: "sources",
-      target: () => page.getByRole("heading", { name: "Add Source Material" }),
-    },
-    {
-      stage: "analysis",
-      target: () => page.getByTestId("analysis-generate-toc"),
-    },
-    {
-      stage: "studio",
-      target: () => page.getByTestId("author-stage-heading"),
-    },
-    {
-      stage: "quality",
-      target: () => page.getByRole("heading", { name: "Grounded Review" }),
-    },
-    {
-      stage: "publish",
-      target: () => page.getByTestId("publish-stage-status"),
-    },
-  ] as const
-
-  for (const { stage, target } of cases) {
-    const button = homeStage(page, stage)
-    await expect(button).toBeVisible()
-    await expect(button).toBeEnabled()
-    await button.click()
-    await expect(target()).toBeVisible()
-    await openProjectHome(page, name)
+  for (const stage of ["sources", "studio", "quality", "publish"] as const) {
+    await expect(homeStage(page, stage)).toBeVisible()
+    await expect(homeStage(page, stage).getByRole("button")).toHaveCount(0)
   }
+  await expect(page.getByTestId("project-home").getByRole("button", { name: "Project Settings" })).toHaveCount(0)
+  await expect(page.getByTestId("project-home").getByRole("button", { name: "Brand & Output" })).toHaveCount(0)
+  await homeStage(page, "analysis").getByRole("button", { name: "Open analysis" }).click()
+  await expect(page.getByTestId("analysis-generate-toc")).toBeVisible()
+  await openProjectHome(page, name)
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Sources" }).click()
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
 })
 
 test("a topic-content issue opens the exact Author topic named by Home", async ({ page }) => {
@@ -773,7 +753,7 @@ test("Home is keyboard accessible and fits a mobile viewport", async ({ page }) 
   }
 })
 
-test("Home navigation stays immediate and save status stays pending during delayed cloud save", async ({ page }) => {
+test("Home navigation respects a pending project-settings save", async ({ page }) => {
   const cloud = await mockCloud(page)
   let releaseSave!: () => void
   let signalSaveStarted!: () => void
@@ -791,15 +771,17 @@ test("Home navigation stays immediate and save status stays pending during delay
   await page.getByRole("button", { name: "Save changes" }).click()
   await saveStarted
 
-  // Use ordinary Home navigation instead of Settings' save-barrier exit.
+  // Settings guards an in-flight save; the header's ordinary Home action
+  // cannot bypass that write barrier.
   await page.getByTestId("topbar-project-home").click()
-  await expect(page.getByTestId("project-home")).toBeVisible()
-  await expect(page.getByTestId("project-home-save-state")).toContainText(/saving|pending|syncing/i)
-  await page.getByTestId("project-home-stage-sources").click()
-  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
-  await expect(page.locator("header").getByRole("status")).toContainText(/saving|pending|syncing/i)
-
+  await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Saving changes…" })).toBeVisible()
   releaseSave()
+  await expect(page.getByRole("button", { name: "Saving changes…" })).toHaveCount(0)
+  if (!await page.getByTestId("project-home").count()) await page.getByTestId("topbar-project-home").click()
+  await expect(page.getByTestId("project-home")).toBeVisible()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Sources" }).click()
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   await expect(page.locator("header").getByText("All changes saved", { exact: true })).toBeVisible()
 })
 
@@ -848,12 +830,12 @@ test("cloud account and sign-out controls never cover project header actions", a
     await rail.getByRole("button", { name: "Brand & Output" }).click()
     await expect(page.getByRole("heading", { name: "Theme & Style Profiles" })).toBeVisible()
     await rail.getByRole("button", { name: "Project Home" }).click()
-    await page.getByTestId("project-home-stage-sources").click()
+    await rail.getByRole("button", { name: "Sources" }).click()
     await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   }
 
   await expect(page.getByTestId("header-account")).toBeVisible()
   await header.getByRole("button", { name: "Sign out" }).click()
-  await expect(page.getByText("Signed out.")).toBeVisible()
+  await expect(page.getByText("Sign in to your workspace.")).toBeVisible()
   await expect(page.getByTestId("header-account")).toHaveCount(0)
 })

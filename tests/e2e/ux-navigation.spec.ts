@@ -186,7 +186,7 @@ test("project tiles and the shared module rail preserve primary and secondary de
   const tile = page.getByRole("button", { name: `Open project ${name}`, exact: true })
   const tileContainer = page.locator(".studio-project-tile").filter({ has: tile })
   await expect(tile).toBeVisible()
-  await expect(page.getByRole("button", { name: "Create a project" })).toBeVisible()
+  await expect(page.getByTestId("projects-page-actions").getByRole("button", { name: "New Project" })).toBeVisible()
   await tileContainer.getByLabel(`Project actions for ${name}`).click()
   for (const action of ["Open", "Duplicate", "Backup", "Delete"]) {
     await expect(tileContainer.getByRole("button", { name: action, exact: true })).toBeVisible()

@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 async function openAnalysis(page: import('@playwright/test').Page) {
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Project Home', exact: true }).click()
-  await page.getByTestId('project-home-stage-analysis').click()
+  await page.getByRole('button', { name: 'Open analysis', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Source-backed Analysis' })).toBeVisible()
 }
 

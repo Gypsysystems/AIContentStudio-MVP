@@ -196,12 +196,9 @@ header.relative.z-30 .studio-header-mark { display: none; width: 28px; height: 2
 .ph-heading h1, .ph-next-content h2, .ph-section-heading h2 { color: #20242a; }
 .ph-heading h1 { font-family: 'Lora', Georgia, serif; }
 .ph-next-card { border-color: #ead8c8; background: linear-gradient(110deg, #fff4e9, #fbfaf7 78%); }
-.ph-next-card::after { border-color: rgb(255 122 26 / 13%); }
 .ph-next-kicker { color: #bf5811; }
 .ph-continue-button { border-color: #e66b15; background: #ff7a1a; }
-.ph-continue-button:hover { background: #e9670d; }
-.ph-stage-list { background: #fbfaf7; }
-.ph-stage-button:hover { background: #fff5eb; }
+.ph-continue-button:hover { background: #ffc857; }
 .ph-status-progress { background: #fff0e3; color: #bb570f; }
 .ph-attention { background: #fbfaf7; }
 .ph-issue-route { color: #c65307; }
@@ -217,10 +214,14 @@ header.relative.z-30 .studio-header-mark { display: none; width: 28px; height: 2
 .studio-dashboard button[class*="bg-[#5B5BD6]"]:hover { background-color: #e9670d !important; }
 .studio-dashboard [class*="rounded-xl"][class*="border"] { border-color: #e2e4e8; }
 .studio-dashboard [class*="bg-[#F9F8F6]"] { background-color: #fbfaf7; }
+.studio-management-nav button { border-color: transparent; background: transparent; color: #596371; }
+.studio-management-nav button:hover { border-color: #ead8c8; background: #fff4e9; color: #a6490a; }
+.studio-management-nav button:focus-visible { outline: 2px solid #ff7a1a; outline-offset: 2px; }
+.studio-project-feedback { display: flex; min-height: 174px; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed #d9dce1; border-radius: 10px; background: #fbfaf7; padding: 24px; color: #667085; font-size: 13px; text-align: center; }
 .studio-project-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .studio-project-tile {
-  position: relative; display: flex; min-width: 0; min-height: 205px; flex-direction: column;
-  border: 1px solid #e2e4e8; border-radius: 11px; background: #fbfaf7; padding: 17px;
+  position: relative; display: flex; min-width: 0; min-height: 174px; flex-direction: column;
+  border: 1px solid #e2e4e8; border-radius: 11px; background: #fbfaf7; padding: 15px;
   text-align: left; cursor: pointer; transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
 }
 .studio-tile-open { position: absolute; inset: 0; z-index: 1; width: 100%; border: 0; border-radius: inherit; background: transparent; cursor: pointer; }
@@ -228,7 +229,8 @@ header.relative.z-30 .studio-header-mark { display: none; width: 28px; height: 2
 .studio-tile-open:disabled { cursor: wait; }
 .studio-tile-topline, .studio-tile-copy, .studio-tile-footer { pointer-events: none; }
 .studio-tile-actions { pointer-events: auto; }
-.studio-project-tile:hover { transform: translateY(-2px); border-color: #e9bd98; box-shadow: 0 10px 24px rgb(32 36 42 / 7%); }
+.studio-project-tile:hover { transform: translateY(-1px); border-color: #e9bd98; box-shadow: 0 6px 16px rgb(32 36 42 / 6%); }
+.studio-project-tile:focus-within { border-color: #d66818; }
 .studio-project-tile:focus-visible { outline: 2px solid #ff7a1a; outline-offset: 3px; }
 .studio-project-tile.is-active { border-color: #efb37f; background: #fffaf5; }
 .studio-tile-topline { display: flex; align-items: center; justify-content: space-between; }
@@ -238,35 +240,28 @@ header.relative.z-30 .studio-header-mark { display: none; width: 28px; height: 2
 .studio-tile-actions summary { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 6px; color: #667085; cursor: pointer; list-style: none; letter-spacing: 2px; }
 .studio-tile-actions summary::-webkit-details-marker { display: none; }
 .studio-tile-actions summary:hover { background: #f0eee8; color: #20242a; }
+.studio-tile-actions summary:focus-visible, .studio-tile-menu button:focus-visible { outline: 2px solid #ff7a1a; outline-offset: 2px; }
 .studio-tile-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; display: flex; width: 170px; flex-direction: column; border: 1px solid #e2e4e8; border-radius: 8px; background: #fbfaf7; padding: 4px; box-shadow: 0 10px 24px rgb(32 36 42 / 12%); }
 .studio-tile-menu button { border: 0; border-radius: 5px; background: transparent; padding: 8px 9px; color: #4b5563; font-size: 11px; text-align: left; cursor: pointer; }
 .studio-tile-menu button:hover:not(:disabled) { background: #fff0e3; color: #bd560e; }
 .studio-tile-menu button.is-destructive { color: #b84a3d; }
 .studio-tile-menu button:disabled { opacity: .5; cursor: not-allowed; }
-.studio-tile-copy { margin-top: 25px; }
+.studio-tile-copy { margin-top: 17px; }
 .studio-tile-title { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .studio-tile-title h2 { overflow: hidden; margin: 0; color: #20242a; font-size: 15px; font-weight: 650; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap; }
 .studio-active-tag { flex-shrink: 0; border-radius: 99px; background: #fff0e3; padding: 3px 7px; color: #b94e09; font-size: 9px; font-weight: 650; }
 .studio-tile-type { margin: 6px 0 0; color: #596371; font-size: 11px; text-transform: capitalize; }
-.studio-tile-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; border-top: 1px solid #ebecef; padding-top: 13px; color: #5d6672; font-size: 10px; }
+.studio-tile-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 11px; color: #5d6672; font-size: 10px; }
 .studio-open-label { color: #bd560e; font-size: 10px; font-weight: 650; white-space: nowrap; }
-.studio-project-create-tile { display: flex; min-height: 205px; align-items: flex-start; gap: 12px; border: 1px dashed #d9dce1; border-radius: 11px; background: transparent; padding: 20px 17px; color: #20242a; text-align: left; cursor: pointer; }
-.studio-project-create-tile:hover { border-color: #f0a66a; background: #fff9f2; }
-.studio-create-mark { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border-radius: 8px; background: #fff0e3; color: #bf5811; font-size: 22px; font-weight: 350; }
-.studio-project-create-tile strong, .studio-project-create-tile small { display: block; }
-.studio-project-create-tile strong { margin-top: 3px; font-size: 13px; font-weight: 650; }
-.studio-project-create-tile small { margin-top: 7px; color: #626c78; font-size: 10px; line-height: 1.5; }
 .studio-project-tile:nth-child(6n + 1) { background: #f8f1e7; }
 .studio-project-tile:nth-child(6n + 2) { background: #fff0e5; }
 .studio-project-tile:nth-child(6n + 3) { background: #fff5df; }
-.studio-project-tile:nth-child(6n + 4) { background: #eef2e6; }
+.studio-project-tile:nth-child(6n + 4) { background: #f7efe4; }
 .studio-project-tile:nth-child(6n + 5) { background: #f1efeb; }
 .studio-project-tile:nth-child(6n) { background: #f8ece7; }
 .studio-project-tile.is-active { border-color: #db8e53; }
 .studio-topbar-preview { border-color: #e2e4e8 !important; color: #4b5563 !important; }
 .studio-topbar-preview:hover { border-color: #f0c7a7 !important; background: #fff0e3 !important; color: #ad4e0d !important; }
-.studio-topbar-create { background: #ff7a1a !important; color: #fff !important; }
-.studio-topbar-create:hover { background: #e9670d !important; }
 /* Secondary routes stay directly accessible, but do not compete with navigation. */
 header.relative.z-30 #author-project-tools > button:not(.studio-topbar-preview):not(.studio-topbar-create) {
   min-height: 30px;
@@ -293,7 +288,7 @@ header.relative.z-30 #author-project-tools > button:not(.studio-topbar-preview):
   .studio-workflow-navigation { width: max-content !important; min-width: 100%; }
   .studio-workflow-navigation > ol { justify-content: flex-start !important; }
   .studio-project-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .studio-project-tile, .studio-project-create-tile { min-height: 185px; padding: 13px; }
+  .studio-project-tile { min-height: 168px; padding: 13px; }
   .studio-tile-copy { margin-top: 18px; }
   .studio-module-rail { width: 54px; flex-basis: 54px; padding: 8px 3px; }
   .studio-module-rail button { min-height: 44px; font-size: 8px; }
@@ -303,7 +298,7 @@ header.relative.z-30 #author-project-tools > button:not(.studio-topbar-preview):
 }
 @media (max-width: 480px) {
   .studio-project-grid { grid-template-columns: minmax(0, 1fr); }
-  .studio-project-tile, .studio-project-create-tile { min-height: 168px; }
+  .studio-project-tile { min-height: 160px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }

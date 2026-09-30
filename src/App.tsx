@@ -1173,7 +1173,6 @@ function TopBar({ screen, onNav, onAdministration, projectName, isProject, manag
   const cloudAccount = useCloudAccount()
   const inProject = !['dashboard', 'create', 'administration'].includes(screen)
   const hasProject = screen !== 'dashboard' && screen !== 'administration' && isProject
-  const canCreateProject = getAdministrationAccess(getAccessContext()).workspace.create === true
   const saveLabel = saveStatus === 'error' ? 'Save failed' : saveStatus === 'saving' ? 'Saving changes' : 'All changes saved'
   return (
     <header className="relative z-30 flex-shrink-0 border-b border-[#E2DED7] bg-white">
@@ -1213,12 +1212,6 @@ function TopBar({ screen, onNav, onAdministration, projectName, isProject, manag
               aria-current={screen === 'preview' ? 'page' : undefined}
               className="studio-topbar-preview min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-semibold text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] sm:text-[11px]">
               Preview
-            </button>
-          )}
-          {screen === 'dashboard' && canCreateProject && (
-            <button type="button" onClick={() => onNav('create')} data-testid="topbar-create-project"
-              className="studio-topbar-create min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[10px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] sm:text-[11px]">
-              Create project
             </button>
           )}
           {(screen === 'dashboard' || hasProject) && <button type="button" onClick={onAdministration} data-testid="topbar-administration"
@@ -1268,6 +1261,8 @@ function DashboardScreen({ onNav, onManagement, activeProjectId, onOpenProject, 
 }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [projectListError, setProjectListError] = useState('')
+  const initialProjectListRequest = useRef<Promise<ProjectSummary[]> | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
@@ -1293,8 +1288,33 @@ function DashboardScreen({ onNav, onManagement, activeProjectId, onOpenProject, 
   const readOnlyViewer = isCloudProjectMode() && getAccessContext().membership.role === 'viewer'
 
   useEffect(() => {
-    listProjects().then(p => { setProjects(p); setLoading(false) }).catch(() => setLoading(false))
+    let active = true
+    // React's development effect replay should share the initial read, not request the list twice.
+    const request = initialProjectListRequest.current ?? (initialProjectListRequest.current = listProjects())
+    request.then(p => {
+      if (!active) return
+      setProjects(p)
+      setProjectListError('')
+      setLoading(false)
+    }).catch(() => {
+      if (!active) return
+      setProjectListError('Could not load projects.')
+      setLoading(false)
+    })
+    return () => { active = false }
   }, [])
+
+  const retryProjectList = async () => {
+    setLoading(true)
+    setProjectListError('')
+    try {
+      setProjects(await listProjects())
+    } catch {
+      setProjectListError('Could not load projects.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleOpen = async (pid: string) => {
     setActionLoading(pid)
@@ -1481,7 +1501,7 @@ function DashboardScreen({ onNav, onManagement, activeProjectId, onOpenProject, 
   return (
     <div className="studio-dashboard flex-1 overflow-auto px-4 py-6 sm:p-8 max-w-5xl mx-auto w-full fade-in">
       {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
         <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Projects</h1>
         <div data-testid="projects-page-actions" className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {isCloudProjectMode() && !readOnlyViewer && (
@@ -1517,10 +1537,10 @@ function DashboardScreen({ onNav, onManagement, activeProjectId, onOpenProject, 
           </button>}
         </div>
       </div>
-      <nav aria-label="Workspace management" className="mb-7 flex flex-wrap gap-2">
+      <nav aria-label="Workspace management" className="studio-management-nav mb-5 flex flex-wrap gap-2">
         {([
           ['history', 'History'], ['create', 'Project Settings'], ['branding', 'Brand & Output'],
-          ['administration', 'Administration'], ['diagnostics', 'Diagnostics'],
+          ['diagnostics', 'Diagnostics'],
         ] as const).map(([destination, label]) =>
           <button key={destination} type="button" onClick={() => onManagement(destination)}
             className="rounded-lg border border-[#D8D4CE] bg-white px-3 py-2 text-[12px] font-medium text-[#393844] hover:border-[#C7C5F4] hover:bg-[#F8F7FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
@@ -1532,14 +1552,16 @@ function DashboardScreen({ onNav, onManagement, activeProjectId, onOpenProject, 
       {restoreMessage && <div role="status" className="mb-4 p-3 rounded-lg border border-[#A7D9B1] bg-[#F0FDF4] text-[12px] text-[#166534]">{restoreMessage}</div>}
 
       {loading ? (
-        <div className="flex items-center justify-center py-20 text-[13px] text-[#9898AB]">Loading projects…</div>
+        <div role="status" className="studio-project-feedback">Loading projects…</div>
+      ) : projectListError ? (
+        <div role="alert" className="studio-project-feedback">
+          <span>{projectListError}</span>
+          <button type="button" onClick={() => { void retryProjectList() }} className="ml-3 font-semibold text-[#B65311] underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#FF7A1A]">Retry</button>
+        </div>
       ) : projects.length === 0 ? (
-        <div className="border border-dashed border-[#D8D4CE] rounded-2xl p-16 text-center">
-          <div className="w-12 h-12 rounded-full bg-[#F4F2EE] flex items-center justify-center mx-auto mb-4">
-            <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="12" y="3" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="3" y="12" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="12" y="12" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/></svg>
-          </div>
-          <p className="text-[15px] font-semibold text-[#111218] mb-1.5">No projects yet</p>
-          <p className="text-[13px] text-[#9898AB]">Create your first project to get started.</p>
+        <div className="studio-project-feedback">
+          <p className="text-[15px] font-semibold text-[#20242A] mb-1.5">No projects yet</p>
+          <p className="text-[13px] text-[#667085]">Create your first project to get started.</p>
         </div>
       ) : (
         <div className="studio-project-grid">
@@ -1575,10 +1597,6 @@ function DashboardScreen({ onNav, onManagement, activeProjectId, onOpenProject, 
               </div>
             </div>
           ))}
-          {!readOnlyViewer && <button type="button" className="studio-project-create-tile" onClick={onNewProject}>
-            <span className="studio-create-mark" aria-hidden="true">+</span>
-            <span><strong>Create a project</strong><small>Start a grounded documentation workspace</small></span>
-          </button>}
         </div>
       )}
 
@@ -20151,10 +20169,8 @@ export default function App() {
         projectName={displayName}
         contentType={projectMeta.contentType}
         summary={projectHomeSummary}
-        saveStatus={saveStatus}
-        onRetrySave={() => triggerAutosave(true)}
         onNavigate={destination => {
-          if (destination === 'create' || destination === 'branding') openManagement(destination)
+          if (destination === 'branding') openManagement(destination)
           else void navigate(destination)
         }}
         onIssue={handleProjectHomeIssue}

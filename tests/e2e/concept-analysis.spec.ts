@@ -153,7 +153,7 @@ async function waitForCurrentEvidence(page: Page) {
 async function openRealAnalysis(page: Page) {
   await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
     .getByRole("button", { name: "Project Home", exact: true }).click()
-  await page.getByTestId("project-home-stage-analysis").click()
+  await page.getByRole("button", { name: "Open analysis", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Source-backed Analysis" })).toBeVisible()
 }
 
@@ -626,6 +626,7 @@ test("duplicates grounded analysis with copied source references and stable anal
   const originalTermIds = original.conceptAnalysis.terminology.map(term => term.id)
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
+  await page.getByLabel(`Project actions for ${projectName}`).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
   await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
   await page.getByLabel("Name for copy").fill(duplicateName)
@@ -666,9 +667,9 @@ test("duplicates grounded analysis with copied source references and stable anal
   expect(originalAfter.conceptAnalysis).toEqual(original.conceptAnalysis)
   expect(originalAfter.unsupportedAnalysis).toEqual(original.unsupportedAnalysis)
 
-  await page.getByText(duplicateName, { exact: true }).click()
+  await page.getByRole("button", { name: `Open project ${duplicateName}`, exact: true }).click()
   await expect(page.getByTestId("project-home")).toBeVisible()
-  await page.getByTestId("project-home-stage-sources").click()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Sources" }).click()
   await waitForCurrentEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")

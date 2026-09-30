@@ -1,12 +1,12 @@
 import React from 'react'
 import type { ProjectHomeDestination, ProjectHomeIssue, ProjectHomeStage, ProjectHomeStatus, ProjectHomeSummary } from './projectHomeModel'
 
-const stages: Array<{ id: ProjectHomeStage; name: string; destination: 'sources' | 'analysis' | 'studio' | 'quality' | 'publish'; detail: string; demoDetail: string }> = [
-  { id: 'sources', name: 'Sources', destination: 'sources', detail: 'Files & evidence', demoDetail: 'Demo source files' },
-  { id: 'analysis', name: 'Analysis', destination: 'analysis', detail: 'Grounded structure', demoDetail: 'Demo analysis progress' },
-  { id: 'studio', name: 'Author', destination: 'studio', detail: 'Topic content', demoDetail: 'Demo topic content' },
-  { id: 'quality', name: 'Review', destination: 'quality', detail: 'Current findings', demoDetail: 'Demo walkthrough' },
-  { id: 'publish', name: 'Publish', destination: 'publish', detail: 'Output preparation', demoDetail: 'Demo output setup' },
+const stages: Array<{ id: ProjectHomeStage; name: string }> = [
+  { id: 'sources', name: 'Sources' },
+  { id: 'analysis', name: 'Structure' },
+  { id: 'studio', name: 'Author' },
+  { id: 'quality', name: 'Review' },
+  { id: 'publish', name: 'Publish' },
 ]
 const statusTone: Record<ProjectHomeStatus, string> = {
   'Not started': 'ph-status-idle',
@@ -30,15 +30,11 @@ export type ProjectHomeScreenProps = {
   projectName: string
   contentType: string
   summary: ProjectHomeSummary
-  saveStatus: 'idle' | 'saving' | 'saved' | 'error'
-  onRetrySave: () => void
-  onNavigate: (screen: ProjectHomeDestination | 'create') => void
+  onNavigate: (screen: ProjectHomeDestination) => void
   onIssue: (issue: ProjectHomeIssue) => void
 }
 
-export function ProjectHomeScreen({ projectName, contentType, summary, saveStatus, onRetrySave, onNavigate, onIssue }: ProjectHomeScreenProps) {
-  const saveLabel = saveStatus === 'saving' ? 'Saving changes' : saveStatus === 'error' ? 'Save failed' : saveStatus === 'saved' ? 'All changes saved' : 'No pending changes'
-  const saveClass = saveStatus === 'saving' ? 'ph-save-saving' : saveStatus === 'error' ? 'ph-save-error' : 'ph-save-ok'
+export function ProjectHomeScreen({ projectName, contentType, summary, onNavigate, onIssue }: ProjectHomeScreenProps) {
   const recentRun = summary.recentRun
   return (
     <section className="project-home fade-in" data-testid="project-home" aria-labelledby="project-home-title">
@@ -55,11 +51,6 @@ export function ProjectHomeScreen({ projectName, contentType, summary, saveStatu
               ? `${summary.demoSourceCount} demo ${summary.demoSourceCount === 1 ? 'file' : 'files'}`
               : `${summary.usableSourceCount} usable ${summary.usableSourceCount === 1 ? 'source' : 'sources'}`}</span>
           </div>
-        </div>
-        <div className={`ph-save-state ${saveClass}`} data-testid="project-home-save-state" role={saveStatus === 'error' ? 'alert' : 'status'} aria-live="polite">
-          <span className="ph-save-dot" />
-          <span>{saveLabel}</span>
-          {saveStatus === 'error' && <button type="button" onClick={onRetrySave}>Retry</button>}
         </div>
       </div>
 
@@ -100,22 +91,18 @@ export function ProjectHomeScreen({ projectName, contentType, summary, saveStatu
                 <p className="ph-section-index">01 / WORKFLOW</p>
                 <h2 id="ph-stages-title">{summary.demoMode ? 'Demo progression' : 'Project stages'}</h2>
               </div>
-              <span className="ph-section-note">{summary.demoMode ? 'Saved demo steps · not evidence verified' : 'Open any stage to work directly'}</span>
+              {summary.demoMode && <span className="ph-section-note">Saved demo steps · not evidence verified</span>}
             </div>
             <ol className="ph-stage-list">
               {stages.map((stage, index) => {
                 const status = summary.stages[stage.id]
                 return (
-                  <li key={stage.id}>
-                    <button type="button" className="ph-stage-button" data-testid={`project-home-stage-${stage.id}`} onClick={() => onNavigate(stage.destination)}>
+                    <li key={stage.id} className="ph-stage-summary" data-testid={`project-home-stage-${stage.id}`}>
                       <span className={`ph-stage-index ${statusTone[status]}`}>{String(index + 1).padStart(2, '0')}</span>
-                      <span className="ph-stage-copy">
                         <span className="ph-stage-name">{stage.name}</span>
-                        <span className="ph-stage-detail">{summary.demoMode ? stage.demoDetail : stage.detail}</span>
-                      </span>
                       <span className={`ph-status ${statusTone[status]}`}>{status}</span>
-                      <span className="ph-stage-arrow" aria-hidden="true">↗</span>
-                    </button>
+                        {stage.id === 'analysis' && <button type="button" className="ph-analysis-link"
+                          onClick={() => onNavigate('analysis')}>Open analysis</button>}
                   </li>
                 )
               })}
@@ -128,12 +115,11 @@ export function ProjectHomeScreen({ projectName, contentType, summary, saveStatu
                 <div><p className="ph-section-index">02 / ACTIVITY</p><h2 id="ph-recent-title">Recent work</h2></div>
                 <span className="ph-section-note">Persisted project activity</span>
               </div>
-              <button type="button" className="ph-recent-row" onClick={() => onNavigate('quality')}>
+              <div className="ph-recent-row">
                 <span className="ph-recent-marker" />
                 <span className="ph-recent-copy"><strong>Review run completed</strong><small>{recentRun.findingIds.length} findings recorded</small></span>
                 <time dateTime={new Date(recentRun.completedAt!).toISOString()}>{new Date(recentRun.completedAt!).toLocaleString()}</time>
-                <span aria-hidden="true">↗</span>
-              </button>
+              </div>
             </section>
           )}
         </div>
@@ -163,11 +149,6 @@ export function ProjectHomeScreen({ projectName, contentType, summary, saveStatu
                 : 'The current project inputs are in good shape.'}</p>
             </div>
           )}
-          <div className="ph-aside-footer">
-            <span>PROJECT TOOLS</span>
-            <button type="button" onClick={() => onNavigate('create')}>Project Settings <span aria-hidden="true">↗</span></button>
-            <button type="button" onClick={() => onNavigate('branding')}>Brand &amp; Output <span aria-hidden="true">↗</span></button>
-          </div>
         </aside>
       </div>
     </section>

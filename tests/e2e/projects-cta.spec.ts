@@ -19,21 +19,23 @@ async function showSignedInProjects(page: Page, projects: Record<string, unknown
   await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
 }
 
-test('signed-in empty Projects keeps a compact ordered action row and header controls', async ({ page }) => {
+test('signed-in empty Projects keeps one Create action, concise state, and header controls', async ({ page }) => {
   await showSignedInProjects(page, [])
   await expect(page.getByText('No projects yet', { exact: true })).toBeVisible()
   await expect(page.getByTestId('projects-page-actions').getByRole('button')).toHaveText([
     'Import Project', 'Restore backup', 'New Project',
   ])
   await expect(page.locator('header').getByRole('button')).toHaveText([
-    '', 'Create project', 'Administration', 'Sign out',
+    '', 'Administration', 'Sign out',
   ])
+  await expect(page.getByRole('navigation', { name: 'Workspace management' }).getByRole('button', { name: 'Administration' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Create a project' })).toHaveCount(0)
   await expect(page.locator('header .studio-header-logo')).toBeVisible()
   await expect(page.locator('header')).not.toContainText('Workspace')
   await expect(page.locator('header')).not.toContainText('Editorial')
   await expect(page.getByText('Local browser projects', { exact: true })).toHaveCount(0)
   await expect(page.getByText('WORKSPACE', { exact: true })).toHaveCount(0)
-  await page.locator('header').getByRole('button', { name: 'Create project' }).click()
+  await page.getByTestId('projects-page-actions').getByRole('button', { name: 'New Project' }).click()
   await expect(page.getByRole('heading', { name: 'Project Details' })).toBeVisible()
 })
 
@@ -86,17 +88,44 @@ test('Administration and Sign out remain available on the far right of the Proje
   await header.getByRole('button', { name: 'Content Studio home' }).click()
   await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
   await header.getByRole('button', { name: 'Sign out' }).click()
-  await expect(page.getByText('Signed out.')).toBeVisible()
+  await expect(page.getByText('Sign in to your workspace.')).toBeVisible()
 })
 
 test('Projects header and action row fit a narrow viewport without clipping', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 })
   await showSignedInProjects(page, [])
-  for (const label of ['Create project', 'Administration', 'Sign out']) {
+  for (const label of ['Administration', 'Sign out']) {
     const box = await page.locator('header').getByRole('button', { name: label }).boundingBox()
     expect(box).not.toBeNull()
     expect(box!.x).toBeGreaterThanOrEqual(0)
     expect(box!.x + box!.width).toBeLessThanOrEqual(376)
   }
+  const createBox = await page.getByTestId('projects-page-actions').getByRole('button', { name: 'New Project' }).boundingBox()
+  expect(createBox).not.toBeNull()
+  expect(createBox!.x + createBox!.width).toBeLessThanOrEqual(376)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(376)
+})
+
+test('Projects loads the project list once and gives a truthful retryable error state', async ({ page }) => {
+  let listRequests = 0
+  page.on('request', request => {
+    if (!request.url().includes('/api/cloud-projects')) return
+    if ((request.postDataJSON() as { action?: string } | null)?.action === 'list') listRequests++
+  })
+  await showSignedInProjects(page, [])
+  expect(listRequests).toBe(1)
+
+  let failList = true
+  await page.route('**/api/cloud-projects', route => {
+    if ((route.request().postDataJSON() as { action: string }).action === 'list' && failList)
+      return route.fulfill({ status: 503, json: { code: 'UNAVAILABLE' } })
+    return route.fallback()
+  })
+  await page.reload()
+  await expect(page.getByRole('alert')).toContainText('Could not load projects.')
+  await expect(page.getByText('No projects yet', { exact: true })).toHaveCount(0)
+  failList = false
+  await page.getByRole('button', { name: 'Retry' }).click()
+  await expect(page.getByText('No projects yet', { exact: true })).toBeVisible()
+  expect(listRequests).toBe(3)
 })
