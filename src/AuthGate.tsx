@@ -169,13 +169,13 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       signOut: () => { void logout() },
     }}>{children}</CloudAccountContext.Provider>
   }
-  if (state.kind === 'cloud-pending') return <main className="min-h-screen bg-[#F8F7F5] flex items-center justify-center p-5">
+   if (state.kind === 'cloud-pending') return <main className="min-h-screen bg-[#F7F5F0] flex items-center justify-center p-5">
       <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
         <h1 className="text-xl font-semibold text-gray-900">{state.organizationName} / {state.workspaceName}</h1>
-        <p className="mt-2 text-sm text-gray-600">Signed in to Content Studio</p>
+         <p className="mt-2 text-sm text-gray-600">Signed in to AI Content Studio</p>
         <p role="status" className="mt-3 text-sm text-gray-600">{state.message} Your signed-in session is retained; local projects have not been moved.</p>
         <button type="button" disabled={busy} onClick={() => { setState({ kind: 'loading' }); void checkSession() }}
-          className="mt-5 rounded-md bg-[#5B5BD6] px-4 py-2 text-sm text-white disabled:opacity-60">Retry readiness</button>
+           className="mt-5 rounded-md bg-[#FF7A1A] px-4 py-2 text-sm text-[#15171A] disabled:opacity-60">Retry readiness</button>
         <button type="button" disabled={busy} onClick={() => void logout()}
           className="ml-3 mt-5 rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 disabled:opacity-60">
           Sign out
@@ -183,9 +183,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       </div>
     </main>
 
-  return <main className="min-h-screen bg-[#F8F7F5] flex items-center justify-center p-5">
+   return <main className="min-h-screen bg-[#F7F5F0] flex items-center justify-center p-5">
     <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
-      <h1 className="text-xl font-semibold text-gray-900">Content Studio</h1>
+       <h1 className="text-xl font-semibold text-[#20242A]">AI Content Studio</h1>
       <p className="mt-2 text-sm text-gray-600">{state.kind === 'unavailable'
         ? 'Cloud sign-in is not available yet.' : 'Sign in to your workspace.'}</p>
       {state.message && <p role="alert" className="mt-4 text-sm text-red-700">{state.message}</p>}
@@ -199,12 +199,12 @@ export default function AuthGate({ children }: { children: ReactNode }) {
             onChange={event => setPassword(event.target.value)}
             className="mt-1 block w-full rounded-md border border-gray-300 p-2" />
         </label>
-        <button type="submit" disabled={busy} className="w-full rounded-md bg-[#5B5BD6] p-2 text-sm text-white disabled:opacity-60">
+         <button type="submit" disabled={busy} className="w-full rounded-md bg-[#FF7A1A] p-2 text-sm font-semibold text-[#15171A] hover:bg-[#E9670D] disabled:opacity-60">
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>}
       <button type="button" onClick={() => { setState({ kind: 'loading' }); void checkSession() }}
-        className="mt-4 text-xs text-[#5B5BD6]">Retry session check</button>
+         className="mt-4 text-xs font-medium text-[#B94E09]">Retry session check</button>
     </div>
   </main>
 }

@@ -677,7 +677,7 @@ export default function AiControlCenter({ mode, context }: Props) {
             </span>
             <span className="text-[10px] text-[#9694A0]">{context.workspace.name || 'Workspace'} · {context.membership.role}</span>
           </div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#77758B]">Content Studio / Administration</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#667085]">AI Content Studio / Administration</p>
           <h2 id="ai-control-title" className="mt-1.5 text-[26px] font-semibold leading-tight tracking-[-0.04em] text-[#22222E] sm:text-[32px]">AI Control Center</h2>
           <p className="mt-2 max-w-2xl text-[12px] leading-5 text-[#747381]">A careful registry for documentation workflows, prompts, references, and blueprints. Definitions are versioned; content is never generated here.</p>
         </div>

@@ -159,3 +159,40 @@ test("leaving unchanged project settings does not write a new project revision",
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   expect(await revision()).toBe(before)
 })
+
+test("project tiles and the shared module rail preserve primary and secondary destinations", async ({ page }) => {
+  const name = `Studio shell ${Date.now()}`
+  await createProject(page, name)
+  await page.locator("header").getByRole("button", { name: "Content Studio home" }).click()
+
+  const tile = page.getByRole("button", { name: `Open project ${name}`, exact: true })
+  const tileContainer = page.locator(".studio-project-tile").filter({ has: tile })
+  await expect(tile).toBeVisible()
+  await expect(page.getByRole("button", { name: "Create a project" })).toBeVisible()
+  await tileContainer.getByLabel(`Project actions for ${name}`).click()
+  for (const action of ["Open", "Duplicate", "Backup", "Delete"]) {
+    await expect(tileContainer.getByRole("button", { name: action, exact: true })).toBeVisible()
+  }
+  await tileContainer.getByLabel(`Project actions for ${name}`).click()
+  await tile.click()
+  await expect(page.getByTestId("project-home")).toBeVisible()
+
+  const rail = page.getByRole("navigation", { name: "Project navigation" })
+  for (const [label, destination] of [
+    ["Sources", "Add Source Material"],
+    ["Review", "Grounded Review"],
+  ]) {
+    await rail.getByRole("button", { name: label, exact: true }).click()
+    await expect(page.getByRole("heading", { name: destination })).toBeVisible()
+  }
+  await rail.getByRole("button", { name: "Publish", exact: true }).click()
+  await expect(rail.getByRole("button", { name: "Publish", exact: true })).toHaveAttribute("aria-current", "page")
+  await rail.getByRole("button", { name: "Structure", exact: true }).click()
+  await expect(page.getByTestId("real-toc-screen")).toBeVisible()
+  await rail.getByRole("button", { name: "Author", exact: true }).click()
+  await expect(page.getByTestId("author-workspace")).toBeVisible()
+  await page.locator("header").getByLabel("Open project menu").click()
+  for (const utility of ["History", "Brand & Output", "Administration", "Diagnostics", "Project Settings"]) {
+    await expect(page.locator("header").getByRole("button", { name: utility, exact: true })).toBeVisible()
+  }
+})

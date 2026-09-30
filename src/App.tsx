@@ -983,7 +983,7 @@ function WorkflowSteps({
   const analysisPhase = current === 'analysis' || current === 'structure'
 
   return (
-    <nav aria-label="Content workflow" className={`w-full ${current === 'studio' ? 'opacity-75' : ''}`}>
+    <nav aria-label="Content workflow" className={`studio-workflow-navigation w-full ${current === 'studio' ? 'opacity-75' : ''}`}>
       <ol style={{ justifyContent: 'safe center' }} className={`flex max-w-full items-center justify-start overflow-x-auto no-scrollbar ${current === 'studio' ? 'gap-0 py-0' : 'gap-1 py-1'}`}>
         {phases.map((phase, index) => {
           const active = phase.id === activePhase
@@ -997,14 +997,14 @@ function WorkflowSteps({
                 aria-current={active ? 'step' : undefined}
                 aria-label={`${phase.label}, ${active ? (current === 'preview' ? 'Preview' : 'Current stage') : statusLabel(status)}`}
                 title={active ? (current === 'preview' ? 'Preview' : 'Current stage') : statusLabel(status)}
-                className={`group flex items-center rounded-md font-semibold whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 ${current === 'studio' ? 'min-h-7 gap-1 px-1.5 text-[10px]' : 'min-h-9 gap-2 px-2.5 text-[11px] sm:px-3 sm:text-[12px]'} ${
+                className={`studio-workflow-step group flex items-center rounded-md font-semibold whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 ${current === 'studio' ? 'min-h-7 gap-1 px-1.5 text-[10px]' : 'min-h-9 gap-2 px-2.5 text-[11px] sm:px-3 sm:text-[12px]'} ${
                   active ? 'bg-[#EEEEFF] text-[#4D4DC2]' : status === 'stale'
                     ? 'text-[#A85C08] hover:bg-[#FEF3C7]'
                     : status === 'complete' ? 'text-[#5757B8] hover:bg-[#EEEEFF]'
                       : 'text-[#747487] hover:bg-[#F4F2EE] hover:text-[#343444]'
                 }`}
               >
-                <span className={`flex items-center justify-center rounded-full border font-bold ${current === 'studio' ? 'h-3.5 w-3.5 text-[8px]' : 'h-[18px] w-[18px] text-[9px]'} ${
+                <span className={`studio-workflow-marker flex items-center justify-center rounded-full border font-bold ${current === 'studio' ? 'h-3.5 w-3.5 text-[8px]' : 'h-[18px] w-[18px] text-[9px]'} ${
                   active ? 'border-[#5B5BD6] bg-[#5B5BD6] text-white'
                     : status === 'complete' ? 'border-[#C7C5F4] bg-[#EEEEFF] text-[#5B5BD6]'
                       : status === 'stale' ? 'border-[#F1D39D] bg-[#FEF3C7] text-[#A85C08]'
@@ -1047,6 +1047,38 @@ function WorkflowSteps({
   )
 }
 
+function ProjectModuleRail({ screen, onNav, canEditProjectSettings }: {
+  screen: Screen
+  onNav: (screen: Screen) => void
+  canEditProjectSettings: boolean
+}) {
+  const modules: Array<{ id: Screen; label: string; shape: React.ReactNode }> = [
+    { id: 'project-home', label: 'Project Home', shape: <path d="m3 9 7-6 7 6v7.5a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z" /> },
+    { id: 'sources', label: 'Sources', shape: <><path d="M5 3h7l4 4v9.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1Z" /><path d="M12 3v4h4M7 11h6M7 14h6" /></> },
+    { id: 'structure', label: 'Structure', shape: <><path d="M4 4h12M4 9h8M4 14h6" /><circle cx="15" cy="14" r="2" /></> },
+    { id: 'studio', label: 'Author', shape: <><path d="m4 14 8.8-8.8a2.1 2.1 0 0 1 3 3L7 17l-4 1z" /><path d="m11.5 6.5 3 3" /></> },
+    { id: 'quality', label: 'Review', shape: <><path d="M10 3 17 6v4.5c0 4-2.6 6.3-7 8.5-4.4-2.2-7-4.5-7-8.5V6z" /><path d="m7 10 2 2 4-4" /></> },
+    { id: 'publish', label: 'Publish', shape: <><path d="M10 13V3m0 0L6 7m4-4 4 4" /><path d="M4 11v5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-5" /></> },
+  ]
+  return (
+    <aside className="studio-module-rail">
+      <nav aria-label="Project navigation">
+        {modules.map(module => {
+          const active = module.id === 'structure' ? screen === 'structure' || screen === 'analysis' : screen === module.id
+          return <button key={module.id} type="button" aria-current={active ? 'page' : undefined} onClick={() => onNav(module.id)} title={module.label}>
+            <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round">{module.shape}</svg>
+            <span>{module.label}</span>
+          </button>
+        })}
+      </nav>
+      <button className="studio-rail-settings" type="button" title={!canEditProjectSettings ? 'Project write access is required' : 'Project Settings'} aria-label="Settings — Project Settings" disabled={!canEditProjectSettings} onClick={() => onNav('create')}>
+        <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="3" /><path d="m16 11.5 1.2 1-.9 1.6-1.5-.3a6 6 0 0 1-1.3.8l-.4 1.5h-2l-.4-1.5a6 6 0 0 1-1.3-.8l-1.5.3L7 12.5l1.2-1a6 6 0 0 1 0-1.5L7 9l.9-1.6 1.5.3a6 6 0 0 1 1.3-.8l.4-1.5h2l.4 1.5a6 6 0 0 1 1.3.8l1.5-.3.9 1.6-1.2 1a6 6 0 0 1 0 1.5Z" /></svg>
+        <span>Settings</span>
+      </button>
+    </aside>
+  )
+}
+
 // ── Top Bar ───────────────────────────────────────────────────────────────────
 function TopBar({ screen, onNav, onAdministration, projectName, contentType, isProject, canEditProjectSettings, settingsReturnTo, onSettingsReturn, onDiagnostics, onHistory, saveStatus, onRetrySave, stageStatuses }: {
   screen: Screen
@@ -1067,6 +1099,7 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
   const cloudAccount = useCloudAccount()
   const inProject = !['dashboard', 'create', 'administration'].includes(screen)
   const hasProject = screen !== 'dashboard' && screen !== 'administration' && isProject
+  const canCreateProject = getAdministrationAccess(getAccessContext()).workspace.create === true
   const saveLabel = saveStatus === 'error' ? 'Save failed' : saveStatus === 'saving' ? 'Saving changes' : 'All changes saved'
   return (
     <header className="relative z-30 flex-shrink-0 border-b border-[#E2DED7] bg-white">
@@ -1080,7 +1113,7 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
             <rect x="7" y="7" width="4" height="4" rx="0.75" fill="white" opacity="0.4" />
           </svg>
           </span>
-          <span className="text-[13px] font-semibold tracking-tight text-[#111218]">Content Studio</span>
+          <span className="text-[13px] font-semibold tracking-tight text-[#111218]">AI Content Studio</span>
         </button>
         {screen === 'administration' ? (
           <div className="min-w-0 border-l border-[#E2DED7] pl-3">
@@ -1101,13 +1134,13 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
           </div>
         )}
         {inProject && screen !== 'studio' && (
-          <div className="order-3 min-w-0 w-full px-0 xl:order-none xl:w-auto xl:flex-1 xl:px-2">
+          <div className="studio-workflow-header order-3 min-w-0 w-full px-0 xl:order-none xl:w-auto xl:flex-1 xl:px-2">
             <WorkflowSteps current={screen} onNav={onNav} stageStatuses={stageStatuses ?? {}} />
           </div>
         )}
         <div className={`order-2 flex w-full min-w-0 flex-wrap items-center gap-1.5 xl:order-none xl:ml-auto xl:w-auto xl:flex-1 xl:gap-2 ${screen === 'studio' ? 'author-project-utilities' : ''}`}>
           <div id="author-project-tools" className="contents">
-          {screen === 'studio' && hasProject && (
+          {hasProject && (
             <details className="author-project-menu relative">
               <summary aria-label="Open project menu" className="cursor-pointer list-none rounded-md border border-[#E2DED7] px-2.5 py-1.5 text-[10px] font-medium text-[#585866] hover:border-[#C7C5F4] hover:bg-[#F8F7FF] sm:text-[11px]">
                 Project
@@ -1155,6 +1188,18 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
                 Brand &amp; Output
               </button>
             </>
+          )}
+          {hasProject && screen !== 'preview' && (
+            <button type="button" onClick={() => onNav('preview')} data-testid="topbar-project-preview"
+              className="studio-topbar-preview min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-semibold text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] sm:text-[11px]">
+              Preview
+            </button>
+          )}
+          {screen === 'dashboard' && canCreateProject && (
+            <button type="button" onClick={() => onNav('create')} data-testid="topbar-create-project"
+              className="studio-topbar-create min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[10px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] sm:text-[11px]">
+              Create project
+            </button>
           )}
           {screen !== 'studio' && <button type="button" onClick={onAdministration} data-testid="topbar-administration"
             aria-current={screen === 'administration' ? 'page' : undefined}
@@ -1423,7 +1468,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
   }
 
   return (
-    <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in">
+    <div className="studio-dashboard flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in">
       {/* Header */}
       <div className="flex items-end justify-between mb-8">
         <div>
@@ -1497,38 +1542,43 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
           </button>}
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="studio-project-grid">
           {projects.map(p => (
             <div
               key={p.projectId}
-              className={`w-full text-left bg-white border rounded-xl p-5 flex items-center gap-6 group transition-all hover:shadow-sm ${p.projectId === activeProjectId ? 'border-[#5B5BD6]/40 bg-[#FAFAFE]' : 'border-[#E2DED7] hover:border-[#C8C6C0]'}`}
+              className={`studio-project-tile group ${p.projectId === activeProjectId ? 'is-active' : ''}`}
             >
-              <div className={`w-1 h-10 rounded-full flex-shrink-0 ${p.projectId === activeProjectId ? 'bg-[#5B5BD6]' : 'bg-[#D8D4CE]'}`} />
-              <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpen(p.projectId)}>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-[14px] font-semibold text-[#111218] truncate">{p.projectName}</span>
-                  {p.projectId === activeProjectId && <span className="text-[10px] font-medium text-[#5B5BD6] bg-[#EEEEFF] px-2 py-0.5 rounded-full flex-shrink-0">Active</span>}
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-[12px] text-[#9898AB] capitalize">{p.documentType?.replace('-', ' ')}</span>
-                  {p.version && <><span className="text-[#E2DED7]">·</span><span className="text-[12px] text-[#9898AB]">v{p.version}</span></>}
-                  <span className="text-[#E2DED7]">·</span>
-                  <span className="text-[12px] text-[#9898AB]">Modified {fmt(p.modifiedAt)}</span>
-                </div>
+              <button type="button" className="studio-tile-open" aria-label={`Open project ${p.projectName}`}
+                disabled={!!actionLoading} onClick={() => void handleOpen(p.projectId)} />
+              <div className="studio-tile-topline">
+                <span className="studio-tile-mark" aria-hidden="true">DOC</span>
+                <details className="studio-tile-actions">
+                  <summary aria-label={`Project actions for ${p.projectName}`} title="Project actions">•••</summary>
+                  <div className="studio-tile-menu">
+                    <button type="button" onClick={() => void handleOpen(p.projectId)} disabled={!!actionLoading}>Open</button>
+                    {!readOnlyViewer && <button type="button" onClick={() => beginDuplicate(p)} disabled={!!actionLoading}>Duplicate</button>}
+                    <button type="button" onClick={() => void handleBackup(p)} disabled={!!actionLoading}>Backup</button>
+                    {!readOnlyViewer && getAccessContext().membership.role !== 'editor' && <button type="button" className="is-destructive" onClick={() => setDeleteConfirm(p.projectId)}>Delete</button>}
+                  </div>
+                </details>
               </div>
-              <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={() => handleOpen(p.projectId)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] bg-[#EEEEFF] hover:bg-[#E0DEFF] rounded-lg transition-colors disabled:opacity-50">
-                  {actionLoading === p.projectId ? '…' : 'Open'}
-                </button>
-                {!readOnlyViewer && <button onClick={() => beginDuplicate(p)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Duplicate</button>}
-                <button onClick={() => void handleBackup(p)} disabled={!!actionLoading} className="px-3 py-1.5 text-[11px] font-medium text-[#6B6B7E] bg-[#F4F2EE] hover:bg-[#EAE8E4] rounded-lg transition-colors disabled:opacity-50">Backup</button>
-                {!readOnlyViewer && getAccessContext().membership.role !== 'editor' && <button onClick={() => setDeleteConfirm(p.projectId)} className="px-3 py-1.5 text-[11px] font-medium text-[#DC2626] bg-[#FEF2F2] hover:bg-[#FEE2E2] rounded-lg transition-colors">Delete</button>}
+              <div className="studio-tile-copy">
+                <div className="studio-tile-title">
+                  <h2>{p.projectName}</h2>
+                  {p.projectId === activeProjectId && <span className="studio-active-tag">Active</span>}
+                </div>
+                <p className="studio-tile-type">{p.documentType?.replace('-', ' ') || 'Content project'}{p.version ? ` · v${p.version}` : ''}</p>
               </div>
-              <svg className="text-[#C8C6C0] group-hover:text-[#9898AB] transition-colors cursor-pointer flex-shrink-0" width="16" height="16" viewBox="0 0 16 16" fill="none" onClick={() => handleOpen(p.projectId)}>
-                <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+              <div className="studio-tile-footer">
+                <span>Modified {fmt(p.modifiedAt)}</span>
+                <span className="studio-open-label">{actionLoading === p.projectId ? 'Opening…' : 'Open project'} <span aria-hidden="true">↗</span></span>
+              </div>
             </div>
           ))}
+          {!readOnlyViewer && <button type="button" className="studio-project-create-tile" onClick={onNewProject}>
+            <span className="studio-create-mark" aria-hidden="true">+</span>
+            <span><strong>Create a project</strong><small>Start a grounded documentation workspace</small></span>
+          </button>}
         </div>
       )}
 
@@ -19994,7 +20044,16 @@ export default function App() {
         </div>
       )}
       <main className="flex-1 flex overflow-hidden">
-        {renderScreen()}
+        {projectId && !['dashboard', 'administration'].includes(screen) && screen !== 'studio' && (
+          <ProjectModuleRail
+            screen={screen}
+            onNav={navigate}
+            canEditProjectSettings={getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true}
+          />
+        )}
+        {projectId && !['dashboard', 'administration'].includes(screen) && screen !== 'studio'
+          ? <div className="studio-project-stage">{renderScreen()}</div>
+          : renderScreen()}
       </main>
       {/* Project Diagnostics modal — Settings → Project Diagnostics */}
       {diagOpen && (

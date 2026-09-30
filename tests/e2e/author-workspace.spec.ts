@@ -545,8 +545,9 @@ test('Author topic navigation remains available while its cloud save is outstand
   await page.reload()
   const workspace = page.getByTestId('author-workspace')
   if (!(await workspace.isVisible().catch(() => false))) {
-    await expect(page.getByText(projectName, { exact: true }).last()).toBeVisible()
-    await page.getByText(projectName, { exact: true }).last().click()
+    const projectTile = page.getByRole('button', { name: `Open project ${projectName}`, exact: true })
+    await expect(projectTile).toBeVisible()
+    await projectTile.click()
     if (!(await workspace.isVisible().catch(() => false))) await authorStep(page).click()
   }
   await expect(workspace).toBeVisible()

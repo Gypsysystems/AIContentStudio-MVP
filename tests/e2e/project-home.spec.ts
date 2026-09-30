@@ -298,10 +298,9 @@ async function fillMissingAuthorTopics(page: Page, name: string) {
 async function openProjectHome(page: Page, name: string) {
   await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
-  const projectRow = page.locator("main div.group")
-    .filter({ has: page.getByText(name, { exact: true }) })
-  await expect(projectRow).toHaveCount(1)
-  await projectRow.getByRole("button", { name: "Open", exact: true }).click()
+  const projectTile = page.getByRole("button", { name: `Open project ${name}`, exact: true })
+  await expect(projectTile).toHaveCount(1)
+  await projectTile.click()
   await expect(page.getByTestId("project-home")).toBeVisible()
 }
 
@@ -502,7 +501,7 @@ test("project-list reopen lands on Home while active-project reload preserves So
   await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
 
-  await page.getByText(name, { exact: true }).click()
+  await page.getByRole("button", { name: `Open project ${name}`, exact: true }).click()
   await expect(page.getByTestId("project-home")).toBeVisible()
   await expect(page.getByTestId("project-home-continue")).toBeVisible()
   await page.reload()
