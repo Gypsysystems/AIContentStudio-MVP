@@ -417,7 +417,7 @@ test('Dashboard downloads a verified backup and requires explicit restore choice
   }, { projectId, projectName })
   await page.reload()
   await expect(page.getByText(projectName, { exact: true })).toBeVisible()
-  await page.getByText(projectName, { exact: true }).hover()
+  await page.getByLabel(`Project actions for ${projectName}`).click()
   const downloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Backup', exact: true }).click()
   const download = await downloadPromise

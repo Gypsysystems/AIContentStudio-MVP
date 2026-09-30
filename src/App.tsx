@@ -1115,7 +1115,7 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
             <p className="text-[10px] text-[#858493]">Workspace access &amp; settings</p>
           </div>
         ) : screen === 'dashboard' ? (
-          <span className="hidden text-[12px] text-[#777786] sm:block">Workspace</span>
+          null
         ) : screen === 'create' && !hasProject ? (
           <div className="min-w-0 border-l border-[#E2DED7] pl-3">
             <p className="truncate text-[12px] font-semibold text-[#22222F]">New project</p>
@@ -1132,7 +1132,9 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
             <WorkflowSteps current={screen} onNav={onNav} stageStatuses={stageStatuses ?? {}} />
           </div>
         )}
-        <div className={`order-2 flex w-full min-w-0 flex-wrap items-center gap-1.5 xl:order-none xl:ml-auto xl:w-auto xl:flex-1 xl:gap-2 ${screen === 'studio' ? 'author-project-utilities' : ''}`}>
+        <div className={screen === 'dashboard'
+          ? 'studio-projects-header-actions ml-auto flex max-w-full flex-wrap items-center justify-end gap-2'
+          : `order-2 flex w-full min-w-0 flex-wrap items-center gap-1.5 xl:order-none xl:ml-auto xl:w-auto xl:flex-1 xl:gap-2 ${screen === 'studio' ? 'author-project-utilities' : ''}`}>
           <div id="author-project-tools" className="contents">
           {hasProject && (
             <details className="author-project-menu relative">
@@ -1223,10 +1225,10 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
           )}
           {cloudAccount && (
             <div data-testid="header-account" className="flex min-h-8 max-w-full min-w-0 items-center gap-2 border-l border-[#E2DED7] pl-2 sm:pl-3">
-              <span className="hidden min-w-0 max-w-[130px] truncate text-[11px] text-[#686879] md:block xl:max-w-[180px]"
+              {screen !== 'dashboard' && <span className="hidden min-w-0 max-w-[130px] truncate text-[11px] text-[#686879] md:block xl:max-w-[180px]"
                 title={`${cloudAccount.organizationName} / ${cloudAccount.workspaceName}`}>
                 <span className="hidden xl:inline">{cloudAccount.organizationName} / </span>{cloudAccount.workspaceName}
-              </span>
+              </span>}
               <button type="button" disabled={cloudAccount.busy} onClick={cloudAccount.signOut}
                 className="min-h-8 flex-shrink-0 rounded-md border border-[#E2DED7] px-2.5 text-[11px] font-medium text-[#4D4DC2] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 disabled:opacity-60">
                 Sign out
@@ -1380,6 +1382,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
     try {
       const imported = await importLocalProjectToCloud(project.projectId, name)
       setLocalImportCandidate(null)
+      setLocalImportOpen(false)
       setLocalImportMessage(`Imported “${imported.projectName}” to this workspace. The original local project and files were kept.`)
       try { setProjects(await listProjects()) } catch (error) {
         setLocalImportError(`Import was verified, but the cloud project list could not refresh: ${(error as Error).message}`)
@@ -1462,14 +1465,20 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
   }
 
   return (
-    <div className="studio-dashboard flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in">
+    <div className="studio-dashboard flex-1 overflow-auto px-4 py-6 sm:p-8 max-w-5xl mx-auto w-full fade-in">
       {/* Header */}
-      <div className="flex items-end justify-between mb-8">
-        <div>
-          <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Workspace</p>
-          <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Projects</h1>
-        </div>
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
+        <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Projects</h1>
+        <div data-testid="projects-page-actions" className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {isCloudProjectMode() && !readOnlyViewer && (
+            <button type="button" onClick={() => void showLocalProjectsForImport()}
+              className="inline-flex items-center gap-2 text-[13px] font-medium px-3 py-2 rounded-lg border border-[#D8D4CE] bg-white text-[#20242A] hover:border-[#F0C7A7] hover:bg-[#FFF0E3]">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 3v9m0 0-3-3m3 3 3-3M4 13v3h12v-3" />
+              </svg>
+              Import Project
+            </button>
+          )}
           {!readOnlyViewer && <>
             <input ref={restoreInputRef} type="file" accept=".zip,.docflow.zip,application/zip"
               className="hidden" aria-label="Choose project backup"
@@ -1483,7 +1492,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
               {restoreBusy && !restoreCandidate ? 'Checking backup…' : 'Restore backup'}
             </button>
           </>}
-          {!readOnlyViewer && !loading && projects.length > 0 && <button
+          {!readOnlyViewer && <button
             onClick={onNewProject}
             className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-4 py-2 rounded-lg transition-colors"
           >
@@ -1494,31 +1503,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
           </button>}
         </div>
       </div>
-      {isCloudProjectMode() && !readOnlyViewer && <div className="mb-4 rounded-xl border border-[#D8D4CE] bg-white p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-[13px] font-semibold text-[#111218]">Local browser projects</p>
-            <p className="mt-1 text-[12px] text-[#6B6B7E]">Import is opt-in. Originals are never deleted or moved automatically.</p>
-          </div>
-          <button type="button" onClick={() => void showLocalProjectsForImport()}
-            className="rounded-lg border border-[#C8C6C0] px-3 py-2 text-[12px] font-medium text-[#5B5BD6]">
-            {localImportOpen ? 'Hide local projects' : 'Review local projects to import'}
-          </button>
-        </div>
-        {localImportMessage && <p role="status" className="mt-3 text-[12px] text-green-700">{localImportMessage}</p>}
-        {localImportError && <p role="alert" className="mt-3 text-[12px] text-red-700">{localImportError}</p>}
-        {localImportOpen && <div className="mt-3 space-y-2">
-          {localProjects.length === 0
-            ? <p className="text-[12px] text-[#9898AB]">No local projects are available in this browser.</p>
-            : localProjects.map(project => <div key={project.projectId} className="flex items-center justify-between gap-3 rounded-lg bg-[#F8F7F5] px-3 py-2">
-              <span className="truncate text-[12px] text-[#33333F]">{project.projectName}</span>
-              <button type="button" disabled={!!localImportBusy} onClick={() => beginLocalProjectImport(project)}
-                className="shrink-0 rounded-md bg-[#5B5BD6] px-3 py-1.5 text-[11px] font-medium text-white disabled:opacity-50">
-                {localImportBusy === project.projectId ? 'Validating and importing…' : 'Import copy'}
-              </button>
-            </div>)}
-        </div>}
-      </div>}
+      {localImportMessage && <p role="status" className="mb-4 text-[12px] text-green-700">{localImportMessage}</p>}
       {restoreError && <div role="alert" className="mb-4 p-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] text-[12px] text-[#B91C1C]">{restoreError}</div>}
       {restoreMessage && <div role="status" className="mb-4 p-3 rounded-lg border border-[#A7D9B1] bg-[#F0FDF4] text-[12px] text-[#166534]">{restoreMessage}</div>}
 
@@ -1530,10 +1515,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
             <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="12" y="3" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="3" y="12" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/><rect x="12" y="12" width="7" height="7" rx="1.5" stroke="#9898AB" strokeWidth="1.5"/></svg>
           </div>
           <p className="text-[15px] font-semibold text-[#111218] mb-1.5">No projects yet</p>
-          <p className="text-[13px] text-[#9898AB] mb-6">Create your first project to get started.</p>
-          {!readOnlyViewer && <button onClick={onNewProject} className="inline-flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-semibold px-5 py-2.5 rounded-lg transition-colors">
-            + New Project
-          </button>}
+          <p className="text-[13px] text-[#9898AB]">Create your first project to get started.</p>
         </div>
       ) : (
         <div className="studio-project-grid">
@@ -1663,27 +1645,48 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
         </div>
       )}
 
-      {localImportCandidate && (
+      {localImportOpen && (
         <div role="dialog" aria-modal="true" aria-label="Import local project"
           className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
-          onClick={() => { if (!localImportBusy) setLocalImportCandidate(null) }}>
+          onClick={() => { if (!localImportBusy) { setLocalImportOpen(false); setLocalImportCandidate(null) } }}>
           <div className="bg-white rounded-2xl border border-[#E2DED7] shadow-xl p-6 w-full max-w-[470px]"
             onClick={event => event.stopPropagation()}>
-            <h2 className="text-[17px] font-semibold text-[#111218] mb-2">Import project copy</h2>
-            <p className="text-[13px] text-[#4B4B5B]">The local project and its files will remain unchanged.</p>
-            <label className="block mt-4 text-[12px] text-[#4B4B5B]" htmlFor="import-project-name">Name for imported copy</label>
-            <input id="import-project-name" value={localImportName} onChange={event => setLocalImportName(event.target.value)}
-              className="mt-1 w-full px-3 py-2 text-[13px] border border-[#D8D4CE] rounded-lg" />
-            {localImportError && <p role="alert" className="mt-2 text-[12px] text-[#B91C1C]">{localImportError}</p>}
-            <div className="flex justify-end gap-2 mt-6">
-              <button disabled={!!localImportBusy} onClick={() => setLocalImportCandidate(null)}
-                className="px-3 py-2 text-[12px] border border-[#D8D4CE] rounded-lg disabled:opacity-50">Cancel</button>
-              <button disabled={!!localImportBusy || !normalizeProjectName(localImportName)}
-                onClick={() => void handleLocalProjectImport()}
-                className="px-3 py-2 text-[12px] text-white bg-[#5B5BD6] rounded-lg disabled:opacity-50">
-                {localImportBusy ? 'Importing…' : `Import as “${normalizeProjectName(localImportName) || '…'}”`}
-              </button>
-            </div>
+            {localImportCandidate ? <>
+              <h2 className="text-[17px] font-semibold text-[#111218] mb-2">Import project copy</h2>
+              <p className="text-[13px] text-[#4B4B5B]">The local project and its files will remain unchanged.</p>
+              <label className="block mt-4 text-[12px] text-[#4B4B5B]" htmlFor="import-project-name">Name for imported copy</label>
+              <input id="import-project-name" value={localImportName} onChange={event => setLocalImportName(event.target.value)}
+                className="mt-1 w-full px-3 py-2 text-[13px] border border-[#D8D4CE] rounded-lg" />
+              {localImportError && <p role="alert" className="mt-2 text-[12px] text-[#B91C1C]">{localImportError}</p>}
+              <div className="flex justify-end gap-2 mt-6">
+                <button disabled={!!localImportBusy} onClick={() => setLocalImportCandidate(null)}
+                  className="px-3 py-2 text-[12px] border border-[#D8D4CE] rounded-lg disabled:opacity-50">Cancel</button>
+                <button disabled={!!localImportBusy || !normalizeProjectName(localImportName)}
+                  onClick={() => void handleLocalProjectImport()}
+                  className="px-3 py-2 text-[12px] text-white bg-[#5B5BD6] rounded-lg disabled:opacity-50">
+                  {localImportBusy ? 'Importing…' : `Import as “${normalizeProjectName(localImportName) || '…'}”`}
+                </button>
+              </div>
+            </> : <>
+              <h2 className="text-[17px] font-semibold text-[#111218] mb-2">Import Project</h2>
+              <p className="text-[13px] text-[#4B4B5B]">Import is opt-in. Originals are never deleted or moved automatically.</p>
+              {localImportError && <p role="alert" className="mt-3 text-[12px] text-[#B91C1C]">{localImportError}</p>}
+              <div className="mt-4 max-h-[50vh] space-y-2 overflow-y-auto">
+                {localProjects.length === 0
+                  ? <p className="text-[12px] text-[#667085]">No local projects are available in this browser.</p>
+                  : localProjects.map(project => <div key={project.projectId} className="flex items-center justify-between gap-3 rounded-lg bg-[#F8F7F5] px-3 py-2">
+                    <span className="truncate text-[12px] text-[#33333F]">{project.projectName}</span>
+                    <button type="button" disabled={!!localImportBusy} onClick={() => beginLocalProjectImport(project)}
+                      className="shrink-0 rounded-md bg-[#5B5BD6] px-3 py-1.5 text-[11px] font-medium text-white disabled:opacity-50">
+                      Import copy
+                    </button>
+                  </div>)}
+              </div>
+              <div className="flex justify-end mt-6">
+                <button type="button" onClick={() => setLocalImportOpen(false)}
+                  className="px-3 py-2 text-[12px] border border-[#D8D4CE] rounded-lg">Close</button>
+              </div>
+            </>}
           </div>
         </div>
       )}

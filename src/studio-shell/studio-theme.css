@@ -271,6 +271,9 @@ header.relative.z-30 #author-project-tools > button:not(.studio-topbar-preview):
 @media (max-width: 640px) {
   header.relative.z-30 .studio-header-logo { display: none; }
   header.relative.z-30 .studio-header-mark { display: block; }
+  header.relative.z-30 .studio-projects-header-actions { width: 100%; gap: 6px; }
+  header.relative.z-30 .studio-projects-header-actions button { padding-right: 8px; padding-left: 8px; font-size: 10px; white-space: nowrap; }
+  header.relative.z-30 .studio-projects-header-actions [data-testid="header-account"] { padding-left: 6px; }
 }
 @media (max-width: 767px) {
   .studio-workflow-header { max-width: none; width: 100% !important; flex-basis: 100% !important; overflow-x: auto; }
