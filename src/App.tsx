@@ -10154,17 +10154,9 @@ function OutlineTocPanel({
     flash(id); showCrossRef()
   }
 
-  const canPromote = (id: number) => { const item = toc.find(x => x.id === id); return item ? item.level > 1 : false }
-  const canDemote = (id: number) => {
-    const item = toc.find(x => x.id === id)
-    if (!item || item.level >= 4) return false
-    const idx = toc.findIndex(x => x.id === id)
-    return toc.slice(0, idx).some(x => x.level === item.level && x.id !== id)
-  }
-
   const addSection = () => {
     if (!addTitle.trim()) return
-    const newId = Math.max(...toc.map(t => t.id)) + 1
+    const newId = Math.max(0, ...toc.map(t => t.id)) + 1
     const parentItem = addParentId !== null ? toc.find(t => t.id === addParentId) : null
     const newLevel = (parentItem ? Math.min(parentItem.level + 1, 4) : 1) as 1 | 2 | 3 | 4
     const newItem: TocItem = { id: newId, title: addTitle.trim(), level: newLevel, words: 300, parentId: addParentId ?? undefined, isNew: true }
@@ -10204,29 +10196,57 @@ function OutlineTocPanel({
   const toggleCollapse = (id: number) => {
     setCollapsed(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   }
-
-  const matchingIds = new Set(toc.filter(item => item.title.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())).map(item => item.id))
-  if (searchQuery.trim()) {
-    for (const item of toc) {
-      if (!matchingIds.has(item.id)) continue
-      let parentId = item.parentId
-      while (parentId !== undefined) {
-        matchingIds.add(parentId)
-        parentId = toc.find(parent => parent.id === parentId)?.parentId
-      }
-    }
+  const closeTopicActions = (button: HTMLButtonElement, removing = false) => {
+    const menu = button.closest('details')
+    menu?.removeAttribute('open')
+    if (removing) document.querySelector<HTMLInputElement>('[data-testid="author-outline"] input[type="search"]')?.focus()
+    else menu?.querySelector<HTMLElement>('summary')?.focus()
   }
-  const visibleItems = toc.filter(item => {
-    if (searchQuery.trim()) return matchingIds.has(item.id)
-    let pid: number | undefined = item.parentId
-    while (pid !== undefined) {
-      if (collapsed.has(pid)) return false
-      pid = toc.find(x => x.id === pid)?.parentId
-    }
-    return true
-  })
 
-  const hasChildren = (id: number) => toc.some(x => x.parentId === id)
+  // Index once per TOC change; searching and collapsing no longer rescan the
+  // entire outline for each row (or for each ancestor of a matching row).
+  const { topicById, childCounts, demotableIds } = useMemo(() => {
+    const topicById = new Map<number, TocItem>()
+    const childCounts = new Map<number, number>()
+    const demotableIds = new Set<number>()
+    const seenLevels = new Set<number>()
+    for (const item of toc) {
+      topicById.set(item.id, item)
+      if (item.parentId !== undefined) childCounts.set(item.parentId, (childCounts.get(item.parentId) ?? 0) + 1)
+      if (item.level < 4 && seenLevels.has(item.level)) demotableIds.add(item.id)
+      seenLevels.add(item.level)
+    }
+    return { topicById, childCounts, demotableIds }
+  }, [toc])
+  const visibleItems = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase()
+    if (query) {
+      const matchingIds = new Set<number>()
+      for (const item of toc) {
+        if (!item.title.toLocaleLowerCase().includes(query)) continue
+        let ancestor: TocItem | undefined = item
+        const visited = new Set<number>()
+        while (ancestor && !visited.has(ancestor.id)) {
+          visited.add(ancestor.id)
+          matchingIds.add(ancestor.id)
+          ancestor = ancestor.parentId === undefined ? undefined : topicById.get(ancestor.parentId)
+        }
+      }
+      return toc.filter(item => matchingIds.has(item.id))
+    }
+    return toc.filter(item => {
+      let parentId = item.parentId
+      const visited = new Set<number>()
+      while (parentId !== undefined && !visited.has(parentId)) {
+        if (collapsed.has(parentId)) return false
+        visited.add(parentId)
+        parentId = topicById.get(parentId)?.parentId
+      }
+      return true
+    })
+  }, [toc, topicById, searchQuery, collapsed])
+
+  const hasChildren = (id: number) => childCounts.has(id)
 
   const ownDescendants = (id: number): Set<number> => {
     const s = new Set<number>([id]); let changed = true
@@ -10248,8 +10268,8 @@ function OutlineTocPanel({
         const isDragTarget = dragOver === item.id && dragId !== item.id
         const hasKids = hasChildren(item.id)
         const isCollapsed = collapsed.has(item.id)
-        const canProm = canPromote(item.id)
-        const canDem = canDemote(item.id)
+        const canProm = item.level > 1
+        const canDem = demotableIds.has(item.id)
         const support = SECTION_SUPPORT[item.id]
         const indentCls = item.level === 2 ? 'pl-4' : item.level === 3 ? 'pl-7' : item.level === 4 ? 'pl-10' : ''
 
@@ -10271,14 +10291,11 @@ function OutlineTocPanel({
               if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectSection(item.id); setTocSelected(item.id); if (activeTopicId !== item.id) onOpenTopic(item.id, item.title) }
             }}
             title={`${item.title} — open topic${metadata?.[stableAuthorTopicId(item)]?.generatedFreshness === 'stale' ? ' (draft needs attention)' : ''}`}
-            className={`group relative flex items-center gap-1 px-2 py-1.5 rounded-md cursor-pointer transition-colors select-none ${indentCls}
+            className={`group relative flex flex-wrap items-center gap-1 px-2 py-1 rounded-md cursor-pointer transition-colors select-none ${indentCls}
               ${isDragTarget ? 'border-t-2 border-[#5B5BD6]' : ''}
               ${isFlashing ? 'bg-[#DCFCE7]' : isActive ? 'bg-[#ECEBF8] text-[#4D4DC2] ring-1 ring-inset ring-[#D7D5ED]' : isSelected ? 'bg-[#F4F2EE]' : 'hover:bg-[#F5F4F1]'}
             `}
           >
-            {/* Drag grip */}
-            <div className="text-[#D8D4CE] opacity-0 group-hover:opacity-100 cursor-grab flex-shrink-0 text-[10px] leading-none">⠿</div>
-
             {/* Collapse toggle */}
             <div className="w-3 flex-shrink-0 flex items-center justify-center">
               {hasKids ? (
@@ -10306,14 +10323,7 @@ function OutlineTocPanel({
                 : `text-[10px] ${isActive ? 'text-[#5B5BD6]' : 'text-[#6B6B7E]'}`
               }`}>
                 {item.title}
-                {item.isNew && <span className="ml-1 text-[8px] font-semibold text-[#5B5BD6] bg-[#EEEEFF] px-1 py-px rounded-full">new</span>}
-                {isCollapsed && hasKids && <span className="ml-1 text-[9px] text-[#C8C6C0]">({toc.filter(x => x.parentId === item.id).length})</span>}
-              </span>
-            )}
-
-            {!isActive && ['current', 'stale'].includes(metadata?.[stableAuthorTopicId(item)]?.generatedFreshness ?? '') && (
-              <span className={`flex-shrink-0 rounded px-1 py-0.5 text-[8px] font-medium ${metadata?.[stableAuthorTopicId(item)]?.generatedFreshness === 'current' ? 'bg-[#E4F1E8] text-[#38694A]' : 'bg-[#F8EBDD] text-[#89551C]'}`}>
-                {metadata?.[stableAuthorTopicId(item)]?.generatedFreshness === 'current' ? 'Ready' : 'Stale'}
+                {isCollapsed && hasKids && <span className="ml-1 text-[9px] text-[#C8C6C0]">({childCounts.get(item.id)})</span>}
               </span>
             )}
 
@@ -10326,56 +10336,28 @@ function OutlineTocPanel({
             ) : support && support.strength !== 'Strong' ? (
               <button onClick={e => { e.stopPropagation(); setSupportModal(item.id) }}
                 title={`Source support: ${support.strength}`}
-                className="flex-shrink-0 w-1.5 h-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                 aria-label={`Source support: ${support.strength}`}
+                 className="flex-shrink-0 w-2 h-2 rounded-full"
                 style={{ background: support.strength === 'Partial' ? '#D97706' : '#C8C6C0' }} />
             ) : null}
 
-            {/* Contextual actions on hover */}
+            {/* One visible overflow for mouse, keyboard and touch. */}
             {!isEditing && (
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-0.5">
-                <button onClick={e => { e.stopPropagation(); if (canProm) promoteItem(item.id) }}
-                  disabled={!canProm} title="Promote"
-                  className={`w-4 h-4 rounded flex items-center justify-center transition-colors ${canProm ? 'text-[#C8C6C0] hover:text-[#16A34A] hover:bg-[#DCFCE7]' : 'text-[#E2DED7] cursor-not-allowed'}`}>
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 6V2M2 4l2-2 2 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </button>
-                <button onClick={e => { e.stopPropagation(); if (canDem) demoteItem(item.id) }}
-                  disabled={!canDem} title={item.level >= 4 ? 'Max depth' : 'Demote'}
-                  className={`w-4 h-4 rounded flex items-center justify-center transition-colors ${canDem ? 'text-[#C8C6C0] hover:text-[#5B5BD6] hover:bg-[#EEEEFF]' : 'text-[#E2DED7] cursor-not-allowed'}`}>
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 2v4M2 4l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </button>
-                <button onClick={e => { e.stopPropagation(); setEditing(item.id); setEditValue(item.title) }}
-                  title="Rename"
-                  className="w-4 h-4 rounded text-[#C8C6C0] hover:text-[#5B5BD6] hover:bg-[#EEEEFF] flex items-center justify-center transition-colors">
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M5 1.5l1.5 1.5L2.5 7H1V5.5L5 1.5z" stroke="currentColor" strokeWidth="0.9" strokeLinejoin="round"/></svg>
-                </button>
-                {item.level < 4 && (
-                  <button onClick={e => { e.stopPropagation(); setAddParentId(item.id); setAddTitle(''); setAddModalOpen(true) }}
-                    title="Add child topic"
-                    className="w-4 h-4 rounded text-[#C8C6C0] hover:text-[#8B5CF6] hover:bg-[#F3F0FF] flex items-center justify-center transition-colors">
-                    <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 1v6M1 4h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                  </button>
-                )}
-                <button onClick={e => { e.stopPropagation(); setMoveModal(item.id); setMoveTarget(item.parentId ?? null) }}
-                  title="Move to…"
-                  className="w-4 h-4 rounded text-[#C8C6C0] hover:text-[#6B6B7E] hover:bg-[#F4F2EE] flex items-center justify-center transition-colors">
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4h6M5 2l2 2-2 2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </button>
-                <button onClick={e => { e.stopPropagation(); removeItem(item.id) }}
-                  title="Delete"
-                  className="w-4 h-4 rounded text-[#C8C6C0] hover:text-[#DC2626] hover:bg-[#FEE2E2] flex items-center justify-center transition-colors">
-                  <svg width="6" height="6" viewBox="0 0 6 6" fill="none"><path d="M1 1l4 4M5 1L1 5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
-                </button>
-              </div>
+              <details className="author-topic-actions relative flex-shrink-0" onClick={e => e.stopPropagation()} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.removeAttribute('open'); e.currentTarget.querySelector<HTMLElement>('summary')?.focus() } }}>
+                <summary aria-label={`Actions for ${item.title}`} title={`Actions for ${item.title}`} className="flex min-h-7 min-w-7 cursor-pointer list-none items-center justify-center rounded text-[#68716B] hover:bg-[#E7EBE5]">⋯</summary>
+                <div className="author-topic-action-menu rounded-lg border border-[#E2DED7] bg-white p-1 shadow-sm">
+                  <button type="button" disabled={!canProm} onClick={e => { closeTopicActions(e.currentTarget); promoteItem(item.id) }}>Promote</button>
+                  <button type="button" disabled={!canDem} onClick={e => { closeTopicActions(e.currentTarget); demoteItem(item.id) }}>Demote</button>
+                  <button type="button" onClick={e => { closeTopicActions(e.currentTarget); setEditing(item.id); setEditValue(item.title) }}>Rename</button>
+                  {item.level < 4 && <button type="button" onClick={e => { closeTopicActions(e.currentTarget); setAddParentId(item.id); setAddTitle(''); setAddModalOpen(true) }}>Add child topic</button>}
+                  <button type="button" onClick={e => { closeTopicActions(e.currentTarget); setMoveModal(item.id); setMoveTarget(item.parentId ?? null) }}>Move to…</button>
+                  <button type="button" onClick={e => { closeTopicActions(e.currentTarget, true); removeItem(item.id) }}>Delete</button>
+                </div>
+              </details>
             )}
           </div>
         )
       })}
-      {/* Add top-level */}
-      <button onClick={() => { setAddParentId(null); setAddTitle(''); setAddModalOpen(true) }}
-        className="w-full flex items-center gap-1.5 text-[#C8C6C0] hover:text-[#5B5BD6] hover:bg-[#F4F2EE] rounded-md transition-colors mt-1 px-2 py-1 text-[10px]">
-        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M4 1v6M1 4h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-        Add topic
-      </button>
     </div>
   )
 
@@ -10524,6 +10506,8 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
   const [compactLayout, setCompactLayout] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1280)
   const outlineTriggerRef = useRef<HTMLButtonElement>(null)
   const contextTriggerRef = useRef<HTMLButtonElement>(null)
+  const draftInspectorRef = useRef<HTMLElement>(null)
+  const groundingInspectorRef = useRef<HTMLElement>(null)
   const authorEditorMoreRef = useRef<HTMLDetailsElement>(null)
   const closeOutlineDrawer = (hideOutline = false) => {
     setOutlineDrawerOpen(false)
@@ -10536,6 +10520,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     requestAnimationFrame(() => contextTriggerRef.current?.focus())
   }
   const openAuthorContext = (tab: 'evidence' | 'sources' | 'review' | 'assist') => {
+    setOutlineDrawerOpen(false)
     setGroundingOpen(false)
     setDraftOpen(false)
     setContextTab(tab)
@@ -10547,15 +10532,25 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     setContextDrawerOpen(false)
   }
   const openGroundingInspector = () => {
+    setOutlineDrawerOpen(false)
     dismissAuthorContext()
     setDraftOpen(false)
     setGroundingOpen(true)
+    requestAnimationFrame(() => groundingInspectorRef.current?.querySelector<HTMLButtonElement>('[aria-label="Close grounding inspector"]')?.focus())
   }
   const openDraftInspector = () => {
+    setOutlineDrawerOpen(false)
     dismissAuthorContext()
     setGroundingOpen(false)
     setDraftOpen(true)
     setConfirmDraftApply(false)
+    requestAnimationFrame(() => draftInspectorRef.current?.querySelector<HTMLButtonElement>('[aria-label="Close draft inspector"]')?.focus())
+  }
+  const returnFromInspector = () => {
+    setDraftOpen(false)
+    setGroundingOpen(false)
+    setConfirmDraftApply(false)
+    requestAnimationFrame(() => contextTriggerRef.current?.focus())
   }
   const [tocWidth, setTocWidth] = useState(240)
   const [activeSection, setActiveSection] = useState(1)
@@ -11125,7 +11120,8 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     { group: 'Language', values: ['English', 'Arabic'] },
   ]
 
-  const studioToc = toc ?? []
+  const studioToc = useMemo(() => toc ?? [], [toc])
+  const studioTopicById = useMemo(() => new Map(studioToc.map(topic => [topic.id, topic])), [studioToc])
   const reviewInputFix = getReviewInputFix(reviewInputSnapshot)
   const reviewReady = !!isDemoMode || reviewInputSnapshot?.readiness === 'ready'
   const handleReviewInputFix = () => {
@@ -11161,9 +11157,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     const next = typeof updater === 'function' ? updater(studioToc) : updater
     onTocChange?.(next)
   }
-  const activeTopic = activeTopicId === null
-    ? null
-    : studioToc.find(topic => topic.id === activeTopicId) ?? null
+  const activeTopic = activeTopicId === null ? null : studioTopicById.get(activeTopicId) ?? null
   const activeStableTopicId = activeTopic ? stableAuthorTopicId(activeTopic) : null
   useEffect(() => {
     if (!realReviewTarget || isDemoMode) return
@@ -11770,6 +11764,12 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
           closeContextDrawer()
           return
         }
+        if (!editingField && (draftOpen || groundingOpen)) {
+          e.preventDefault()
+          e.stopPropagation()
+          returnFromInspector()
+          return
+        }
         if (!editingField && compactLayout && outlineDrawerOpen) {
           e.preventDefault()
           e.stopPropagation()
@@ -11789,7 +11789,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [compactLayout, contextDrawerOpen, outlineDrawerOpen])
+  }, [compactLayout, contextDrawerOpen, outlineDrawerOpen, draftOpen, groundingOpen])
 
   // Focus newly created list items after state settles
   useEffect(() => {
@@ -11988,7 +11988,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
             {structureView === 'explorer' ? <ContentExplorerPanel
               metadata={contentExplorer}
               assets={contentExplorerAssets}
-              selectedTopicId={activeTopicId === null ? null : stableAuthorTopicId(studioToc.find(item => item.id === activeTopicId) ?? { id: activeTopicId })}
+              selectedTopicId={activeTopicId === null ? null : stableAuthorTopicId(activeTopic ?? { id: activeTopicId })}
               onOpenTopic={openExplorerTopic}
               onChange={onContentExplorerChange}
               readOnly={explorerReadOnly}
@@ -12066,13 +12066,13 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
         {/* Document actions and writing toolbar */}
         <div className="bg-white border-b border-[#E2DED7] flex-shrink-0">
           <div className="flex flex-wrap items-center gap-2 border-b border-[#F0EDE8] px-4 py-1.5">
-            {(!outlineOpen || compactLayout) && <button ref={outlineTriggerRef} data-testid="author-open-outline" aria-label="Open structure" type="button" onClick={() => { setOutlineOpen(true); setOutlineDrawerOpen(true) }} className="author-open-control">Structure</button>}
+            {(!outlineOpen || compactLayout) && <button ref={outlineTriggerRef} data-testid="author-open-outline" aria-label="Open Content pane" type="button" onClick={() => { dismissAuthorContext(); setDraftOpen(false); setGroundingOpen(false); setOutlineOpen(true); setOutlineDrawerOpen(true) }} className="author-open-control">Content</button>}
             <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[#263229]">{activeTopic?.title ?? 'Select a topic'}</span>
-            {activeTopic && <button type="button" data-testid="author-generated-freshness" aria-label={`Grounding ${activeGroundingFresh ? 'current' : 'needs refresh'}; ${activeDraftFresh ? 'draft ready' : 'no current draft'}. Open AI Assist.`} title={activeGeneratedFreshnessReason ?? 'Open topic grounding and draft status'} onClick={() => openAuthorContext('assist')} className="author-topic-status">
-              <span className={`author-status-chip ${activeGroundingFresh ? 'is-current' : 'needs-attention'}`}>{activeGroundingFresh ? 'Grounding current' : 'Grounding needs refresh'}</span>
-              <span className={`author-status-chip ${activeDraftFresh ? 'is-current' : 'is-muted'}`}>{activeDraftFresh ? 'Draft ready' : 'No current draft'}</span>
+            {activeTopic && <div data-testid="author-generated-freshness" className="author-topic-status">
+              <button type="button" aria-label="Open grounding status and actions" title={activeGeneratedFreshnessReason ?? 'Open grounding status and actions'} onClick={() => openAuthorContext(activeGroundingFresh ? 'evidence' : 'assist')} className={`author-status-chip ${activeGroundingFresh ? 'is-current' : 'needs-attention'}`}>{activeGroundingFresh ? 'Grounded' : activeGroundingContext ? 'Grounding stale' : 'Needs attention'}</button>
+              {activeDraftFresh && <button type="button" onClick={openDraftInspector} title="Review draft and provenance" className="author-status-chip is-current">Draft ready</button>}
               {activeGeneratedFreshnessReason && <span data-testid="author-generated-freshness-reason" className="sr-only">{activeGeneratedFreshnessReason}</span>}
-            </button>}
+            </div>}
             <button ref={contextTriggerRef} type="button" data-testid="author-ai-assist" aria-expanded={contextPanelOpen} onClick={() => contextPanelOpen && contextTab === 'assist' ? closeContextDrawer() : openAuthorContext('assist')} className="author-ai-assist-button">
               <svg aria-hidden="true" viewBox="0 0 16 16" fill="none"><path d="m8 1.5 1.55 4.2L14 7.25l-4.45 1.55L8 13l-1.55-4.2L2 7.25l4.45-1.55L8 1.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/><path d="m12.6 10.8.55 1.45 1.35.5-1.35.5-.55 1.25-.5-1.25-1.3-.5 1.3-.5.5-1.45Z" fill="currentColor"/></svg>
               AI Assist
@@ -12081,7 +12081,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               <summary className="cursor-pointer rounded-md border border-[#E2DED7] px-2.5 py-1.5 text-[11px] font-medium text-[#585866]">More</summary>
               <div className="absolute right-0 top-full z-50 mt-1 max-h-[70vh] min-w-[230px] max-w-[90vw] overflow-y-auto rounded-lg border border-[#E2DED7] bg-white p-1 shadow-lg">
                 <button type="button" onClick={() => setMode('knowledge')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Knowledge Map</button>
-                <button type="button" onClick={() => onNav('branding')} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Style profile</button>
                 <button type="button" onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); setSourceRef(value => !value) }} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Toggle source references</button>
                 <button type="button" aria-expanded={showConditions} onClick={() => { setConditionsBlockId(focusedBlockId); setShowConditions(value => !value); setShowRefsMenu(false); setShowInsertMenu(false); setShowMoreMenu(false); setShowAlignMenu(false); setShowAiMenu(false) }} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Conditions</button>
                 {showConditions && (
@@ -12141,7 +12140,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
                     </button>
                   </section>
                 )}
-                <button type="button" onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); openDraftInspector() }} className="block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-[#F4F2EE]">Draft review &amp; provenance</button>
               </div>
             </details>
           </div>
@@ -12689,7 +12687,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
         >
           <div className="max-w-4xl mx-auto">
             {/* Document card */}
-            <div ref={canvasRef} className="min-h-[600px] border border-[#EAE8E2] bg-white p-5 sm:p-8">
+            <div ref={canvasRef} className="min-h-[420px] bg-white p-4 sm:p-6">
               {/* Document header — breadcrumb only when inside a topic */}
               {activeTopicId !== null && (
                 <div className="mb-4">
@@ -13609,15 +13607,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               )}
             </div>
 
-            {/* Page navigation */}
-            <div className="flex items-center justify-between mt-6 px-2">
-              {reviewContext ? (
-                <button onClick={() => onNav('quality')} className="text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors">← Back to Review</button>
-              ) : (
-                <button className="text-[12px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors">← Previous: Overview</button>
-              )}
-              <button className="text-[12px] text-[#9898AB] hover:text-[#6B6B7E] transition-colors">Next: Managing Projects →</button>
-            </div>
           </div>
         </div>
 
@@ -13665,7 +13654,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
       )}
 
       {draftOpen && !isDemoMode && (
-        <aside data-testid="author-draft-inspector" className="author-side-inspector bg-white border border-[#D8D4CE] rounded-2xl popover-shadow overflow-hidden flex flex-col">
+        <aside ref={draftInspectorRef} data-testid="author-draft-inspector" className="author-side-inspector bg-white border border-[#D8D4CE] rounded-2xl popover-shadow overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b border-[#E2DED7] flex items-start gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -13684,7 +13673,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               </div>
               <p className="text-[10px] text-[#9898AB] mt-1 truncate">{activeTopic?.title ?? 'No topic selected'}</p>
             </div>
-            <button type="button" aria-label="Close draft inspector" onClick={() => { setDraftOpen(false); setConfirmDraftApply(false) }} className="text-[#9898AB]">×</button>
+            <button type="button" aria-label="Close draft inspector" onClick={returnFromInspector} className="text-[#9898AB]">×</button>
           </div>
           <div className="flex-1 overflow-y-auto p-4">
             {!activeStableTopicId ? (
@@ -13922,7 +13911,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
       )}
 
       {groundingOpen && !isDemoMode && (
-        <aside data-testid="author-grounding-inspector" className="author-side-inspector author-side-inspector-grounding bg-white border border-[#D8D4CE] rounded-2xl popover-shadow overflow-hidden flex flex-col">
+        <aside ref={groundingInspectorRef} data-testid="author-grounding-inspector" className="author-side-inspector author-side-inspector-grounding bg-white border border-[#D8D4CE] rounded-2xl popover-shadow overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b border-[#E2DED7] flex items-start gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -13933,7 +13922,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               </div>
               <p className="text-[10px] text-[#9898AB] mt-1 truncate">{activeTopic?.title ?? 'No topic selected'}</p>
             </div>
-            <button type="button" aria-label="Close grounding inspector" onClick={() => setGroundingOpen(false)} className="text-[#9898AB]">×</button>
+            <button type="button" aria-label="Close grounding inspector" onClick={returnFromInspector} className="text-[#9898AB]">×</button>
           </div>
           <div className="flex-1 overflow-y-auto p-4">
             {!activeGroundingContext ? (

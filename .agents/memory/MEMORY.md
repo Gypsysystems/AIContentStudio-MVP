@@ -8,6 +8,7 @@
 - [Author real-source isolation](author-real-source-isolation.md) — real Author context is stable-ID-backed; never fall back to demo filenames, excerpts, references, or AI output.
 - [Author grounding context](author-grounding-context.md) — cache deterministic per-topic context separately from content; stale inputs invalidate context without rewriting authored blocks.
 - [Author draft review boundary](author-draft-review-boundary.md) — drafts and regeneration diffs stay separate; confirmed selected changes preserve manual and approved content.
+- [Author inspector focus](author-inspector-focus.md) — closing an inspector returns focus to AI Assist without reopening the overlapping context drawer.
 - [Author project search](author-project-search.md) — index persisted topic content by stable TOC ID; real projects never use demo search fallback.
 - [Content Explorer organization boundary](content-explorer-organization-boundary.md) — folder placement is project-local organization, never canonical TOC or publishing structure.
 - [Review data boundary](review-data-boundary.md) — persisted real Review history is project-scoped; demo findings never hydrate into it.

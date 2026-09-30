@@ -361,6 +361,27 @@ body {
   min-height: 160px;
   border-right: 0;
 }
+.author-topic-actions[open] {
+  flex-basis: 100%;
+}
+.author-topic-actions[open] summary {
+  margin-left: auto;
+}
+.author-topic-action-menu {
+  display: grid;
+  width: 100%;
+  gap: 1px;
+}
+.author-topic-action-menu button {
+  min-height: 30px;
+  border-radius: 4px;
+  padding: 5px 9px;
+  text-align: left;
+  color: #3d4640;
+  font-size: 11px;
+}
+.author-topic-action-menu button:hover:not(:disabled) { background: #f2f4f0; }
+.author-topic-action-menu button:disabled { opacity: .4; cursor: not-allowed; }
 
 .author-context-pane {
   width: min(420px, calc(100% - 74px));
@@ -452,10 +473,10 @@ body {
 
 @media (max-width: 1279px) {
   .author-outline-shell {
-    position: fixed;
+    position: absolute;
     z-index: 60;
-    inset: 0 auto 0 0;
-    width: min(86vw, 360px) !important;
+    inset: 0 auto 0 74px;
+    width: min(290px, calc(100% - 94px)) !important;
     box-shadow: 18px 0 48px rgb(34 45 35 / 14%);
   }
 
@@ -470,6 +491,7 @@ body {
 
 @media (max-width: 767px) {
   .author-module-rail { width: 58px; padding-right: 3px; padding-left: 3px; }
+  .author-outline-shell { left: 58px; width: min(270px, calc(100% - 70px)) !important; }
   .author-module-button { min-height: 46px; font-size: 8px; }
   .author-module-button svg { width: 17px; height: 17px; }
   .author-editor .p-10 {

@@ -318,6 +318,82 @@ test('desktop Author workspace prioritizes the editor and opens topic context on
   await page.getByTestId('author-context-tab-review').click()
   await expect(page.getByTestId('author-review-finding')).toHaveCount(0)
   await page.getByTestId('author-context-tab-assist').click()
+  await page.getByTestId('author-draft-toggle').click()
+  await expect(page.getByTestId('author-draft-inspector')).toBeVisible()
+  await expect(context).toHaveCount(0)
+  await page.getByRole('button', { name: 'Close draft inspector' }).click()
+  await expect(context).toHaveCount(0)
+  await expect(page.getByTestId('author-ai-assist')).toBeFocused()
+  await page.getByTestId('author-ai-assist').click()
+  await expect(context).toBeVisible()
+  await expect(page.getByTestId('author-draft-toggle')).toBeVisible()
+})
+
+test('Author outline creates topics and can collapse and reopen without losing the tree', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const projectName = `Author outline create ${Date.now()}`
+  const newTopicTitle = `New workspace topic ${Date.now()}`
+  await prepareAuthor(page, projectName)
+
+  const outline = page.getByTestId('author-outline')
+  await expect(outline).toBeVisible()
+  await outline.getByRole('button', { name: 'New topic' }).click()
+  await expect(page.getByRole('heading', { name: 'Add top-level topic' })).toBeVisible()
+  await page.getByPlaceholder('Topic title').fill(newTopicTitle)
+  await page.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(outline.getByText(newTopicTitle, { exact: true })).toBeVisible()
+  await expect.poll(async () =>
+    (await readProject(page, projectName)).appToc.some(topic => topic.title === newTopicTitle),
+  ).toBe(true)
+  const newRow = outline.getByTestId('author-topic-row').filter({ hasText: newTopicTitle })
+  await newRow.locator('summary').focus()
+  await page.keyboard.press('Enter')
+  await expect(newRow.locator('details')).toHaveAttribute('open', '')
+  await expect(newRow.getByRole('button', { name: 'Add child topic' })).toBeVisible()
+  await newRow.getByRole('button', { name: 'Add child topic' }).click()
+  await page.getByPlaceholder('Topic title').fill('Child of new workspace topic')
+  await page.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(outline.getByText('Child of new workspace topic', { exact: true })).toBeVisible()
+
+  await outline.getByRole('button', { name: 'Close outline' }).click()
+  await expect(outline).toHaveCount(0)
+  const reopenOutline = page.getByTestId('author-open-outline')
+  await expect(reopenOutline).toBeVisible()
+  await reopenOutline.click()
+  await expect(outline).toBeVisible()
+  await expect(outline.getByText(newTopicTitle, { exact: true })).toBeVisible()
+})
+
+test('Author editor formatting is saved and AI Assist remains the single primary AI entry', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const projectName = `Author editor formatting ${Date.now()}`
+  const formattedText = `Saved formatted paragraph ${Date.now()}.`
+  await prepareAuthor(page, projectName)
+
+  const editor = page.getByTestId('author-editor')
+  const editableBlocks = editor.locator('[data-author-block-id] [contenteditable="true"]')
+  await expect.poll(() => editableBlocks.count()).toBeGreaterThanOrEqual(2)
+  await editableBlocks.nth(1).fill(formattedText)
+  await editableBlocks.nth(1).press('Tab')
+  await expect.poll(async () => {
+    const project = await readProject(page, projectName)
+    return project.topicContent['topic-access-reviews']?.find(
+      (block: { id: string }) => block.id === 'author-access-body',
+    )?.content
+  }).toBe(formattedText)
+  await editableBlocks.nth(1).click()
+  await page.getByTitle('Paragraph style').selectOption('h2')
+
+  const formattedBlock = editor.getByTestId('author-block').filter({ hasText: formattedText })
+  await expect(formattedBlock.locator('h2[contenteditable="true"]')).toHaveText(formattedText)
+  await expect.poll(async () => {
+    const project = await readProject(page, projectName)
+    return project.topicContent['topic-access-reviews']?.find(
+      (block: { content: string }) => block.content === formattedText,
+    )?.type
+  }).toBe('h2')
+  await expect(page.locator('header').getByText('All changes saved', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'AI Assist', exact: true })).toHaveCount(1)
 })
 
 test('Author module rail navigates project stages and More opens Knowledge Map', async ({ page }) => {
@@ -341,12 +417,12 @@ test('Author module rail navigates project stages and More opens Knowledge Map',
     .getByRole('button', { name: 'Author', exact: true }).click()
   await expect(page.getByRole('navigation', { name: 'Project modules' })
     .getByRole('button', { name: 'Author', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByRole('button', { name: 'AI Assist', exact: true })).toHaveCount(1)
   const moreMenu = page.getByTestId('author-editor')
     .locator('details:has(> summary:text-is("More"))')
   await moreMenu.locator('summary').click()
   await expect(moreMenu).toHaveAttribute('open', '')
   await expect(moreMenu.getByRole('button', { name: 'Knowledge Map' })).toBeVisible()
-  await expect(moreMenu.getByRole('button', { name: 'Style profile' })).toBeVisible()
   await expect(moreMenu.getByRole('button', { name: 'Toggle source references' })).toBeVisible()
   await expect(moreMenu.getByRole('button', { name: 'Conditions' })).toBeVisible()
   await expect(moreMenu.getByRole('button', { name: 'References', exact: true })).toBeVisible()
@@ -365,7 +441,7 @@ test('Author Content Explorer persists project organization without changing com
   await expect(page.getByTestId('author-outline')).toBeVisible()
   await expect(page.getByTestId('content-explorer-panel')).toHaveCount(0)
   const contentPane = page.locator('.author-outline-shell')
-  const contentOptions = contentPane.locator('details')
+  const contentOptions = contentPane.locator('details:has(> summary[title="Content options"])')
   await contentOptions.locator('summary[title="Content options"]').click()
   await expect(contentOptions).toHaveAttribute('open', '')
   await expect(contentOptions.getByRole('button', { name: 'Browse existing content' })).toBeVisible()
@@ -403,7 +479,7 @@ test('Author Content Explorer persists project organization without changing com
 
   await page.reload()
   await authorStep(page).click()
-  const restoredContentOptions = page.locator('.author-outline-shell').locator('details')
+  const restoredContentOptions = page.locator('.author-outline-shell details:has(> summary[title="Content options"])')
   await restoredContentOptions.locator('summary[title="Content options"]').click()
   await expect(restoredContentOptions).toHaveAttribute('open', '')
   await expect(restoredContentOptions.getByRole('button', { name: 'Browse existing content' })).toBeVisible()
