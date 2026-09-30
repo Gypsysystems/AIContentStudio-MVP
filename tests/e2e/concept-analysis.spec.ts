@@ -151,13 +151,9 @@ async function waitForCurrentEvidence(page: Page) {
 }
 
 async function openRealAnalysis(page: Page) {
-  const primaryAction = page.getByRole("button", { name: "Analyze Sources" })
-  if (await primaryAction.isEnabled()) {
-    await primaryAction.click()
-  } else {
-    await page.locator("header").getByRole("button", { name: /^Analyze & Structure/ }).click()
-    await page.locator("header").getByRole("button", { name: /^Analysis/ }).click()
-  }
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Project Home", exact: true }).click()
+  await page.getByTestId("project-home-stage-analysis").click()
   await expect(page.getByRole("heading", { name: "Source-backed Analysis" })).toBeVisible()
 }
 
@@ -527,7 +523,8 @@ test("marks analysis stale when evidence changes and replaces only concept and t
     topicContent: before.topicContent,
   }
 
-  await page.locator("header").getByRole("button", { name: /^Sources,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Sources", exact: true }).click()
   await page.locator('input[type="file"]').setInputFiles({
     name: "secondary.md",
     mimeType: "text/markdown",
@@ -547,7 +544,8 @@ test("marks analysis stale when evidence changes and replaces only concept and t
     conflicts: staleProject.conceptAnalysis!.conflicts,
     gaps: staleProject.conceptAnalysis!.gaps,
   }).toEqual(findingsBeforeStale)
-  await page.locator("header").getByRole("button", { name: /^Sources,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Sources", exact: true }).click()
   await page.getByTestId("rebuild-evidence-index").click()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")
 

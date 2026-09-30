@@ -355,7 +355,7 @@ async function clearClaimCheck(page: Page) {
     .getByRole("button", { name: "Rebuild Claim Check" })
     .click()
   await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Author" }).click()
   await expect(page.getByTestId("author-run-review")).toBeEnabled()
 }
 
@@ -605,7 +605,7 @@ test("Continue Working follows five real readiness states through Sources, Analy
   await expect(page.getByTestId("analysis-generate-toc")).toBeVisible()
 
   // Build a current proposal and claim check to reach the actual Author state.
-  await page.locator("header").getByRole("button", { name: /^Sources,/ }).click()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Sources" }).click()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   await proposeAndAcceptToc(page)
   await clearClaimCheck(page)
@@ -615,6 +615,14 @@ test("Continue Working follows five real readiness states through Sources, Analy
   await page.reload()
   await openProjectHome(page, name)
   await continueWorking(page)
+  // Accepting a TOC can refresh Author content and invalidate the claim check.
+  if (await page.getByTestId("analysis-next-step").isVisible()) {
+    await page.getByTestId("analysis-next-step")
+      .getByRole("button", { name: "Rebuild Claim Check" }).click()
+    await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
+    await returnToProjectHome(page)
+    await continueWorking(page)
+  }
   await expect(page.getByTestId("author-stage-heading")).toBeVisible()
 
   // Complete the nested task left empty for Author so Review has real inputs,
@@ -731,13 +739,13 @@ test("Home settings and branding are reachable and return to the same project", 
   await createProject(page, name)
   await openProjectHome(page, name)
 
-  await page.locator("header").getByRole("button", { name: "Project Settings" }).click()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Project Settings" }).click()
   await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
-  await page.locator("header").getByRole("button", { name: "Back to project" }).click()
+  await page.getByRole("button", { name: "Back to project" }).click()
   await expect(page.getByTestId("project-home")).toBeVisible()
   await expect(homeProjectHeading(page, name)).toBeVisible()
 
-  await page.locator("header").getByRole("button", { name: "Brand & Output" }).click()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Brand & Output" }).click()
   await expect(page.getByRole("heading", { name: "Theme & Style Profiles" })).toBeVisible()
   await returnToProjectHome(page)
   await expect(homeProjectHeading(page, name)).toBeVisible()
@@ -778,7 +786,7 @@ test("Home navigation stays immediate and save status stays pending during delay
     return saveGate
   }
 
-  await page.locator("header").getByRole("button", { name: "Project Settings" }).click()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Project Settings" }).click()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill(`${name} renamed`)
   await page.getByRole("button", { name: "Save changes" }).click()
   await saveStarted
@@ -808,10 +816,7 @@ test("cloud account and sign-out controls never cover project header actions", a
   for (const width of [1280, 768, 375]) {
     await page.setViewportSize({ width, height: 850 })
     const actions = [
-      header.getByRole("button", { name: "Project Home" }),
-      header.getByRole("button", { name: "Project Settings" }),
-      header.getByRole("button", { name: "Brand & Output" }),
-      header.getByRole("button", { name: "Diagnostics" }),
+      header.getByRole("button", { name: "Preview" }),
       header.getByRole("button", { name: "Sign out" }),
     ]
     const bounds = await Promise.all(actions.map(async action => {
@@ -833,15 +838,16 @@ test("cloud account and sign-out controls never cover project header actions", a
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1)
 
-    await actions[0].click()
+    const rail = page.getByRole("navigation", { name: "Project navigation" })
+    await rail.getByRole("button", { name: "Project Home" }).click()
     await expect(page.getByTestId("project-home")).toBeVisible()
-    await header.getByRole("button", { name: "Project Settings" }).click()
+    await rail.getByRole("button", { name: "Project Settings" }).click()
     await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
-    await header.getByRole("button", { name: "Back to project" }).click()
+    await page.getByRole("button", { name: "Back to project" }).click()
     await expect(page.getByTestId("project-home")).toBeVisible()
-    await header.getByRole("button", { name: "Brand & Output" }).click()
+    await rail.getByRole("button", { name: "Brand & Output" }).click()
     await expect(page.getByRole("heading", { name: "Theme & Style Profiles" })).toBeVisible()
-    await header.getByRole("button", { name: "Project Home" }).click()
+    await rail.getByRole("button", { name: "Project Home" }).click()
     await page.getByTestId("project-home-stage-sources").click()
     await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   }

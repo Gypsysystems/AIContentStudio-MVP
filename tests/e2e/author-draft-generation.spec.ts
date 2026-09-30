@@ -578,7 +578,8 @@ test("persists a reviewable draft without overwriting manual content and applies
   })
 
   await page.reload()
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access operations", { exact: true }).click()
   await page.getByTestId("author-ai-assist").click()
@@ -620,7 +621,8 @@ test("persists a reviewable draft without overwriting manual content and applies
   ).toBe(draftId)
   expect((await readProject(page, projectName)).topicContent).toEqual(manualContent)
 
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access operations", { exact: true }).click()
   await page.getByTestId("author-ai-assist").click()
@@ -672,7 +674,8 @@ test("persists a reviewable draft without overwriting manual content and applies
   await expect.poll(async () =>
     (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.generatedFreshness,
   ).toBe("stale")
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access operations", { exact: true }).click()
   await page.getByTestId("author-ai-assist").click()
@@ -710,7 +713,8 @@ test("persists a reviewable draft without overwriting manual content and applies
     (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.regenerationProposal?.proposalId,
   ).toBe(proposalId)
   expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access operations", { exact: true }).click()
   await page.getByTestId("author-ai-assist").click()

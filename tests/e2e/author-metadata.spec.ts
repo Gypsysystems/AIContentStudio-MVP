@@ -258,7 +258,8 @@ test("keeps metadata linked through rename and reorder, then removes only delete
     },
   })
   await page.reload()
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
 
   const alpha = page.getByTestId("author-outline").locator('[data-topic-id="topic-alpha"]')
   await alpha.hover()
@@ -452,7 +453,8 @@ test("does not create Author grounding metadata from demo-only document content"
   await createProject(page, projectName)
   await page.getByRole("button", { name: "Use demo project instead →" }).click()
   await expect(page.getByText(/Demo mode active/)).toBeVisible()
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await expect(page.getByText("User Guide", { exact: true })).toBeVisible()
 
   await expect.poll(async () =>
@@ -519,7 +521,8 @@ test("uses only persisted project sources and evidence in Author and reloads sou
   })
 
   await page.reload()
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-real-sources"]')
     .click()
   await page.getByRole("button", { name: "More", exact: true }).click()
@@ -540,7 +543,8 @@ test("uses only persisted project sources and evidence in Author and reloads sou
   ).toContain(accessEvidence.id)
 
   await page.reload()
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-real-sources"]')
     .click()
   await page.getByRole("button", { name: "More", exact: true }).click()

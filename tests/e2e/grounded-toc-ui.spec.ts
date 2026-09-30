@@ -7,8 +7,8 @@ const fixture = JSON.parse(await readFile(
 )) as Record<string, any>
 
 async function openTableOfContents(page: Page) {
-  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Structure', exact: true }).click()
 }
 
 test('keeps AI Generate TOC unavailable in local project mode', async ({ page }) => {
@@ -340,8 +340,8 @@ test('cloud AI TOC UI gates roles, confirms replacement, restores failures, and 
   await page.locator('header').getByRole('button', { name: /Content Studio/ }).click()
   const projectRow = page.locator('main div.group').filter({ has: page.getByText('Grounded TOC cloud UI project', { exact: true }) })
   await projectRow.getByRole('button', { name: 'Open', exact: true }).click()
-  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Structure', exact: true }).click()
   await expect(page.getByTestId('ai-toc-controls')).toHaveCount(0)
 
   await page.evaluate(async () => {
@@ -353,8 +353,8 @@ test('cloud AI TOC UI gates roles, confirms replacement, restores failures, and 
     })
   })
   await page.getByTestId('topbar-project-home').click()
-  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Structure', exact: true }).click()
   await expect(page.getByTestId('ai-toc-readiness')).toContainText('Workflow ready')
   const aiControls = page.getByTestId('ai-toc-controls')
   const generate = aiControls.getByTestId('generate-ai-toc')
@@ -423,8 +423,8 @@ test('cloud AI TOC UI gates roles, confirms replacement, restores failures, and 
   await page.locator('header').getByRole('button', { name: /Content Studio/ }).click()
   const reloadedRow = page.locator('main div.group').filter({ has: page.getByText('Grounded TOC cloud UI project', { exact: true }) })
   await reloadedRow.getByRole('button', { name: 'Open', exact: true }).click()
-  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Structure', exact: true }).click()
   await expect(page.getByTestId('ai-toc-provenance')).toContainText('AI-generated proposal')
   await expect(page.getByTestId('toc-proposal-topic')).toContainText('AI proposed topic')
   expect(projectRecord?.appToc).toEqual(committedToc)
@@ -456,8 +456,8 @@ test('cloud AI TOC UI gates roles, confirms replacement, restores failures, and 
   await page.locator('header').getByRole('button', { name: /Content Studio/ }).click()
   const recoveredRow = page.locator('main div.group').filter({ has: page.getByText('Grounded TOC cloud UI project', { exact: true }) })
   await recoveredRow.getByRole('button', { name: 'Open', exact: true }).click()
-  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Structure', exact: true }).click()
   const recoveryPanel = page.getByTestId('ai-toc-recovery')
   await expect(recoveryPanel).toContainText('AI proposed topic')
   const downloadPromise = page.waitForEvent('download')
@@ -508,8 +508,8 @@ test('cloud AI TOC UI gates roles, confirms replacement, restores failures, and 
   await reopenedPage.locator('header').getByRole('button', { name: /Content Studio/ }).click()
   const tabCloseRow = reopenedPage.locator('main div.group').filter({ has: reopenedPage.getByText('Grounded TOC cloud UI project', { exact: true }) })
   await tabCloseRow.getByRole('button', { name: 'Open', exact: true }).click()
-  await reopenedPage.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await reopenedPage.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
+  await reopenedPage.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Structure', exact: true }).click()
   await expect(reopenedPage.getByTestId('ai-toc-recovery')).toContainText('AI proposed topic')
   const durableDownloadPromise = reopenedPage.waitForEvent('download')
   await reopenedPage.getByTestId('export-ai-toc-recovery').click()

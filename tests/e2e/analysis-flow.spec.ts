@@ -1,13 +1,15 @@
 import { expect, test } from '@playwright/test'
 
 async function openAnalysis(page: import('@playwright/test').Page) {
-  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole('button', { name: /^Analysis/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Project Home', exact: true }).click()
+  await page.getByTestId('project-home-stage-analysis').click()
+  await expect(page.getByRole('heading', { name: 'Source-backed Analysis' })).toBeVisible()
 }
 
 async function openTableOfContents(page: import('@playwright/test').Page) {
-  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole('button', { name: /^Table of contents/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Structure', exact: true }).click()
 }
 
 test('Analysis generates a grounded proposal and opens TOC without using the progress bar', async ({ page }) => {
@@ -41,9 +43,9 @@ test('Analysis explains why TOC generation is unavailable before sources are rea
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill('No sources')
   await page.getByRole('button', { name: 'Continue — Theme & Styles' }).click()
   await page.getByRole('button', { name: 'Continue — Sources' }).click()
-  await openAnalysis(page)
-  await expect(page.getByTestId('analysis-generate-toc')).toBeDisabled()
-  await expect(page.getByTestId('analysis-toc-unavailable')).toContainText('Evidence Index')
+  await expect(page.getByTestId('analyze-sources')).toBeDisabled()
+  await expect(page.getByTestId('sources-next-step')).toContainText('Blocked')
+  await expect(page.getByTestId('sources-next-step')).toContainText('Add at least one source')
   await expect(page.getByTestId('real-toc-screen')).toHaveCount(0)
   await openTableOfContents(page)
   await expect(page.getByTestId('real-toc-screen')).toBeVisible()

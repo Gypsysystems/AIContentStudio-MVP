@@ -114,7 +114,7 @@ async function createProject(page: Page, name: string) {
 }
 
 async function openMasterPageSettings(page: Page) {
-  await page.locator('header').getByRole('button', { name: /^Brand & Output/ }).click()
+  await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('button', { name: /^Brand & Output/ }).click()
   await page.getByRole('button', { name: 'Output Templates' }).click()
   await page.getByRole('button', { name: 'HTML Master Pages', exact: true }).click()
   return page.getByText('Content Width (px)', { exact: true }).locator('..').locator('input')
@@ -139,7 +139,7 @@ test('ordinary section navigation stays responsive and quick edits coalesce duri
   await saveStarted
 
   // A cloud request is still outstanding, but changing workflow sections is local and immediate.
-  await page.locator('header').getByRole('button', { name: /^Sources,/ }).click()
+  await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('button', { name: 'Sources' }).click()
   await expect(page.getByRole('button', { name: 'Analyze Sources' })).toBeVisible()
 
   expect(cloud.saves).toHaveLength(0)
@@ -235,7 +235,7 @@ test('opening a cloud project uses the latest revision without saving hydrated d
   expect(cloud.records.get(current.projectId)).toEqual(latest)
 
   // The reconciled state remains in memory and can be saved on a later user edit.
-  await page.locator('header').getByRole('button', { name: 'Project Settings' }).click()
+  await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('button', { name: 'Project Settings' }).click()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill(`${latestName} edited`)
   await page.getByRole('button', { name: 'Save changes' }).click()
   await expect.poll(() => cloud.saves.length).toBe(savesBeforeOpen + 1)

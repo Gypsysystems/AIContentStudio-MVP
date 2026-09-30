@@ -60,13 +60,14 @@ type TocArchitectureFixtureResult = {
 }
 
 async function openAnalysis(page: Page) {
-  await page.locator('header').getByRole("button", { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole("button", { name: /^Analysis/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Project Home" }).click()
+  await page.getByTestId("project-home-stage-analysis").click()
 }
 
 async function openTableOfContents(page: Page) {
-  await page.locator('header').getByRole("button", { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole("button", { name: /^Table of contents/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: /^Structure/ }).click()
 }
 
 async function createGroundedProject(page: Page, projectName: string) {
@@ -253,7 +254,7 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Operator checklist" })).toBeVisible()
 
   await page.getByTestId("commit-toc-proposal").click()
-  await expect(page.locator("header").getByRole("button", { name: /^Author,/ })).toHaveAttribute("aria-current", "step")
+  await expect(page.getByRole("navigation", { name: "Project modules" }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
   await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toContainText("Open the Flight Operations workspace")
 
@@ -289,7 +290,7 @@ test("requires confirmation and preserves committed topics when merging a later 
   await expect(page.getByTestId("committed-toc-panel")).toHaveCount(0)
   await page.getByTestId("confirm-toc-merge").click()
 
-  await expect(page.locator("header").getByRole("button", { name: /^Author,/ })).toHaveAttribute("aria-current", "step")
+  await expect(page.getByRole("navigation", { name: "Project modules" }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
   await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toContainText("Release validation")
   await expect.poll(async () => (await readProject(page, projectName)).appToc.some(item => item.title === "Release validation")).toBe(true)
@@ -347,7 +348,7 @@ test("committing evidence-backed topics opens editable initial drafts without fi
   expect(stored.topicContent[unsupported!.topicId!]).toBeUndefined()
   expect(stored.authorTopicMetadata[unsupported!.topicId!]?.generationStatus).toBe("not-generated")
 
-  await page.locator('header').getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ }).getByRole("button", { name: "Author" }).click()
   await page.getByTestId("author-topic-row").filter({ hasText: supported!.title })
     .getByText(supported!.title, { exact: true }).click()
   await expect(page.getByTestId("author-generated-freshness")).toContainText("Draft ready")
@@ -392,7 +393,7 @@ test("marks an uncommitted proposal stale after source evidence changes", async 
   await page.getByTestId("generate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
 
-  await page.locator('header').getByRole("button", { name: /^Sources,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ }).getByRole("button", { name: "Sources" }).click()
   await page.locator('input[type="file"]').setInputFiles({
     name: "release-validation.md",
     mimeType: "text/markdown",
@@ -427,7 +428,7 @@ test("marks a committed TOC stale after the project content type changes without
   await createGroundedProject(page, projectName)
   await page.getByTestId("generate-grounded-toc").click()
   await page.getByTestId("commit-toc-proposal").click()
-  await expect(page.locator("header").getByRole("button", { name: /^Author,/ })).toHaveAttribute("aria-current", "step")
+  await expect(page.getByRole("navigation", { name: "Project modules" }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
   await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toBeVisible()
   await expect.poll(async () => (await readProject(page, projectName)).tocGeneratedFromContentType).toBe("user-guide")
@@ -435,7 +436,7 @@ test("marks a committed TOC stale after the project content type changes without
   const before = await readProject(page, projectName)
   const committedTopics = before.appToc.map(item => `${item.id}:${item.topicId}:${item.title}`)
 
-  await page.locator('header').getByRole("button", { name: /^Project Settings/ }).click()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: /^Project Settings/ }).click()
   await page.getByRole("button", { name: /Admin Guide/ }).click()
   await expect.poll(async () => (await readProject(page, projectName)).projectMeta.contentType).toBe("admin-guide")
   await page.getByRole("button", { name: /Content Studio/ }).click()
@@ -457,7 +458,7 @@ test("keeps a stale TOC proposal stale when the project is duplicated", async ({
   await page.getByTestId("generate-grounded-toc").click()
   await expect(page.getByTestId("toc-proposal-freshness")).toHaveText("Current")
 
-  await page.locator('header').getByRole("button", { name: /^Sources,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ }).getByRole("button", { name: "Sources" }).click()
   await page.locator('input[type="file"]').setInputFiles({
     name: "changed-evidence.md",
     mimeType: "text/markdown",

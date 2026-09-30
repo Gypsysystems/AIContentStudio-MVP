@@ -408,7 +408,8 @@ async function prepareCloudProject(page: Page, context: BrowserContext, role: "o
   await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
   const projectRow = page.locator("main div.group").filter({ has: page.getByText(`AI Review UI ${role}`, { exact: true }) })
   await projectRow.getByRole("button", { name: "Open", exact: true }).click()
-  await page.locator("header").getByRole("button", { name: /^Review,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: 'Review', exact: true }).click()
   return {
     projectId,
     workflow,

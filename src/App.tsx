@@ -147,6 +147,11 @@ import { useCloudAccount } from './AuthGate'
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'administration' | 'project-home' | 'history' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
 const AuthorSettingsPermissionContext = React.createContext(false)
+const ProjectRailActionsContext = React.createContext<{
+  onHistory: () => void
+  onAdministration: () => void
+  onDiagnostics: () => void
+} | null>(null)
 type StudioMode = 'author' | 'knowledge'
 type FindingStatus = 'open' | 'in-review' | 'resolved' | 'dismissed'
 type ReviewContext = { findingId: number; section: string; category: string } | null
@@ -1047,11 +1052,37 @@ function WorkflowSteps({
   )
 }
 
-function ProjectModuleRail({ screen, onNav, canEditProjectSettings }: {
+type ProjectRailUtilityProps = {
   screen: Screen
   onNav: (screen: Screen) => void
+  onHistory: () => void
+  onAdministration: () => void
+  onDiagnostics: () => void
   canEditProjectSettings: boolean
-}) {
+  author?: boolean
+}
+
+function ProjectRailUtilities({ screen, onNav, onHistory, onAdministration, onDiagnostics, canEditProjectSettings, author = false }: ProjectRailUtilityProps) {
+  const utilities: Array<{ label: string; id: string; action: () => void; icon: React.ReactNode; disabled?: boolean }> = [
+    { label: 'History', id: 'history', action: onHistory, icon: <><circle cx="10" cy="10" r="7" /><path d="M10 6v4l3 2" /></> },
+    { label: 'Project Settings', id: 'create', action: () => onNav('create'), disabled: !canEditProjectSettings, icon: <><circle cx="10" cy="10" r="3" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.4 4.4l1.4 1.4m8.4 8.4 1.4 1.4m0-11.2-1.4 1.4M5.8 14.2l-1.4 1.4" /></> },
+    { label: 'Brand & Output', id: 'branding', action: () => onNav('branding'), icon: <><path d="M4 4h12v12H4z" /><path d="m6.5 12 2.5-3 2 2 2.5-3 1 1.5" /></> },
+    { label: 'Administration', id: 'administration', action: onAdministration, icon: <><circle cx="7" cy="7" r="2" /><circle cx="14" cy="8" r="1.5" /><path d="M3.5 16v-1c0-2 1.5-3 3.5-3s3.5 1 3.5 3v1Zm8.5 0h4v-1c0-1.6-.9-2.5-2.5-2.5-.5 0-1 .1-1.4.4" /></> },
+    { label: 'Diagnostics', id: 'diagnostics', action: onDiagnostics, icon: <><path d="M4 4h12v12H4zM7 8h6M7 11h3M7 14h5" /><circle cx="14" cy="14" r="1" /></> },
+  ]
+  return <div className="studio-rail-utilities">
+    {utilities.map(item => <button key={item.label} type="button" onClick={item.action}
+      disabled={item.disabled} title={item.disabled ? 'Project write access is required' : item.label}
+      aria-current={screen === item.id ? 'page' : undefined}
+      data-testid={item.id === 'history' ? 'topbar-project-history' : undefined}
+      className={author ? `author-module-button ${screen === item.id ? 'is-active' : ''}` : undefined}>
+      <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round">{item.icon}</svg>
+      <span>{item.label}</span>
+    </button>)}
+  </div>
+}
+
+function ProjectModuleRail({ screen, onNav, onHistory, onAdministration, onDiagnostics, canEditProjectSettings }: ProjectRailUtilityProps) {
   const modules: Array<{ id: Screen; label: string; shape: React.ReactNode }> = [
     { id: 'project-home', label: 'Project Home', shape: <path d="m3 9 7-6 7 6v7.5a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z" /> },
     { id: 'sources', label: 'Sources', shape: <><path d="M5 3h7l4 4v9.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1Z" /><path d="M12 3v4h4M7 11h6M7 14h6" /></> },
@@ -1063,39 +1094,30 @@ function ProjectModuleRail({ screen, onNav, canEditProjectSettings }: {
   return (
     <aside className="studio-module-rail">
       <nav aria-label="Project navigation">
-        <img src="/brand/nav-mark-color.svg" alt="" aria-hidden="true" className="studio-rail-brand" />
         {modules.map(module => {
           const active = module.id === 'structure' ? screen === 'structure' || screen === 'analysis' : screen === module.id
-          return <button key={module.id} type="button" aria-current={active ? 'page' : undefined} onClick={() => onNav(module.id)} title={module.label}>
+          return <button key={module.id} type="button" aria-current={active ? 'page' : undefined} onClick={() => onNav(module.id)} title={module.label}
+            data-testid={module.id === 'project-home' ? 'topbar-project-home' : undefined}>
             <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round">{module.shape}</svg>
             <span>{module.label}</span>
           </button>
         })}
+        <ProjectRailUtilities screen={screen} onNav={onNav} onHistory={onHistory}
+          onAdministration={onAdministration} onDiagnostics={onDiagnostics} canEditProjectSettings={canEditProjectSettings} />
       </nav>
-      <button className="studio-rail-settings" type="button" title={!canEditProjectSettings ? 'Project write access is required' : 'Project Settings'} aria-label="Settings — Project Settings" disabled={!canEditProjectSettings} onClick={() => onNav('create')}>
-        <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="3" /><path d="m16 11.5 1.2 1-.9 1.6-1.5-.3a6 6 0 0 1-1.3.8l-.4 1.5h-2l-.4-1.5a6 6 0 0 1-1.3-.8l-1.5.3L7 12.5l1.2-1a6 6 0 0 1 0-1.5L7 9l.9-1.6 1.5.3a6 6 0 0 1 1.3-.8l.4-1.5h2l.4 1.5a6 6 0 0 1 1.3.8l1.5-.3.9 1.6-1.2 1a6 6 0 0 1 0 1.5Z" /></svg>
-        <span>Settings</span>
-      </button>
     </aside>
   )
 }
 
 // ── Top Bar ───────────────────────────────────────────────────────────────────
-function TopBar({ screen, onNav, onAdministration, projectName, contentType, isProject, canEditProjectSettings, settingsReturnTo, onSettingsReturn, onDiagnostics, onHistory, saveStatus, onRetrySave, stageStatuses }: {
+function TopBar({ screen, onNav, onAdministration, projectName, isProject, saveStatus, onRetrySave }: {
   screen: Screen
   onNav: (s: Screen) => void
   onAdministration: () => void
   projectName: string
-  contentType: string
   isProject: boolean
-  canEditProjectSettings: boolean
-  settingsReturnTo: Screen
-  onSettingsReturn: () => Promise<unknown>
-  onDiagnostics?: () => void
-  onHistory?: () => void
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
   onRetrySave?: () => void
-  stageStatuses?: Record<string, StageStatus>
 }) {
   const cloudAccount = useCloudAccount()
   const inProject = !['dashboard', 'create', 'administration'].includes(screen)
@@ -1124,69 +1146,15 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
         ) : (
           <div className="min-w-0 border-l border-[#E2DED7] pl-3">
             <p className="max-w-[180px] truncate text-[12px] font-semibold text-[#22222F] sm:max-w-[240px]">{projectName}</p>
-            {screen !== 'studio' && <p className="truncate text-[10px] text-[#858493]">{contentType || 'Content project'}</p>}
-          </div>
-        )}
-        {inProject && screen !== 'studio' && (
-          <div className="studio-workflow-header order-3 min-w-0 w-full px-0 xl:order-none xl:w-auto xl:flex-1 xl:px-2">
-            <WorkflowSteps current={screen} onNav={onNav} stageStatuses={stageStatuses ?? {}} />
           </div>
         )}
         <div className={screen === 'dashboard'
           ? 'studio-projects-header-actions ml-auto flex max-w-full flex-wrap items-center justify-end gap-2'
-          : `order-2 flex w-full min-w-0 flex-wrap items-center gap-1.5 xl:order-none xl:ml-auto xl:w-auto xl:flex-1 xl:gap-2 ${screen === 'studio' ? 'author-project-utilities' : ''}`}>
+          : `order-2 ml-auto flex max-w-full flex-wrap items-center justify-end gap-2 ${screen === 'studio' ? 'author-project-utilities' : ''}`}>
           <div id="author-project-tools" className="contents">
           {hasProject && (
-            <details className="author-project-menu relative">
-              <summary aria-label="Open project menu" className="cursor-pointer list-none rounded-md border border-[#E2DED7] px-2.5 py-1.5 text-[10px] font-medium text-[#585866] hover:border-[#C7C5F4] hover:bg-[#F8F7FF] sm:text-[11px]">
-                Project
-              </summary>
-              <div className="absolute right-0 top-full z-[80] mt-1 min-w-[190px] rounded-lg border border-[#E2DED7] bg-white p-1 shadow-lg">
-                {onHistory && <button type="button" onClick={onHistory} className="author-project-menu-item">History</button>}
-                <button type="button" onClick={() => onNav('create')} disabled={!canEditProjectSettings}
-                  title={!canEditProjectSettings ? 'Project write access is required' : undefined}
-                  className="author-project-menu-item disabled:cursor-not-allowed disabled:opacity-50">Project Settings</button>
-                <button type="button" onClick={() => onNav('branding')} className="author-project-menu-item">Brand &amp; Output</button>
-                <div className="my-1 h-px bg-[#F0EDE8]" />
-                <button type="button" onClick={onAdministration} className="author-project-menu-item">Administration</button>
-                {onDiagnostics && <button type="button" onClick={onDiagnostics} className="author-project-menu-item">Diagnostics</button>}
-              </div>
-            </details>
-          )}
-          {hasProject && screen !== 'studio' && (
-            <>
-              {screen !== 'project-home' && (
-                <button
-                  type="button"
-                  onClick={() => onNav('project-home')}
-                  data-testid="topbar-project-home"
-                  className="min-h-8 rounded-md border border-[#C7C5F4] bg-[#F4F3FF] px-2.5 text-[10px] font-semibold text-[#4D4DC2] transition-colors hover:border-[#AAA7E8] hover:bg-[#EEEEFF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 sm:text-[11px]"
-                >
-                  Project Home
-                </button>
-              )}
-              {screen !== 'history' && onHistory && (
-                <button
-                  type="button"
-                  onClick={onHistory}
-                  data-testid="topbar-project-history"
-                  className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]"
-                >
-                  History
-                </button>
-              )}
-              <button type="button" onClick={() => onNav('create')} disabled={!canEditProjectSettings}
-                title={!canEditProjectSettings ? 'Project write access is required' : undefined}
-                className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] disabled:cursor-not-allowed disabled:opacity-50 sm:text-[11px]">
-                Project Settings
-              </button>
-              <button type="button" onClick={() => onNav('branding')} className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
-                Brand &amp; Output
-              </button>
-            </>
-          )}
-          {hasProject && screen !== 'preview' && (
             <button type="button" onClick={() => onNav('preview')} data-testid="topbar-project-preview"
+              aria-current={screen === 'preview' ? 'page' : undefined}
               className="studio-topbar-preview min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-semibold text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] sm:text-[11px]">
               Preview
             </button>
@@ -1197,26 +1165,15 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
               Create project
             </button>
           )}
-          {screen !== 'studio' && <button type="button" onClick={onAdministration} data-testid="topbar-administration"
-            aria-current={screen === 'administration' ? 'page' : undefined}
-            className={`min-h-8 rounded-md border px-2.5 text-[10px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px] ${screen === 'administration' ? 'border-[#C7C5F4] bg-[#F4F3FF] text-[#4D4DC2]' : 'border-[#E2DED7] text-[#585866] hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2]'}`}>
+          {screen === 'dashboard' && <button type="button" onClick={onAdministration} data-testid="topbar-administration"
+            className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-semibold text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
             Administration
           </button>}
-          {inProject && screen !== 'studio' && onDiagnostics && (
-            <button type="button" onClick={onDiagnostics} title="Open project diagnostics" className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-medium text-[#777786] transition-colors hover:border-[#C7C5F4] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
-              Diagnostics
-            </button>
-          )}
           </div>
           {(inProject || screen === 'administration' && isProject) && saveStatus && saveStatus !== 'idle' && (
             saveStatus === 'error'
               ? <button type="button" onClick={onRetrySave} aria-label="Save failed. Retry saving." className="min-h-8 rounded-md border border-[#F0B6B6] bg-[#FEF2F2] px-2.5 text-[10px] font-semibold text-[#B42323] transition-colors hover:bg-[#FEE2E2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42323] sm:text-[11px]">Save failed · Retry</button>
               : <span role="status" aria-live="polite" className={`whitespace-nowrap text-[10px] font-medium sm:text-[11px] ${saveStatus === 'saving' ? 'text-[#A85C08]' : 'text-[#43845B]'}`}>{saveLabel}</span>
-          )}
-          {screen === 'create' && hasProject && (
-            <button type="button" onClick={() => { void onSettingsReturn() }} className="min-h-8 rounded-md bg-[#5B5BD6] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">
-              Back to project
-            </button>
           )}
           {screen === 'create' && !hasProject && (
             <button type="button" onClick={() => onNav('dashboard')} className="min-h-8 rounded-md border border-[#E2DED7] px-3 text-[11px] font-medium text-[#585866] hover:bg-[#F4F2EE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
@@ -1225,7 +1182,7 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
           )}
           {cloudAccount && (
             <div data-testid="header-account" className="flex min-h-8 max-w-full min-w-0 items-center gap-2 border-l border-[#E2DED7] pl-2 sm:pl-3">
-              {screen !== 'dashboard' && <span className="hidden min-w-0 max-w-[130px] truncate text-[11px] text-[#686879] md:block xl:max-w-[180px]"
+              {screen === 'administration' && !isProject && <span className="hidden min-w-0 max-w-[130px] truncate text-[11px] text-[#686879] md:block xl:max-w-[180px]"
                 title={`${cloudAccount.organizationName} / ${cloudAccount.workspaceName}`}>
                 <span className="hidden xl:inline">{cloudAccount.organizationName} / </span>{cloudAccount.workspaceName}
               </span>}
@@ -1711,7 +1668,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
 }
 
 // ── Screen: Create ────────────────────────────────────────────────────────────
-function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProjectName, themes, projectMeta, onProjectMetaChange, onContinue, settingsMode = false, returnTo = 'sources' }: {
+function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProjectName, themes, projectMeta, onProjectMetaChange, onContinue, onSettingsReturn, settingsMode = false, returnTo = 'sources' }: {
   onNav: (s: Screen) => void
   projectName: string
   onProjectNameChange: (n: string) => void
@@ -1721,6 +1678,7 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
   onProjectMetaChange: (m: Partial<ProjectMeta>) => void
   onAddTheme: (t: Theme) => void
   onContinue: () => Promise<void>
+  onSettingsReturn?: () => Promise<unknown>
   settingsMode?: boolean
   returnTo?: Screen
 }) {
@@ -1789,7 +1747,11 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
       </div>
 
       {continueError && <p role="alert" className="mb-3 text-sm text-red-700">{continueError}</p>}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {settingsMode && onSettingsReturn && <button type="button" onClick={() => { void onSettingsReturn() }}
+          className="rounded-lg border border-[#E2DED7] px-4 py-2 text-[13px] font-medium text-[#585866] hover:bg-[#F4F2EE]">
+          Back to project
+        </button>}
         <button disabled={continuing} onClick={async () => {
           if (continuing) return
           setContinuing(true)
@@ -10510,6 +10472,7 @@ function OutlineTocPanel({
 // ── Screen: Studio ────────────────────────────────────────────────────────────
 function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTarget, onClearRealReviewTarget, requestedTopicId, onRequestedTopicOpened, variables, onVariablesChange, onDocBlocksChange, onContentEdit, toc, onTocChange, contentExplorer, contentExplorerAssets, onContentExplorerChange, explorerReadOnly, canBrowseCatalog, canCopyCatalog, loadCatalogProjects, loadCatalogItems, loadCatalogPreview, onCatalogCopy, topicContent, onTopicContentChange, authorTopicMetadata, onAuthorTopicMetadataChange, groundingFreshnessByTopic, onRefreshTopicGrounding, onGenerateTopicDraft, onGenerateAiTopicDraft, onRewriteAiTopicDraft, canGenerateAiTopic, projectId, onSetDraftDiffSelection, onApplyTopicDraft, projectSources, evidenceIndex, sourceExtractions, reviewModel, snippets, onSnippetsChange, conditionGroups, onConditionGroupsChange, docComments, onDocCommentsChange, isDemoMode, projectName, documentType, reviewInputSnapshot, onRunGroundedReview }: { onNav: (s: Screen) => void; reviewContext: ReviewContext; onClearReviewContext: () => void; realReviewTarget: ReviewAuthorTarget | null; onClearRealReviewTarget: () => void; requestedTopicId?: string | null; onRequestedTopicOpened?: () => void; variables?: Variable[]; onVariablesChange?: (vars: Variable[]) => void; onDocBlocksChange?: (blocks: DocBlock[]) => void; onContentEdit?: () => void; toc?: TocItem[]; onTocChange?: (toc: TocItem[]) => void; contentExplorer: ContentExplorerMetadata; contentExplorerAssets: ContentExplorerAssets; onContentExplorerChange: (metadata: ContentExplorerMetadata) => void; explorerReadOnly: boolean; canBrowseCatalog?: boolean; canCopyCatalog?: boolean; loadCatalogProjects?: () => Promise<ResourcePickerSourceProject[]>; loadCatalogItems?: (filters: { projectId?: string; assetType?: ResourcePickerItem['assetType']; search?: string; limit: number; offset: number }) => Promise<ResourcePickerItem[]>; loadCatalogPreview?: (item: ResourcePickerItem) => Promise<ResourcePickerPreview>; onCatalogCopy?: (item: ResourcePickerItem, version: number, afterTopicId: string | null) => Promise<void>; topicContent?: Record<string, DocBlock[]>; onTopicContentChange?: (tc: Record<string, DocBlock[]>) => void; authorTopicMetadata?: AuthorTopicMetadataMap; onAuthorTopicMetadataChange?: (topicId: string, metadata: AuthorTopicMetadata) => void; groundingFreshnessByTopic?: Record<string, boolean>; onRefreshTopicGrounding?: (topicId: string) => void; onGenerateTopicDraft?: (topicId: string) => { draft: AuthorTopicDraft | null; error: string | null }; onGenerateAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number, jobId?: string, onJobUpdate?: (job: GenerateTopicJob) => void) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; onRewriteAiTopicDraft?: (topicId: string, workflowId: string, workflowVersion: number) => Promise<{ draft: AuthorTopicDraft | null; error: string | null }>; canGenerateAiTopic?: boolean; projectId?: string | null; onSetDraftDiffSelection?: (topicId: string, diffId: string, selected: boolean) => void; onApplyTopicDraft?: (topicId: string) => { blocks: DocBlock[] | null; error: string | null }; projectSources?: AuthorProjectSource[]; evidenceIndex?: EvidenceIndex | null; sourceExtractions?: Record<string, SourceExtraction>; reviewModel?: ReviewModel; snippets?: Snippet[]; onSnippetsChange?: (s: Snippet[]) => void; conditionGroups?: ConditionGroup[]; onConditionGroupsChange?: (cg: ConditionGroup[]) => void; docComments?: DocComment[]; onDocCommentsChange?: (c: DocComment[]) => void; isDemoMode?: boolean; projectName?: string; documentType?: string; reviewInputSnapshot: ReviewInputSnapshot | null; onRunGroundedReview: () => string | null }) {
   const canEditProjectSettings = React.useContext(AuthorSettingsPermissionContext)
+  const railActions = React.useContext(ProjectRailActionsContext)
   const [mode, setMode] = useState<StudioMode>('author')
   const [reviewActionError, setReviewActionError] = useState<string | null>(null)
   const [outlineOpen, setOutlineOpen] = useState(true)
@@ -11943,7 +11906,6 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     <div data-testid="author-workspace" className="author-workspace flex-1 flex overflow-hidden">
       <nav aria-label="Project modules" className="author-module-rail flex-shrink-0">
         <div className="author-module-list">
-          <img src="/brand/nav-mark-color.svg" alt="" aria-hidden="true" className="author-rail-brand" />
           {([
             { id: 'project-home' as const, label: 'Project Home', icon: <path d="M3 10.5 10 4l7 6.5V17a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z" /> },
             { id: 'sources' as const, label: 'Sources', icon: <><path d="M5 3.5h7l4 4V17a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z" /><path d="M12 3.5V8h4M7 11h6M7 14h6" /></> },
@@ -11959,11 +11921,10 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
               <span>{item.label}</span>
             </button>
           ))}
+          {railActions && <ProjectRailUtilities screen="studio" onNav={onNav} author
+            onHistory={railActions.onHistory} onAdministration={railActions.onAdministration}
+            onDiagnostics={railActions.onDiagnostics} canEditProjectSettings={canEditProjectSettings} />}
         </div>
-        <button type="button" title={!canEditProjectSettings ? 'Project write access is required' : 'Project Settings'} aria-label="Settings — Project Settings" disabled={!canEditProjectSettings} onClick={() => onNav('create')} className="author-module-button author-module-settings disabled:cursor-not-allowed disabled:opacity-50">
-          <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="3" /><path d="m16 11.5 1.2 1-.9 1.6-1.5-.3a6 6 0 0 1-1.3.8l-.4 1.5h-2l-.4-1.5a6 6 0 0 1-1.3-.8l-1.5.3L7 12.5l1.2-1a6 6 0 0 1 0-1.5L7 9l.9-1.6 1.5.3a6 6 0 0 1 1.3-.8l.4-1.5h2l.4 1.5a6 6 0 0 1 1.3.8l1.5-.3.9 1.6-1.2 1a6 6 0 0 1 0 1.5Z" /></svg>
-          <span>Settings</span>
-        </button>
       </nav>
       {/* One Structure rail: the TOC is primary, reusable content is secondary. */}
       {outlineOpen && (!compactLayout || outlineDrawerOpen) && (
@@ -19959,7 +19920,7 @@ export default function App() {
             <p className="mt-2 text-sm">{projectId ? 'Your current workspace access does not allow edits to this project.' : 'Your current workspace access does not allow creating projects.'}</p>
             <button type="button" onClick={() => { void navigate('administration') }} className="mt-4 rounded-md border border-[#D8D5CF] px-3 py-2 text-sm">Open Administration</button>
           </div>
-        : <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} settingsMode={!!projectId} returnTo={settingsReturnTo} />
+        : <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} onSettingsReturn={handleReturnFromProjectSettings} settingsMode={!!projectId} returnTo={settingsReturnTo} />
       case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
       case 'analysis':  return isDemoMode
@@ -19996,6 +19957,7 @@ export default function App() {
   }
 
   return (
+    <ProjectRailActionsContext.Provider value={{ onHistory: openHistory, onAdministration: openAdministration, onDiagnostics: () => setDiagOpen(true) }}>
     <AuthorSettingsPermissionContext.Provider value={getAdministrationAccess(getAccessContext(), projectId ? projectOwnershipRef.current : null).project?.write === true}>
     <div className="h-screen flex flex-col bg-[#F4F2EE] overflow-hidden">
       <TopBar
@@ -20003,29 +19965,9 @@ export default function App() {
         onNav={navigate}
         onAdministration={openAdministration}
         projectName={displayName}
-        contentType={projectMeta.contentType}
         isProject={!!projectId}
-        canEditProjectSettings={getAdministrationAccess(getAccessContext(), projectId ? projectOwnershipRef.current : null).project?.write === true}
-        onHistory={openHistory}
-        settingsReturnTo={settingsReturnTo}
-        onSettingsReturn={handleReturnFromProjectSettings}
-        onDiagnostics={() => setDiagOpen(true)}
         saveStatus={projectId ? saveStatus : undefined}
         onRetrySave={() => triggerAutosave(true)}
-        stageStatuses={{
-          create:    projectId ? 'complete' : 'not-started',
-          branding:  themes.length > 0 ? 'complete' : 'not-started',
-          sources:   isDemoMode ? 'complete' : sources.length > 0 ? (evidenceFresh ? 'complete' : 'in-progress') : 'not-started',
-          analysis:  isDemoMode
-            ? analysisResult ? (analysisStale ? 'stale' : 'complete') : 'in-progress'
-            : conceptAnalysis
-              ? (conceptAnalysisFresh && (!unsupportedAnalysis || unsupportedAnalysisFresh) ? 'complete' : 'stale')
-              : (sources.length > 0 ? 'in-progress' : 'not-started'),
-          structure: appToc.length > 0 ? (isDemoMode ? (analysisRevision > tocGeneratedFromRev && !tocHumanModified ? 'stale' : 'complete') : (committedTocStale ? 'stale' : 'complete')) : (tocProposal ? (tocProposalFresh ? 'in-progress' : 'stale') : 'not-started'),
-          studio:    contentRevision > 0 ? (reviewStaleContent ? 'in-progress' : 'complete') : 'not-started',
-          quality:   aiReviewDone ? (reviewStaleContent ? 'stale' : 'complete') : (contentRevision > 0 ? 'in-progress' : 'not-started'),
-          publish:   'not-started',
-        }}
       />
       {appLoadError && (
         <div role="alert" data-testid="project-open-error" className="bg-[#FEF2F2] border-b border-[#FCA5A5] px-4 py-2 flex items-center gap-3">
@@ -20046,6 +19988,9 @@ export default function App() {
           <ProjectModuleRail
             screen={screen}
             onNav={navigate}
+            onHistory={openHistory}
+            onAdministration={openAdministration}
+            onDiagnostics={() => setDiagOpen(true)}
             canEditProjectSettings={getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true}
           />
         )}
@@ -20157,6 +20102,7 @@ export default function App() {
       )}
     </div>
     </AuthorSettingsPermissionContext.Provider>
+    </ProjectRailActionsContext.Provider>
   )
 }
 

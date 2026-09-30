@@ -339,7 +339,8 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
   })
 
   await page.reload()
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access Control", { exact: true }).click()
   await page.getByTestId("author-ai-assist").click()
@@ -376,7 +377,8 @@ test("persists the read-only Author inspector, shows no-evidence topics, and mar
     projectMeta: { ...beforeContentTypeChange.projectMeta, contentType: "api-reference" },
   })
   await page.reload()
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
     .getByText("Access Control", { exact: true }).click()
   await page.getByTestId("author-ai-assist").click()

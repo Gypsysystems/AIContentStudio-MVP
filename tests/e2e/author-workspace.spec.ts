@@ -235,7 +235,8 @@ async function patchProject(page: Page, projectName: string, patch: Record<strin
 }
 
 function authorStep(page: Page) {
-  return page.locator('header').getByRole('button', { name: /^Author,/ })
+  return page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Author', exact: true })
 }
 
 function authorTopicRow(page: Page, topicId: string) {
@@ -324,7 +325,10 @@ test('Author module rail navigates project stages and More opens Knowledge Map',
   await prepareAuthor(page, projectName)
 
   const rail = page.getByRole('navigation', { name: 'Project modules' })
-  for (const label of ['Project Home', 'Sources', 'Structure — Analyze & Structure', 'Author', 'Review', 'Publish']) {
+  for (const label of [
+    'Project Home', 'Sources', 'Structure', 'Author', 'Review', 'Publish',
+    'History', 'Project Settings', 'Brand & Output', 'Administration', 'Diagnostics',
+  ]) {
     await expect(rail.getByRole('button', { name: label, exact: true })).toBeVisible()
   }
   await expect(rail.getByRole('button', { name: 'Author', exact: true }))
@@ -333,7 +337,8 @@ test('Author module rail navigates project stages and More opens Knowledge Map',
   await rail.getByRole('button', { name: 'Review', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Grounded Review' })).toBeVisible()
 
-  await page.locator('header').getByRole('button', { name: /^Author,/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Author', exact: true }).click()
   await expect(page.getByRole('navigation', { name: 'Project modules' })
     .getByRole('button', { name: 'Author', exact: true })).toHaveAttribute('aria-current', 'page')
   const moreMenu = page.getByTestId('author-editor')
@@ -462,8 +467,10 @@ test('Review finding opens its exact Author topic and preserves manual and appro
     reviewModel: createEmptyReviewModel(initial.projectId),
   })
   await page.reload()
-  await page.locator('header').getByRole('button', { name: /^Analyze & Structure/ }).click()
-  await page.locator('header').getByRole('button', { name: /^Analysis/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Project Home', exact: true }).click()
+  await page.getByTestId('project-home-stage-analysis').click()
+  await expect(page.getByRole('heading', { name: 'Source-backed Analysis' })).toBeVisible()
   await page.getByRole('button', { name: /Recheck Content|Check Content/ }).click()
   await expect.poll(async () => {
     const project = await readProject(page, projectName)
@@ -479,7 +486,8 @@ test('Review finding opens its exact Author topic and preserves manual and appro
     })}`)
   }
 
-  await page.locator('header').getByRole('button', { name: /^Review,/ }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Review', exact: true }).click()
   await expect(page.getByTestId('run-grounded-review')).toBeEnabled()
   await page.getByTestId('run-grounded-review').click()
   const unsupportedFinding = page.getByTestId('grounded-review-finding').filter({ hasText: 'Unsupported Claim' })

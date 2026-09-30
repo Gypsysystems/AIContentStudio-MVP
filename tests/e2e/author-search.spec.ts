@@ -105,7 +105,8 @@ test("searches all persisted topics after reload, uses renamed titles, navigates
   })
 
   await page.reload()
-  await page.locator("header").getByRole("button", { name: /^Author,/ }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByRole("button", { name: "More", exact: true }).click()
   await page.getByRole("button", { name: "Find & Replace" }).click()
   await page.getByRole("button", { name: "All Topics" }).click()

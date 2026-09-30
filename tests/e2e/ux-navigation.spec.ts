@@ -11,9 +11,8 @@ async function createProject(page: Page, name: string) {
 }
 
 function workflowStep(page: Page, label: string) {
-  return page.locator("header").getByRole("button", {
-    name: new RegExp(`^${label}\\b`),
-  })
+  return page.locator('nav[aria-label="Project navigation"], nav[aria-label="Project modules"]')
+    .getByRole("button", { name: label === "Analyze & Structure" ? /^Structure/ : label, exact: label !== "Analyze & Structure" })
 }
 
 function authorModule(page: Page) {
@@ -21,41 +20,52 @@ function authorModule(page: Page) {
     .getByRole("button", { name: "Author", exact: true })
 }
 
-test("shows five authoring stages and nests Analysis and TOC under Analyze & Structure", async ({ page }) => {
+test("shows six workflow destinations followed by project utilities in the rail", async ({ page }) => {
   await createProject(page, `UX workflow ${Date.now()}`)
-
-  for (const stage of ["Sources", "Analyze & Structure", "Author", "Review", "Publish"]) {
-    await expect(workflowStep(page, stage)).toBeVisible()
-  }
-
+  const rail = page.getByRole("navigation", { name: "Project navigation" })
+  await expect(rail.locator("button")).toHaveText([
+    "Project Home", "Sources", "Structure", "Author", "Review", "Publish",
+    "History", "Project Settings", "Brand & Output", "Administration", "Diagnostics",
+  ])
+  await expect(page.locator("header").getByRole("button", { name: "Preview" })).toBeVisible()
+  await expect(page.locator("header").getByRole("button", { name: "History" })).toHaveCount(0)
   await workflowStep(page, "Analyze & Structure").click()
-  const subNavigation = page.getByRole("group", { name: "Analyze and structure screens" })
-  const analysis = subNavigation.getByRole("button", { name: /Analysis/ })
-  const toc = subNavigation.getByRole("button", { name: /Table of contents/ })
-  await expect(analysis).toBeVisible()
-  await expect(toc).toBeVisible()
-
-  await analysis.click()
-  await expect(page.getByTestId("analysis-generate-toc")).toBeVisible()
-  await toc.click()
   await expect(page.getByTestId("real-toc-screen")).toBeVisible()
 })
 
-test("opens project details and theme styling from the project header", async ({ page }) => {
+test("opens project details and theme styling from the sidebar", async ({ page }) => {
   await createProject(page, `UX settings ${Date.now()}`)
 
-  await page.locator("header").getByRole("button", { name: /Project Settings/ }).click()
+  await workflowStep(page, "Project Settings").click()
   await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
 
-  await page.locator("header").getByRole("button", { name: /Brand & Output/ }).click()
+  await workflowStep(page, "Brand & Output").click()
   await expect(page.getByRole("heading", { name: "Theme & Style Profiles" })).toBeVisible()
+})
+
+test("keeps History, Diagnostics, and Administration actions working from both rails", async ({ page }) => {
+  await createProject(page, `UX rail actions ${Date.now()}`)
+  const projectRail = page.getByRole("navigation", { name: "Project navigation" })
+  await projectRail.getByRole("button", { name: "History" }).click()
+  await expect(page.getByRole("heading", { name: "History", exact: true })).toBeVisible()
+  await expect(projectRail.getByRole("button", { name: "History" })).toHaveAttribute("aria-current", "page")
+  await projectRail.getByRole("button", { name: "Diagnostics" }).click()
+  await expect(page.getByRole("heading", { name: "Project Pipeline Diagnostics" })).toBeVisible()
+  await page.getByRole("button", { name: "Close", exact: true }).click()
+  await projectRail.getByRole("button", { name: "Author" }).click()
+  const authorRail = page.getByRole("navigation", { name: "Project modules" })
+  await authorRail.getByRole("button", { name: "History" }).click()
+  await expect(page.getByRole("heading", { name: "History", exact: true })).toBeVisible()
+  await projectRail.getByRole("button", { name: "Author" }).click()
+  await authorRail.getByRole("button", { name: "Administration" }).click()
+  await expect(page.locator("header").getByText("Workspace access & settings")).toBeVisible()
 })
 
 test("exposes the active Author module after source material is ready", async ({ page }) => {
   await createProject(page, `UX stage states ${Date.now()}`)
 
   const sources = workflowStep(page, "Sources")
-  await expect(sources).toHaveAttribute("aria-current", "step")
+  await expect(sources).toHaveAttribute("aria-current", "page")
 
   await page.locator('input[type="file"]').setInputFiles({
     name: "ux-navigation-source.md",
@@ -80,17 +90,21 @@ test("keeps Review-to-Author navigation and direct stage navigation available", 
 
   await page.getByRole("navigation", { name: "Project modules" })
     .getByRole("button", { name: "Publish", exact: true }).click()
-  await expect(workflowStep(page, "Publish")).toHaveAttribute("aria-current", "step")
+  await expect(workflowStep(page, "Publish")).toHaveAttribute("aria-current", "page")
   await workflowStep(page, "Sources").click()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
 })
 
 test("keeps the workflow keyboard accessible and usable at a narrow viewport", async ({ page }) => {
-  await page.setViewportSize({ width: 375, height: 812 })
+  await page.setViewportSize({ width: 375, height: 420 })
   await createProject(page, `UX responsive ${Date.now()}`)
 
+  const projectRail = page.locator(".studio-module-rail")
+  expect(await projectRail.evaluate(rail => rail.scrollHeight > rail.clientHeight)).toBe(true)
   for (const name of ["Project Settings", "Brand & Output", "Diagnostics"]) {
-    const bounds = await page.locator("header").getByRole("button", { name }).boundingBox()
+    const action = workflowStep(page, name)
+    await action.scrollIntoViewIfNeeded()
+    const bounds = await action.boundingBox()
     expect(bounds, `${name} must be visible within the narrow viewport`).not.toBeNull()
     expect(bounds!.x).toBeGreaterThanOrEqual(0)
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(376)
@@ -105,6 +119,10 @@ test("keeps the workflow keyboard accessible and usable at a narrow viewport", a
   await expect(author).toBeFocused()
   await page.keyboard.press("Enter")
   await expect(authorModule(page)).toHaveAttribute("aria-current", "page")
+  const authorRail = page.locator(".author-module-rail")
+  expect(await authorRail.evaluate(rail => rail.scrollHeight > rail.clientHeight)).toBe(true)
+  await authorRail.getByRole("button", { name: "Diagnostics" }).scrollIntoViewIfNeeded()
+  expect(await authorRail.evaluate(rail => rail.scrollTop)).toBeGreaterThan(0)
 
   const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth)
   expect(documentWidth).toBeLessThanOrEqual(376)
@@ -130,7 +148,7 @@ test("project settings edits the same project and returns to the previous stage"
   await createProject(page, originalName)
   await workflowStep(page, "Author").click()
   await page.getByRole("navigation", { name: "Project modules" })
-    .getByRole("button", { name: "Settings — Project Settings" }).click()
+    .getByRole("button", { name: "Project Settings" }).click()
   await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill(renamed)
   await page.getByRole("button", { name: "Save changes" }).click()
@@ -154,8 +172,8 @@ test("leaving unchanged project settings does not write a new project revision",
     return (await projectRepository.loadProject(project.projectId))?.recordRevision
   }, name)
   const before = await revision()
-  await page.locator("header").getByRole("button", { name: "Project Settings" }).click()
-  await page.locator("header").getByRole("button", { name: "Back to project" }).click()
+  await workflowStep(page, "Project Settings").click()
+  await page.getByRole("button", { name: "Back to project" }).click()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   expect(await revision()).toBe(before)
 })
@@ -191,13 +209,14 @@ test("project tiles and the shared module rail preserve primary and secondary de
   await expect(page.getByTestId("real-toc-screen")).toBeVisible()
   await rail.getByRole("button", { name: "Author", exact: true }).click()
   await expect(page.getByTestId("author-workspace")).toBeVisible()
-  await page.locator("header").getByLabel("Open project menu").click()
+  const authorRail = page.getByRole("navigation", { name: "Project modules" })
   for (const utility of ["History", "Brand & Output", "Administration", "Diagnostics", "Project Settings"]) {
-    await expect(page.locator("header").getByRole("button", { name: utility, exact: true })).toBeVisible()
+    await expect(authorRail.getByRole("button", { name: utility, exact: true })).toBeAttached()
   }
+  await expect(authorRail.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0)
 })
 
-test("finalized brand assets render in the header, module rails and favicon without clipping", async ({ page }) => {
+test("finalized brand assets render only in the header and favicon without clipping", async ({ page }) => {
   await page.goto("/")
   const headerLogo = page.locator("header .studio-header-logo")
   await expect(headerLogo).toBeVisible()
@@ -211,11 +230,9 @@ test("finalized brand assets render in the header, module rails and favicon with
   expect((await page.request.get("/brand/header-logo-dark.svg")).ok()).toBe(true)
 
   await createProject(page, `Brand assets ${Date.now()}`)
-  const railMark = page.getByRole("navigation", { name: "Project navigation" }).locator(".studio-rail-brand")
-  await expect(railMark).toBeVisible()
-  await expect(railMark).toHaveAttribute("src", "/brand/nav-mark-color.svg")
+  await expect(page.getByRole("navigation", { name: "Project navigation" }).locator("img")).toHaveCount(0)
   await workflowStep(page, "Author").click()
-  await expect(page.getByRole("navigation", { name: "Project modules" }).locator(".author-rail-brand")).toBeVisible()
+  await expect(page.getByRole("navigation", { name: "Project modules" }).locator("img")).toHaveCount(0)
 
   await page.setViewportSize({ width: 375, height: 812 })
   await expect(headerLogo).toBeHidden()

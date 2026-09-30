@@ -80,15 +80,19 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible {
   flex: 0 0 68px;
   flex-direction: column;
   align-items: stretch;
-  justify-content: space-between;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   border-right: 1px solid #e2e4e8;
   background: #fbfaf7;
   padding: 10px 6px;
 }
-.studio-module-rail nav { display: flex; flex-direction: column; gap: 4px; }
+.studio-module-rail nav { display: flex; flex: none; flex-direction: column; gap: 4px; }
 .studio-module-rail button {
   display: flex;
   min-height: 48px;
+  flex-shrink: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -110,14 +114,23 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible {
   font-weight: 650;
 }
 .studio-module-rail svg { width: 17px; height: 17px; }
-.studio-module-rail .studio-rail-settings { border-top: 1px solid #e2e4e8; border-radius: 0; padding-top: 8px; }
+.studio-rail-utilities {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e4e8;
+}
+.studio-rail-utilities button:disabled { cursor: not-allowed; opacity: .48; }
+.studio-module-rail button:focus-visible { outline: 2px solid #ff7a1a; outline-offset: -2px; }
+.author-module-rail .studio-rail-utilities { width: 100%; gap: 3px; }
 .studio-project-stage { min-width: 0; flex: 1; overflow: auto; background: #f7f5f0; }
 
 header.relative.z-30 { border-color: #e2e4e8; background: #fbfaf7; }
 header.relative.z-30 .studio-header-logo { display: block; width: auto; height: 26px; max-width: 100%; }
 header.relative.z-30 .studio-header-mark { display: none; width: 28px; height: 28px; }
-.studio-module-rail .studio-rail-brand,
-.author-module-rail .author-rail-brand { display: block; width: 24px; height: 24px; margin: 4px auto 10px; flex: none; }
 .studio-workflow-header { max-width: 560px; flex: 0 1 auto !important; padding: 0 4px !important; }
 .studio-workflow-navigation { width: auto !important; }
 .studio-workflow-navigation > ol { gap: 0 !important; padding: 1px 0 !important; }
