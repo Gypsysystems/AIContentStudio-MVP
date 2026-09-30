@@ -20,3 +20,9 @@ When recreating a local Git commit with GitHub's Git database API, preserve the 
 **Why:** A connector-created commit initially differed from the local object by exactly one missing final newline.
 
 **How to apply:** Compare the resulting commit SHA with the local SHA before advancing the branch. Include the message's final newline and verify the branch still points to the expected parent before a non-forced ref update.
+
+When transferring a large Git blob through the connector, do not trust a single long base64 line returned by CodeExecution's shell callback. Read it in small character slices and verify the reconstructed Git blob hash before uploading.
+
+**Why:** A long base64 line was silently shortened despite a generous output budget, producing a valid but incorrect uploaded blob.
+
+**How to apply:** Split base64 output into slices of no more than 64,000 characters, check each slice's expected length, then compare both the reconstructed and uploaded blob hashes to the local Git object. Verify tree and commit hashes before updating the remote ref.
