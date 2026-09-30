@@ -1,5 +1,7 @@
 {
+  "title": "AI Content Studio",
   "description": "Streamlines project management by enabling users to organize tasks, track progress, and collaborate efficiently in one intuitive platform.",
+  "icons": { "icon": "/favicon.svg" },
   "robots": {
     "index": false
   },

@@ -114,10 +114,10 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible {
 .studio-project-stage { min-width: 0; flex: 1; overflow: auto; background: #f7f5f0; }
 
 header.relative.z-30 { border-color: #e2e4e8; background: #fbfaf7; }
-header.relative.z-30 button[aria-label="Content Studio home"] > span:first-child {
-  display: none;
-}
-header.relative.z-30 button[aria-label="Content Studio home"] > span:last-child { color: #20242a; letter-spacing: -.035em; }
+header.relative.z-30 .studio-header-logo { display: block; width: auto; height: 26px; max-width: 100%; }
+header.relative.z-30 .studio-header-mark { display: none; width: 28px; height: 28px; }
+.studio-module-rail .studio-rail-brand,
+.author-module-rail .author-rail-brand { display: block; width: 24px; height: 24px; margin: 4px auto 10px; flex: none; }
 .studio-workflow-header { max-width: 560px; flex: 0 1 auto !important; padding: 0 4px !important; }
 .studio-workflow-navigation { width: auto !important; }
 .studio-workflow-navigation > ol { gap: 0 !important; padding: 1px 0 !important; }
@@ -268,6 +268,10 @@ header.relative.z-30 #author-project-tools > button:not(.studio-topbar-preview):
   color: #ad4e0d !important;
 }
 
+@media (max-width: 640px) {
+  header.relative.z-30 .studio-header-logo { display: none; }
+  header.relative.z-30 .studio-header-mark { display: block; }
+}
 @media (max-width: 767px) {
   .studio-workflow-header { max-width: none; width: 100% !important; flex-basis: 100% !important; overflow-x: auto; }
   .studio-workflow-navigation { width: max-content !important; min-width: 100%; }

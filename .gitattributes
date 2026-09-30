@@ -144,3 +144,7 @@
 *.stl                filter=lfs diff=lfs merge=lfs -text
 *.nc                 filter=lfs diff=lfs merge=lfs -text
 *.mat                filter=lfs diff=lfs merge=lfs -text
+
+# Keep the small brand favicon fallbacks directly in Git for reliable browser loading.
+/public/favicon.ico -filter -diff -merge -text
+/public/apple-touch-icon-180.png -filter -diff -merge -text

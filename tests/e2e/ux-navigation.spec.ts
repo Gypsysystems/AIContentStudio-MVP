@@ -196,3 +196,35 @@ test("project tiles and the shared module rail preserve primary and secondary de
     await expect(page.locator("header").getByRole("button", { name: utility, exact: true })).toBeVisible()
   }
 })
+
+test("finalized brand assets render in the header, module rails and favicon without clipping", async ({ page }) => {
+  await page.goto("/")
+  const headerLogo = page.locator("header .studio-header-logo")
+  await expect(headerLogo).toBeVisible()
+  await expect(headerLogo).toHaveAttribute("src", "/brand/header-logo.svg")
+  expect(await headerLogo.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+
+  const favicon = await page.request.get("/favicon.svg")
+  expect(favicon.ok()).toBe(true)
+  expect(await favicon.text()).toContain('viewBox="0 0 32 32"')
+  expect((await page.request.get("/favicon.ico")).ok()).toBe(true)
+  expect((await page.request.get("/brand/header-logo-dark.svg")).ok()).toBe(true)
+
+  await createProject(page, `Brand assets ${Date.now()}`)
+  const railMark = page.getByRole("navigation", { name: "Project navigation" }).locator(".studio-rail-brand")
+  await expect(railMark).toBeVisible()
+  await expect(railMark).toHaveAttribute("src", "/brand/nav-mark-color.svg")
+  await workflowStep(page, "Author").click()
+  await expect(page.getByRole("navigation", { name: "Project modules" }).locator(".author-rail-brand")).toBeVisible()
+
+  await page.setViewportSize({ width: 375, height: 812 })
+  await expect(headerLogo).toBeHidden()
+  const compactMark = page.locator("header .studio-header-mark")
+  await expect(compactMark).toBeVisible()
+  expect(await compactMark.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+  const box = await compactMark.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(376)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(376)
+})

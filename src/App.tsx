@@ -1063,6 +1063,7 @@ function ProjectModuleRail({ screen, onNav, canEditProjectSettings }: {
   return (
     <aside className="studio-module-rail">
       <nav aria-label="Project navigation">
+        <img src="/brand/nav-mark-color.svg" alt="" aria-hidden="true" className="studio-rail-brand" />
         {modules.map(module => {
           const active = module.id === 'structure' ? screen === 'structure' || screen === 'analysis' : screen === module.id
           return <button key={module.id} type="button" aria-current={active ? 'page' : undefined} onClick={() => onNav(module.id)} title={module.label}>
@@ -1104,16 +1105,9 @@ function TopBar({ screen, onNav, onAdministration, projectName, contentType, isP
   return (
     <header className="relative z-30 flex-shrink-0 border-b border-[#E2DED7] bg-white">
       <div className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-3 sm:px-5 ${screen === 'studio' ? 'min-h-[50px] py-1.5' : 'min-h-[58px] py-2'}`}>
-        <button type="button" onClick={() => onNav('dashboard')} aria-label="Content Studio home" className="group flex flex-shrink-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#5B5BD6]">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <rect x="1" y="1" width="4" height="4" rx="0.75" fill="white" opacity="0.9" />
-            <rect x="7" y="1" width="4" height="4" rx="0.75" fill="white" opacity="0.6" />
-            <rect x="1" y="7" width="4" height="4" rx="0.75" fill="white" opacity="0.6" />
-            <rect x="7" y="7" width="4" height="4" rx="0.75" fill="white" opacity="0.4" />
-          </svg>
-          </span>
-          <span className="text-[13px] font-semibold tracking-tight text-[#111218]">AI Content Studio</span>
+        <button type="button" onClick={() => onNav('dashboard')} aria-label="Content Studio home" className="group flex flex-shrink-0 items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF7A1A]">
+          <img src="/brand/header-logo.svg" alt="" className="studio-header-logo" />
+          <img src="/brand/nav-mark-color.svg" alt="" className="studio-header-mark" />
         </button>
         {screen === 'administration' ? (
           <div className="min-w-0 border-l border-[#E2DED7] pl-3">
@@ -11946,6 +11940,7 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
     <div data-testid="author-workspace" className="author-workspace flex-1 flex overflow-hidden">
       <nav aria-label="Project modules" className="author-module-rail flex-shrink-0">
         <div className="author-module-list">
+          <img src="/brand/nav-mark-color.svg" alt="" aria-hidden="true" className="author-rail-brand" />
           {([
             { id: 'project-home' as const, label: 'Project Home', icon: <path d="M3 10.5 10 4l7 6.5V17a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z" /> },
             { id: 'sources' as const, label: 'Sources', icon: <><path d="M5 3.5h7l4 4V17a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z" /><path d="M12 3.5V8h4M7 11h6M7 14h6" /></> },

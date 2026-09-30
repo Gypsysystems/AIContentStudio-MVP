@@ -13,6 +13,7 @@ logs/
 .tmp-*
 /test-results/
 /.figma/design-context/
+/attached_assets/
 
 # Platform-managed agentplat state, not project source. In the
 # client-initiated single-repo workspace layout (make's `Path: "."` spec) the

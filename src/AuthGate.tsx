@@ -171,6 +171,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   }
    if (state.kind === 'cloud-pending') return <main className="min-h-screen bg-[#F7F5F0] flex items-center justify-center p-5">
       <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
+         <img src="/brand/header-logo.svg" alt="AI Content Studio" className="h-7 w-auto max-w-full" />
         <h1 className="text-xl font-semibold text-gray-900">{state.organizationName} / {state.workspaceName}</h1>
          <p className="mt-2 text-sm text-gray-600">Signed in to AI Content Studio</p>
         <p role="status" className="mt-3 text-sm text-gray-600">{state.message} Your signed-in session is retained; local projects have not been moved.</p>
@@ -185,7 +186,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
    return <main className="min-h-screen bg-[#F7F5F0] flex items-center justify-center p-5">
     <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
-       <h1 className="text-xl font-semibold text-[#20242A]">AI Content Studio</h1>
+       <h1><img src="/brand/header-logo.svg" alt="AI Content Studio" className="h-7 w-auto max-w-full" /></h1>
       <p className="mt-2 text-sm text-gray-600">{state.kind === 'unavailable'
         ? 'Cloud sign-in is not available yet.' : 'Sign in to your workspace.'}</p>
       {state.message && <p role="alert" className="mt-4 text-sm text-red-700">{state.message}</p>}
