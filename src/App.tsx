@@ -140,15 +140,28 @@ import { ProjectPreview } from './projectPreview'
 import { availableConditions, htmlConditionError } from './publishConditions'
 import { ProjectHomeScreen } from './ProjectHomeScreen'
 import { ProjectHistoryPanel } from './ProjectHistoryPanel'
+import { AllProjectsHistory } from './AllProjectsHistory'
 import { validateCheckpointReason, type ProjectCheckpointSummary } from './projectCheckpoint'
 import { summarizeProjectHome } from './projectHomeModel'
 import { useCloudAccount } from './AuthGate'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'administration' | 'project-home' | 'history' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
+type ManagementDestination = 'history' | 'create' | 'branding' | 'administration' | 'diagnostics'
+type ManagementScope = {
+  destination: ManagementDestination
+  origin: 'home' | 'project'
+  returnScreen: Screen
+  originProjectId: string | null
+  selectedProjectId: string // '' = Select project, 'all' = All projects
+  parent?: ManagementScope
+}
 const AuthorSettingsPermissionContext = React.createContext(false)
+const DiagnosticsStatusContext = React.createContext<'all' | 'ok' | 'warn' | 'error' | 'info'>('all')
 const ProjectRailActionsContext = React.createContext<{
   onHistory: () => void
+  onProjectSettings: () => void
+  onBranding: () => void
   onAdministration: () => void
   onDiagnostics: () => void
 } | null>(null)
@@ -1056,17 +1069,19 @@ type ProjectRailUtilityProps = {
   screen: Screen
   onNav: (screen: Screen) => void
   onHistory: () => void
+  onProjectSettings: () => void
+  onBranding: () => void
   onAdministration: () => void
   onDiagnostics: () => void
   canEditProjectSettings: boolean
   author?: boolean
 }
 
-function ProjectRailUtilities({ screen, onNav, onHistory, onAdministration, onDiagnostics, canEditProjectSettings, author = false }: ProjectRailUtilityProps) {
+function ProjectRailUtilities({ screen, onHistory, onProjectSettings, onBranding, onAdministration, onDiagnostics, canEditProjectSettings, author = false }: ProjectRailUtilityProps) {
   const utilities: Array<{ label: string; id: string; action: () => void; icon: React.ReactNode; disabled?: boolean }> = [
     { label: 'History', id: 'history', action: onHistory, icon: <><circle cx="10" cy="10" r="7" /><path d="M10 6v4l3 2" /></> },
-    { label: 'Project Settings', id: 'create', action: () => onNav('create'), disabled: !canEditProjectSettings, icon: <><circle cx="10" cy="10" r="3" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.4 4.4l1.4 1.4m8.4 8.4 1.4 1.4m0-11.2-1.4 1.4M5.8 14.2l-1.4 1.4" /></> },
-    { label: 'Brand & Output', id: 'branding', action: () => onNav('branding'), icon: <><path d="M4 4h12v12H4z" /><path d="m6.5 12 2.5-3 2 2 2.5-3 1 1.5" /></> },
+    { label: 'Project Settings', id: 'create', action: onProjectSettings, disabled: !canEditProjectSettings, icon: <><circle cx="10" cy="10" r="3" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.4 4.4l1.4 1.4m8.4 8.4 1.4 1.4m0-11.2-1.4 1.4M5.8 14.2l-1.4 1.4" /></> },
+    { label: 'Brand & Output', id: 'branding', action: onBranding, icon: <><path d="M4 4h12v12H4z" /><path d="m6.5 12 2.5-3 2 2 2.5-3 1 1.5" /></> },
     { label: 'Administration', id: 'administration', action: onAdministration, icon: <><circle cx="7" cy="7" r="2" /><circle cx="14" cy="8" r="1.5" /><path d="M3.5 16v-1c0-2 1.5-3 3.5-3s3.5 1 3.5 3v1Zm8.5 0h4v-1c0-1.6-.9-2.5-2.5-2.5-.5 0-1 .1-1.4.4" /></> },
     { label: 'Diagnostics', id: 'diagnostics', action: onDiagnostics, icon: <><path d="M4 4h12v12H4zM7 8h6M7 11h3M7 14h5" /><circle cx="14" cy="14" r="1" /></> },
   ]
@@ -1082,7 +1097,41 @@ function ProjectRailUtilities({ screen, onNav, onHistory, onAdministration, onDi
   </div>
 }
 
-function ProjectModuleRail({ screen, onNav, onHistory, onAdministration, onDiagnostics, canEditProjectSettings }: ProjectRailUtilityProps) {
+function ManagementProjectPicker({ scope, projects, busy, error, onSelect, onBack }: {
+  scope: ManagementScope
+  projects: ProjectSummary[]
+  busy: boolean
+  error: string
+  onSelect: (id: string) => void
+  onBack: () => void
+}) {
+  const allProjects = scope.destination === 'history' || scope.destination === 'diagnostics'
+  return <div className="border-b border-[#E2DED7] bg-white px-4 py-3 sm:px-6" data-testid="management-project-picker">
+    <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3">
+      <button type="button" onClick={onBack} disabled={busy}
+        className="rounded-md border border-[#E2DED7] px-3 py-2 text-[12px] font-medium hover:bg-[#F4F2EE] disabled:opacity-50">
+        {scope.origin === 'home' ? 'Return to Projects' : 'Return to project'}
+      </button>
+      <label className="flex items-center gap-2 text-[12px] font-semibold text-[#393844]">
+        Project
+        <select aria-label="Project" value={scope.selectedProjectId} disabled={busy}
+          onChange={event => onSelect(event.target.value)}
+          className="min-w-[190px] max-w-[320px] rounded-md border border-[#D8D4CE] bg-white px-3 py-2 font-normal disabled:opacity-50">
+          {allProjects && <option value="all">All projects</option>}
+          {!allProjects && <option value="">{scope.destination === 'administration' ? 'Workspace' : 'Select project'}</option>}
+          {projects.some(project => project.projectId === scope.selectedProjectId) ? null :
+            scope.selectedProjectId && scope.selectedProjectId !== 'all' &&
+            <option value={scope.selectedProjectId}>Current project</option>}
+          {projects.map(project => <option key={project.projectId} value={project.projectId}>{project.projectName}</option>)}
+        </select>
+      </label>
+      {busy && <span role="status" className="text-[11px] text-[#686879]">Loading project…</span>}
+      {error && <span role="alert" className="text-[11px] text-red-700">{error}</span>}
+    </div>
+  </div>
+}
+
+function ProjectModuleRail({ screen, onNav, onHistory, onProjectSettings, onBranding, onAdministration, onDiagnostics, canEditProjectSettings }: ProjectRailUtilityProps) {
   const modules: Array<{ id: Screen; label: string; shape: React.ReactNode }> = [
     { id: 'project-home', label: 'Project Home', shape: <path d="m3 9 7-6 7 6v7.5a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z" /> },
     { id: 'sources', label: 'Sources', shape: <><path d="M5 3h7l4 4v9.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1Z" /><path d="M12 3v4h4M7 11h6M7 14h6" /></> },
@@ -1103,6 +1152,7 @@ function ProjectModuleRail({ screen, onNav, onHistory, onAdministration, onDiagn
           </button>
         })}
         <ProjectRailUtilities screen={screen} onNav={onNav} onHistory={onHistory}
+          onProjectSettings={onProjectSettings} onBranding={onBranding}
           onAdministration={onAdministration} onDiagnostics={onDiagnostics} canEditProjectSettings={canEditProjectSettings} />
       </nav>
     </aside>
@@ -1110,12 +1160,13 @@ function ProjectModuleRail({ screen, onNav, onHistory, onAdministration, onDiagn
 }
 
 // ── Top Bar ───────────────────────────────────────────────────────────────────
-function TopBar({ screen, onNav, onAdministration, projectName, isProject, saveStatus, onRetrySave }: {
+function TopBar({ screen, onNav, onAdministration, projectName, isProject, managementTitle, saveStatus, onRetrySave }: {
   screen: Screen
   onNav: (s: Screen) => void
   onAdministration: () => void
   projectName: string
   isProject: boolean
+  managementTitle?: string
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
   onRetrySave?: () => void
 }) {
@@ -1131,7 +1182,12 @@ function TopBar({ screen, onNav, onAdministration, projectName, isProject, saveS
           <img src="/brand/header-logo.svg" alt="" className="studio-header-logo" />
           <img src="/brand/nav-mark-color.svg" alt="" className="studio-header-mark" />
         </button>
-        {screen === 'administration' ? (
+        {managementTitle ? (
+          <div className="min-w-0 border-l border-[#E2DED7] pl-3">
+            <p className="truncate text-[12px] font-semibold text-[#22222F]">{managementTitle}</p>
+            <p className="text-[10px] text-[#858493]">Workspace management</p>
+          </div>
+        ) : screen === 'administration' ? (
           <div className="min-w-0 border-l border-[#E2DED7] pl-3">
             <p className="truncate text-[12px] font-semibold text-[#22222F]">Administration</p>
             <p className="text-[10px] text-[#858493]">Workspace access &amp; settings</p>
@@ -1165,7 +1221,7 @@ function TopBar({ screen, onNav, onAdministration, projectName, isProject, saveS
               Create project
             </button>
           )}
-          {screen === 'dashboard' && <button type="button" onClick={onAdministration} data-testid="topbar-administration"
+          {(screen === 'dashboard' || hasProject) && <button type="button" onClick={onAdministration} data-testid="topbar-administration"
             className="min-h-8 rounded-md border border-[#E2DED7] px-2.5 text-[10px] font-semibold text-[#585866] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] sm:text-[11px]">
             Administration
           </button>}
@@ -1200,8 +1256,9 @@ function TopBar({ screen, onNav, onAdministration, projectName, isProject, saveS
 }
 
 // ── Screen: Dashboard ─────────────────────────────────────────────────────────
-function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProject, onDuplicateProject, onRestored, onNewProject }: {
+function DashboardScreen({ onNav, onManagement, activeProjectId, onOpenProject, onDeleteProject, onDuplicateProject, onRestored, onNewProject }: {
   onNav: (s: Screen) => void
+  onManagement: (destination: ManagementDestination) => void
   activeProjectId?: string | null
   onOpenProject: (projectId: string) => Promise<void>
   onDeleteProject: (projectId: string) => Promise<void>
@@ -1460,6 +1517,16 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
           </button>}
         </div>
       </div>
+      <nav aria-label="Workspace management" className="mb-7 flex flex-wrap gap-2">
+        {([
+          ['history', 'History'], ['create', 'Project Settings'], ['branding', 'Brand & Output'],
+          ['administration', 'Administration'], ['diagnostics', 'Diagnostics'],
+        ] as const).map(([destination, label]) =>
+          <button key={destination} type="button" onClick={() => onManagement(destination)}
+            className="rounded-lg border border-[#D8D4CE] bg-white px-3 py-2 text-[12px] font-medium text-[#393844] hover:border-[#C7C5F4] hover:bg-[#F8F7FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
+            {label}
+          </button>)}
+      </nav>
       {localImportMessage && <p role="status" className="mb-4 text-[12px] text-green-700">{localImportMessage}</p>}
       {restoreError && <div role="alert" className="mb-4 p-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] text-[12px] text-[#B91C1C]">{restoreError}</div>}
       {restoreMessage && <div role="status" className="mb-4 p-3 rounded-lg border border-[#A7D9B1] bg-[#F0FDF4] text-[12px] text-[#166534]">{restoreMessage}</div>}
@@ -1668,7 +1735,7 @@ function DashboardScreen({ onNav, activeProjectId, onOpenProject, onDeleteProjec
 }
 
 // ── Screen: Create ────────────────────────────────────────────────────────────
-function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProjectName, themes, projectMeta, onProjectMetaChange, onContinue, onSettingsReturn, settingsMode = false, returnTo = 'sources' }: {
+function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProjectName, themes, projectMeta, onProjectMetaChange, onContinue, onSettingsReturn, settingsMode = false, settingsBackLabel = 'Back to project', returnTo = 'sources' }: {
   onNav: (s: Screen) => void
   projectName: string
   onProjectNameChange: (n: string) => void
@@ -1680,6 +1747,7 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
   onContinue: () => Promise<void>
   onSettingsReturn?: () => Promise<unknown>
   settingsMode?: boolean
+  settingsBackLabel?: string
   returnTo?: Screen
 }) {
   const [selected, setSelected] = useState(projectMeta?.contentType || 'user-guide')
@@ -1750,7 +1818,7 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
       <div className="flex justify-end gap-2">
         {settingsMode && onSettingsReturn && <button type="button" onClick={() => { void onSettingsReturn() }}
           className="rounded-lg border border-[#E2DED7] px-4 py-2 text-[13px] font-medium text-[#585866] hover:bg-[#F4F2EE]">
-          Back to project
+          {settingsBackLabel}
         </button>}
         <button disabled={continuing} onClick={async () => {
           if (continuing) return
@@ -2066,8 +2134,9 @@ function ZoneEditor({ title, elements, availableElements, onUpdate }: {
 
 const ALL_PAGE_ELEMENTS = ['Logo', 'Secondary Logo', 'Document Title', 'Subtitle', 'Client Name', 'Product Name', 'Version', 'Date', 'Confidentiality', 'Chapter Title', 'Topic Title', 'Page Number', 'Copyright', 'Custom Text', 'Divider']
 
-function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStyleProfile, onProjectMetaChange, activeStyleProfileId, onApplyStyleProfile, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, toc, themeVariables, onThemeVarsChange }: {
+function BrandingScreen({ onNav, onContinue, returnTo, themes, projectMeta, effectiveStyleProfile, onProjectMetaChange, activeStyleProfileId, onApplyStyleProfile, onAddTheme, onThemesChange, pageLayouts, onPageLayoutsChange, htmlMasterPages, onHtmlMasterPagesChange, toc, themeVariables, onThemeVarsChange }: {
   onNav: (s: Screen) => void
+  onContinue?: () => void
   returnTo?: Screen
   themes: Theme[]
   projectMeta: ProjectMeta
@@ -5230,7 +5299,7 @@ function BrandingScreen({ onNav, returnTo, themes, projectMeta, effectiveStylePr
 
       <div className="flex justify-between mt-8 pt-4 border-t border-[#E2DED7]">
         <button onClick={() => onNav('create')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors bg-white">← Project Details</button>
-        <button onClick={() => onNav('sources')} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
+        <button onClick={() => onContinue ? onContinue() : onNav('sources')} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
           Continue — Sources
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
@@ -11922,7 +11991,8 @@ function StudioScreen({ onNav, reviewContext, onClearReviewContext, realReviewTa
             </button>
           ))}
           {railActions && <ProjectRailUtilities screen="studio" onNav={onNav} author
-            onHistory={railActions.onHistory} onAdministration={railActions.onAdministration}
+            onHistory={railActions.onHistory} onProjectSettings={railActions.onProjectSettings}
+            onBranding={railActions.onBranding} onAdministration={railActions.onAdministration}
             onDiagnostics={railActions.onDiagnostics} canEditProjectSettings={canEditProjectSettings} />}
         </div>
       </nav>
@@ -16760,6 +16830,15 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [historyReturnTo, setHistoryReturnTo] = useState<Screen>('project-home')
   const [administrationReturnTo, setAdministrationReturnTo] = useState<Screen>('dashboard')
+  const [management, setManagement] = useState<ManagementScope | null>(null)
+  const [managementProjects, setManagementProjects] = useState<ProjectSummary[]>([])
+  const [managementBusy, setManagementBusy] = useState(false)
+  const managementSwitchInFlightRef = useRef(false)
+  const managementCloseInFlightRef = useRef(false)
+  const pendingManagementExitRef = useRef<{ destination?: Screen } | null>(null)
+  const [managementError, setManagementError] = useState('')
+  const [diagnosticsComponent, setDiagnosticsComponent] = useState('all')
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState<'all' | 'ok' | 'warn' | 'error' | 'info'>('all')
   const [appLoading, setAppLoading] = useState(true)
   const [appLoadError, setAppLoadError] = useState<string | null>(null)
   const startupInitializedRef = useRef(false)
@@ -16776,6 +16855,19 @@ export default function App() {
   })
   const saveEpochRef = useRef(0)
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const pendingSourceOperationsRef = useRef(new Set<Promise<unknown>>())
+  const trackSourceOperation = <T,>(operation: Promise<T>): Promise<T> => {
+    pendingSourceOperationsRef.current.add(operation)
+    void operation.then(
+      () => { pendingSourceOperationsRef.current.delete(operation) },
+      () => { pendingSourceOperationsRef.current.delete(operation) },
+    )
+    return operation
+  }
+  const settleSourceOperations = async () => {
+    while (pendingSourceOperationsRef.current.size > 0)
+      await Promise.allSettled([...pendingSourceOperationsRef.current])
+  }
   const pendingSaveRef = useRef<PendingProjectSave | null>(null)
   const saveVersionRef = useRef(0)
   const savedVersionRef = useRef(0)
@@ -16864,6 +16956,7 @@ export default function App() {
     setNavError(null)
     setPrevScreen(screen)
     if (s !== 'studio') setRealReviewTarget(null)
+    if (!['history', 'create', 'branding', 'administration'].includes(s)) setManagement(null)
     setScreen(s)
     window.scrollTo(0, 0)
   }
@@ -16888,17 +16981,44 @@ export default function App() {
     completeNavigation(s)
     return true
   }
-  const openHistory = () => {
-    setHistoryReturnTo(screen === 'history' ? historyReturnTo : screen)
-    void navigate('history')
+  const openManagement = (destination: ManagementDestination) => {
+    if (managementBusy) return
+    const previous = management
+    if (previous?.destination === destination) return
+    const origin = previous?.origin ?? (screen === 'dashboard' ? 'home' : 'project')
+    const selectedProjectId = previous?.selectedProjectId ??
+      (origin === 'project' ? projectId ?? '' : destination === 'history' || destination === 'diagnostics' ? 'all' : '')
+    const scope: ManagementScope = {
+      destination, origin,
+      returnScreen: previous ? screen : origin === 'home' ? 'dashboard' : screen,
+      originProjectId: previous?.originProjectId ?? projectId,
+      parent: previous ?? undefined,
+      selectedProjectId: destination === 'administration' && origin === 'home' && !previous ? '' :
+        destination === 'create' || destination === 'branding' ? selectedProjectId === 'all' ? '' : selectedProjectId :
+        selectedProjectId || (destination === 'history' || destination === 'diagnostics' ? 'all' : ''),
+    }
+    setManagementError('')
+    if (destination === 'diagnostics') { setDiagnosticsComponent('all'); setDiagnosticsStatus('all') }
+    if (!previous) {
+      void listProjects().then(setManagementProjects).catch(error => setManagementError(`Could not list projects: ${(error as Error).message}`))
+    }
+    if (destination === 'diagnostics') {
+      setManagement(scope)
+      setDiagOpen(true)
+      return
+    }
+    if (destination === 'history') setHistoryReturnTo(screen)
+    if (destination === 'administration') setAdministrationReturnTo(screen)
+    // Home entry must not interpret a retained active project as a selected project.
+    if (origin === 'home' && destination === 'create') {
+      setManagement(scope)
+      completeNavigation('create')
+    } else {
+      void navigate(destination).then(opened => { if (opened) setManagement(scope) })
+    }
   }
-  const openAdministration = () => {
-    if (screen === 'administration') return
-    const returnTo = screen
-    void navigate('administration').then(opened => {
-      if (opened) setAdministrationReturnTo(returnTo)
-    })
-  }
+  const openHistory = () => openManagement('history')
+  const openAdministration = () => openManagement('administration')
   const createProjectCheckpoint = async (reason: string): Promise<ProjectCheckpointSummary> => {
     const note = validateCheckpointReason(reason)
     if (!projectId) throw new Error('Open a saved project before creating a checkpoint.')
@@ -17032,9 +17152,12 @@ export default function App() {
 
   const handleSourceAdd = async (file: File): Promise<string> => {
     if (!projectId) throw new Error('No project')
+    const sourceProjectId = projectId
+    const sourceEpoch = saveEpochRef.current
     // A source does not exist in project state until its bytes are safely stored.
-    const stored = await saveFile(projectId, file)
+    const stored = await trackSourceOperation(saveFile(projectId, file))
     const fileId = stored.fileId
+    if (sourceEpoch !== saveEpochRef.current || projectIdRef.current !== sourceProjectId) return fileId
     const sourceRevision = sourcesRevisionRef.current + 1
     sourcesRevisionRef.current = sourceRevision
     removedSourceIdsRef.current.delete(fileId)
@@ -17050,12 +17173,14 @@ export default function App() {
     setSourceExtractions(prev => ({ ...prev, [fileId]: pending }))
     triggerAutosave()
     // Run extraction in the background
-    extractFromFile(file, fileId, sourceRevision).then(result => {
-      if (removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
+    void extractFromFile(file, fileId, sourceRevision).then(result => {
+      if (sourceEpoch !== saveEpochRef.current || projectIdRef.current !== sourceProjectId ||
+        removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
       setSourceExtractions(prev => ({ ...prev, [fileId]: result }))
       triggerAutosave()
     }).catch((error) => {
-      if (removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
+      if (sourceEpoch !== saveEpochRef.current || projectIdRef.current !== sourceProjectId ||
+        removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
       setSourceExtractions(prev => ({
         ...prev,
         [fileId]: { ...pending, status: 'failed', extractedAt: Date.now(), extractionError: error instanceof Error ? error.message : 'Extraction failed unexpectedly' },
@@ -17066,6 +17191,8 @@ export default function App() {
   }
 
   const handleSourceRemove = async (fileId: string) => {
+    const sourceProjectId = projectId
+    const sourceEpoch = saveEpochRef.current
     removedSourceIdsRef.current.add(fileId)
     extractionRunRef.current[fileId] = (extractionRunRef.current[fileId] ?? 0) + 1
     const sourceRevision = sourcesRevisionRef.current + 1
@@ -17076,11 +17203,13 @@ export default function App() {
       ? { ...prev, items: prev.items.filter(item => item.fileId !== fileId && item.sourceId !== fileId) }
       : null)
     setSourcesRevision(sourceRevision)
-    try { await removeFile(fileId) } catch { /* best effort */ }
-    triggerAutosave()
+    try { await trackSourceOperation(removeFile(fileId)) } catch { /* best effort */ }
+    if (sourceEpoch === saveEpochRef.current && projectIdRef.current === sourceProjectId) triggerAutosave()
   }
 
   const handleRetryExtraction = (fileId: string, file: File) => {
+    const sourceProjectId = projectId
+    const sourceEpoch = saveEpochRef.current
     const sourceRevision = sourcesRevisionRef.current
     removedSourceIdsRef.current.delete(fileId)
     const extractionRun = (extractionRunRef.current[fileId] ?? 0) + 1
@@ -17092,12 +17221,14 @@ export default function App() {
     }
     setSourceExtractions(prev => ({ ...prev, [fileId]: pending }))
     triggerAutosave()
-    extractFromFile(file, fileId, sourceRevision).then(result => {
-      if (removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
+    void extractFromFile(file, fileId, sourceRevision).then(result => {
+      if (sourceEpoch !== saveEpochRef.current || projectIdRef.current !== sourceProjectId ||
+        removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
       setSourceExtractions(prev => ({ ...prev, [fileId]: result }))
       triggerAutosave()
     }).catch((error) => {
-      if (removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
+      if (sourceEpoch !== saveEpochRef.current || projectIdRef.current !== sourceProjectId ||
+        removedSourceIdsRef.current.has(fileId) || extractionRunRef.current[fileId] !== extractionRun) return
       setSourceExtractions(prev => ({
         ...prev,
         [fileId]: { ...pending, status: 'failed', extractedAt: Date.now(), extractionError: error instanceof Error ? error.message : 'Extraction failed unexpectedly' },
@@ -19530,6 +19661,7 @@ export default function App() {
   // ── Hydrate App state from a loaded ProjectRecord ─────────────────────────
   // Always sets ALL fields — conditional hydration causes isolation bugs.
   const hydrateFromRecord = async (record: ProjectRecord) => {
+    const hydrationEpoch = saveEpochRef.current
     deferHydrationPersistenceRef.current = true
     projectRevisionRef.current = record.recordRevision
     projectCreatedAtRef.current = record.createdAt
@@ -19630,6 +19762,7 @@ export default function App() {
     // Restore source files from IndexedDB as stable ProjectSource[]
     try {
       const storedFiles = await loadProjectFiles(record.projectId)
+      if (hydrationEpoch !== saveEpochRef.current) return
       const persistedExtractions = (record.sourceExtractions as Record<string, SourceExtraction>) ?? {}
       const restoredExtractions: Record<string, SourceExtraction> = {}
       for (const storedFile of storedFiles) {
@@ -19670,11 +19803,126 @@ export default function App() {
       }))
       setSources(restoredSources)
     } catch {
+      if (hydrationEpoch !== saveEpochRef.current) return
       setSourceExtractions({})
       setEvidenceIndex(null)
       setSources([])
     }
     setActiveProjectId(record.projectId)
+  }
+
+  // Keep the selected management page mounted while replacing its project
+  // context. Never hydrate over an unsaved project or let an old queued write
+  // follow the new project into the screen.
+  const switchManagementProject = async (selectedProjectId: string): Promise<boolean> => {
+    if (!management || managementBusy || managementSwitchInFlightRef.current || selectedProjectId === management.selectedProjectId) return false
+    if (selectedProjectId === 'all' || selectedProjectId === '') {
+      setManagement({ ...management, selectedProjectId })
+      setManagementError('')
+      setDiagnosticsComponent('all')
+      setDiagnosticsStatus('all')
+      return true
+    }
+    managementSwitchInFlightRef.current = true
+    setManagementBusy(true)
+    setManagementError('')
+    try {
+      await settleSourceOperations()
+      const record = selectedProjectId === projectId ? null : await loadLatestProjectForOpen(selectedProjectId)
+      if (selectedProjectId !== projectId && (!record || record.projectId !== selectedProjectId))
+        throw new Error('Project no longer exists or is not accessible.')
+      if (projectId && !await persistCurrentProject()) throw new Error('Save current project before switching.')
+      await saveQueueRef.current
+      if (record) {
+        if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null }
+        saveEpochRef.current++
+        pendingSaveRef.current = null
+        saveVersionRef.current = 0
+        savedVersionRef.current = 0
+        await hydrateFromRecord(record)
+      }
+      setManagement(current => current ? { ...current, selectedProjectId } : null)
+      setDiagnosticsComponent('all')
+      setDiagnosticsStatus('all')
+      return true
+    } catch (error) {
+      setManagementError(`Could not switch project: ${(error as Error).message}`)
+      return false
+    } finally {
+      managementSwitchInFlightRef.current = false
+      setManagementBusy(false)
+    }
+  }
+
+  const closeManagement = async (destination?: Screen) => {
+    if (!management || managementCloseInFlightRef.current) return
+    if (managementBusy || managementSwitchInFlightRef.current) {
+      pendingManagementExitRef.current = { destination }
+      return
+    }
+    managementCloseInFlightRef.current = true
+    try {
+    await settleSourceOperations()
+    const { originProjectId, returnScreen, origin } = management
+    if (projectId && !await persistCurrentProject()) {
+      setManagementError('Your latest project changes could not be saved.')
+      return
+    }
+    await saveQueueRef.current
+    if (management.parent && !destination) {
+      setDiagOpen(false)
+      setManagement({ ...management.parent, selectedProjectId: management.selectedProjectId })
+      completeNavigation(management.parent.destination === 'diagnostics' ? management.returnScreen : management.parent.destination)
+      return
+    }
+    if (projectId !== originProjectId) {
+      if (originProjectId) {
+        if (!await switchManagementProject(originProjectId)) return
+      } else {
+        if (projectId && !await persistCurrentProject()) {
+          setManagementError('Save the selected project before returning to Projects.')
+          return
+        }
+        await saveQueueRef.current
+        resetProjectState()
+      }
+    }
+    setDiagOpen(false)
+    setManagement(null)
+    if (origin === 'home') {
+      completeNavigation('dashboard')
+    } else {
+      completeNavigation(destination ?? (returnScreen === 'create' || returnScreen === 'branding' || returnScreen === 'administration' || returnScreen === 'history'
+        ? 'project-home' : returnScreen))
+    }
+    } finally {
+      managementCloseInFlightRef.current = false
+    }
+  }
+
+  useEffect(() => {
+    if (managementBusy || !management || !pendingManagementExitRef.current) return
+    const pending = pendingManagementExitRef.current
+    pendingManagementExitRef.current = null
+    void closeManagement(pending.destination)
+  }, [managementBusy, management])
+
+  const openSelectedManagementProject = async (destination: Screen) => {
+    if (!management || managementBusy || managementCloseInFlightRef.current ||
+      !projectId || management.selectedProjectId !== projectId) return
+    managementCloseInFlightRef.current = true
+    try {
+      await settleSourceOperations()
+      if (!await persistCurrentProject()) {
+        setManagementError('Your latest project changes could not be saved.')
+        return
+      }
+      await saveQueueRef.current
+      setManagement(null)
+      completeNavigation(destination)
+    } finally {
+      managementCloseInFlightRef.current = false
+    }
   }
 
   // ── Project state reset ────────────────────────────────────────────────────
@@ -19880,21 +20128,24 @@ export default function App() {
     }
     const context = getAccessContext()
     const access = getAdministrationAccess(context, projectId ? projectOwnershipRef.current : null)
+    const selectedManagementProject = !management || (management.selectedProjectId !== '' && management.selectedProjectId !== 'all')
     const administration = () => <AdministrationScreen context={context} mode={cloudAccount ? 'cloud' : 'local-dev'}
       organizationName={cloudAccount?.organizationName} workspaceName={cloudAccount?.workspaceName}
-      project={projectId ? { name: displayName, documentType: projectMeta.contentType,
+      project={selectedManagementProject && projectId ? { name: displayName, documentType: projectMeta.contentType,
         version: projectMeta.version, ownership: projectOwnershipRef.current } : null}
       saveStatus={saveStatus}
-      onBack={() => { void navigate(administrationReturnTo !== 'dashboard' && access.project?.read !== true && projectId ? 'dashboard' : administrationReturnTo) }}
-      onProjectSettings={() => { if (access.project?.write) void navigate('create') }}
+      onBack={() => { if (management) void closeManagement(); else void navigate(administrationReturnTo !== 'dashboard' && access.project?.read !== true && projectId ? 'dashboard' : administrationReturnTo) }}
+      onProjectSettings={() => { if (access.project?.write) openManagement('create') }}
       onDiscardProject={() => {
         resetProjectState()
+        setManagement(null)
+        setDiagOpen(false)
         setAdministrationReturnTo('dashboard')
         setNavError(null)
         setScreen('dashboard')
       }} />
     switch (screen) {
-      case 'dashboard': return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
+      case 'dashboard': return <DashboardScreen onNav={navigate} onManagement={openManagement} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
       case 'administration': return administration()
       case 'project-home': return <ProjectHomeScreen
         projectName={displayName}
@@ -19902,26 +20153,41 @@ export default function App() {
         summary={projectHomeSummary}
         saveStatus={saveStatus}
         onRetrySave={() => triggerAutosave(true)}
-        onNavigate={destination => { void navigate(destination) }}
+        onNavigate={destination => {
+          if (destination === 'create' || destination === 'branding') openManagement(destination)
+          else void navigate(destination)
+        }}
         onIssue={handleProjectHomeIssue}
       />
-      case 'history': return projectId ? <ProjectHistoryPanel
+      case 'history': return management?.selectedProjectId === 'all'
+        ? <AllProjectsHistory projects={managementProjects} onSelectProject={id => { void switchManagementProject(id) }} />
+        : projectId && (!management || management.selectedProjectId === projectId) ? <ProjectHistoryPanel key={projectId}
         projectId={projectId}
         currentToc={appToc}
-        onBack={() => { void navigate(historyReturnTo) }}
+        backLabel={management?.origin === 'home' ? 'Back to Projects' : 'Back to project'}
+        onBack={() => { if (management) void closeManagement(); else void navigate(historyReturnTo) }}
         onCreateCheckpoint={createProjectCheckpoint}
         listCheckpoints={projectRepository.listProjectCheckpoints}
         getCheckpointRecord={projectRepository.getProjectCheckpointRecord}
         verifyCheckpoint={projectRepository.verifyProjectCheckpoint}
-      /> : <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
-      case 'create':    return (projectId ? !access.project?.write : !access.workspace.create)
+      /> : <p className="p-6 text-sm text-[#686879]">Select a project to view its history.</p>
+      case 'create':    return management && !management.selectedProjectId
+        ? <p className="p-6 text-sm text-[#686879]">Select a project to edit its settings.</p>
+        : (projectId ? !access.project?.write : !access.workspace.create)
         ? <div className="flex-1 overflow-auto p-6" role="alert">
             <h1 className="text-lg font-semibold">{projectId ? 'Project Settings' : 'New project'} unavailable</h1>
             <p className="mt-2 text-sm">{projectId ? 'Your current workspace access does not allow edits to this project.' : 'Your current workspace access does not allow creating projects.'}</p>
             <button type="button" onClick={() => { void navigate('administration') }} className="mt-4 rounded-md border border-[#D8D5CF] px-3 py-2 text-sm">Open Administration</button>
           </div>
-        : <CreateScreen onNav={navigate} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} onSettingsReturn={handleReturnFromProjectSettings} settingsMode={!!projectId} returnTo={settingsReturnTo} />
-      case 'branding':  return <BrandingScreen onNav={navigate} returnTo={prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
+        : <CreateScreen key={projectId ?? 'new'} onNav={s => { if (management && s === management.returnScreen) void closeManagement(); else void navigate(s) }} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} onSettingsReturn={management ? closeManagement : handleReturnFromProjectSettings} settingsMode={!!projectId} settingsBackLabel={management?.origin === 'home' ? 'Back to Projects' : undefined} returnTo={management?.returnScreen ?? settingsReturnTo} />
+      case 'branding':  return management && !management.selectedProjectId
+        ? <p className="p-6 text-sm text-[#686879]">Select a project to configure Brand &amp; Output.</p>
+        : <BrandingScreen key={projectId ?? 'new'} onContinue={management ? () => { void openSelectedManagementProject('sources') } : undefined} onNav={s => {
+            if (management && s === 'create') openManagement('create')
+            else if (management && s === management.returnScreen) void closeManagement()
+            else if (management) void openSelectedManagementProject(s)
+            else void navigate(s)
+          }} returnTo={management?.returnScreen ?? prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
       case 'analysis':  return isDemoMode
         ? <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
@@ -19936,7 +20202,7 @@ export default function App() {
         const projection = publishProjection()
         return <PublishScreen onNav={navigate} projection={projection} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
       }
-      default:          return <DashboardScreen onNav={navigate} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
+      default:          return <DashboardScreen onNav={navigate} onManagement={openManagement} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
     }
   }
 
@@ -19957,16 +20223,24 @@ export default function App() {
   }
 
   return (
-    <ProjectRailActionsContext.Provider value={{ onHistory: openHistory, onAdministration: openAdministration, onDiagnostics: () => setDiagOpen(true) }}>
+    <ProjectRailActionsContext.Provider value={{ onHistory: openHistory, onProjectSettings: () => openManagement('create'), onBranding: () => openManagement('branding'), onAdministration: openAdministration, onDiagnostics: () => openManagement('diagnostics') }}>
     <AuthorSettingsPermissionContext.Provider value={getAdministrationAccess(getAccessContext(), projectId ? projectOwnershipRef.current : null).project?.write === true}>
     <div className="h-screen flex flex-col bg-[#F4F2EE] overflow-hidden">
       <TopBar
         screen={screen}
-        onNav={navigate}
+        onNav={s => {
+          if (s === 'create' && screen === 'dashboard') void startNewProject()
+          else if (management && s === 'dashboard') void closeManagement()
+          else if (management && !['history', 'create', 'branding', 'administration'].includes(s)) void closeManagement(s)
+          else void navigate(s)
+        }}
         onAdministration={openAdministration}
         projectName={displayName}
-        isProject={!!projectId}
-        saveStatus={projectId ? saveStatus : undefined}
+        isProject={!!projectId && (!management || management.origin === 'project')}
+        managementTitle={management?.origin === 'home' && management.destination !== 'diagnostics'
+          ? ({ history: 'History', create: 'Project Settings', branding: 'Brand & Output', administration: 'Administration' } as const)[management.destination]
+          : undefined}
+        saveStatus={projectId && (!management || management.selectedProjectId === projectId) ? saveStatus : undefined}
         onRetrySave={() => triggerAutosave(true)}
       />
       {appLoadError && (
@@ -19984,41 +20258,78 @@ export default function App() {
         </div>
       )}
       <main className="flex-1 flex overflow-hidden">
-        {projectId && !['dashboard', 'administration'].includes(screen) && screen !== 'studio' && (
+        {projectId && !['dashboard'].includes(screen) && (screen !== 'administration' || management?.origin === 'project') && screen !== 'studio' && (!management || management.origin === 'project') && (
           <ProjectModuleRail
             screen={screen}
-            onNav={navigate}
+            onNav={s => { if (management) void closeManagement(s); else void navigate(s) }}
             onHistory={openHistory}
+            onProjectSettings={() => openManagement('create')}
+            onBranding={() => openManagement('branding')}
             onAdministration={openAdministration}
-            onDiagnostics={() => setDiagOpen(true)}
+            onDiagnostics={() => openManagement('diagnostics')}
             canEditProjectSettings={getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true}
           />
         )}
-        {projectId && !['dashboard', 'administration'].includes(screen) && screen !== 'studio'
-          ? <div className="studio-project-stage">{renderScreen()}</div>
-          : renderScreen()}
+        <div className={projectId && screen !== 'dashboard' && (screen !== 'administration' || management?.origin === 'project') && screen !== 'studio' && (!management || management.origin === 'project')
+          ? 'studio-project-stage' : 'flex min-h-0 min-w-0 flex-1 flex-col'}>
+          {management && management.destination !== 'diagnostics' && (
+            <ManagementProjectPicker scope={management} projects={managementProjects} busy={managementBusy}
+              error={managementError} onSelect={id => { void switchManagementProject(id) }}
+              onBack={() => { void closeManagement() }} />
+          )}
+          {renderScreen()}
+        </div>
       </main>
-      {/* Project Diagnostics modal — Settings → Project Diagnostics */}
+      {/* The same diagnostic rows serve the selected project from either entry point. */}
       {diagOpen && (
-        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50" onClick={() => setDiagOpen(false)}>
+        <DiagnosticsStatusContext.Provider value={diagnosticsStatus}>
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50" onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }}>
           <div className="bg-white rounded-2xl shadow-2xl border border-[#E2DED7] w-[520px] max-h-[80vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-[15px] font-semibold text-[#111218]">Project Pipeline Diagnostics</h2>
                 <p className="text-[11px] text-[#9898AB] mt-0.5">Internal state audit — not visible to end users</p>
               </div>
-              <button onClick={() => setDiagOpen(false)} className="text-[#9898AB] hover:text-[#6B6B7E] text-[18px]">✕</button>
+              <button onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }} className="text-[#9898AB] hover:text-[#6B6B7E] text-[18px]">✕</button>
             </div>
-            <div className="space-y-3">
+            {management?.destination === 'diagnostics' &&
+              <ManagementProjectPicker scope={management} projects={managementProjects} busy={managementBusy}
+                error={managementError} onSelect={id => { void switchManagementProject(id) }}
+                onBack={() => { void closeManagement() }} />}
+            {management?.destination === 'diagnostics' && management.selectedProjectId !== 'all' &&
+              <div className="mt-3 flex flex-wrap gap-3">
+                <label className="text-[11px]">Component <select aria-label="Diagnostic component" value={diagnosticsComponent}
+                  onChange={event => setDiagnosticsComponent(event.target.value)} className="ml-2 rounded border p-1">
+                  {['all', 'Project', 'Theme & Style', 'Templates', 'Sources', 'Analysis', 'TOC', 'Content', 'Review'].map(item =>
+                    <option key={item} value={item}>{item === 'all' ? 'All components' : item}</option>)}
+                </select></label>
+                <label className="text-[11px]">Status <select aria-label="Diagnostic status" value={diagnosticsStatus}
+                  onChange={event => setDiagnosticsStatus(event.target.value as typeof diagnosticsStatus)} className="ml-2 rounded border p-1">
+                  <option value="all">All statuses</option><option value="ok">OK</option><option value="warn">Warning</option>
+                  <option value="error">Error</option><option value="info">Info</option>
+                </select></label>
+              </div>}
+            {management?.destination === 'diagnostics' && management.selectedProjectId === 'all'
+              ? <div className="mt-4 space-y-2" data-testid="all-projects-diagnostics">
+                  <p className="text-[12px] text-[#686879]">Select a project to inspect its pipeline diagnostics.</p>
+                  {managementProjects.map(project => <button type="button" key={project.projectId}
+                    onClick={() => { void switchManagementProject(project.projectId) }}
+                    className="block w-full rounded-lg border border-[#E2DED7] px-3 py-2 text-left text-[12px] hover:bg-[#F8F7FF]">
+                    {project.projectName} · {project.documentType || 'Content project'}
+                  </button>)}
+                </div>
+              : management?.destination === 'diagnostics' && (!projectId || management.selectedProjectId !== projectId)
+                ? <p className="mt-4 text-sm">Select a project to inspect its diagnostics.</p>
+                : <div className="space-y-3">
               {/* Project */}
-              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Project' ? 'hidden' : ''}`}>
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Project</p>
                 <DiagRow label="Name" value={displayName} status={projectName ? 'ok' : 'warn'} warnText="No name set" />
                 <DiagRow label="Document Type" value={projectMeta.contentType || '—'} status={projectMeta.contentType ? 'ok' : 'warn'} />
                 <DiagRow label="Version" value={projectMeta.version || '—'} status={projectMeta.version ? 'ok' : 'info'} />
               </div>
               {/* Theme */}
-              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Theme & Style' ? 'hidden' : ''}`}>
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Theme & Style</p>
                 <DiagRow label="Active Theme ID" value={activeThemeId} status="ok" />
                 <DiagRow label="Active Theme" value={activeTheme?.name ?? '—'} status={activeTheme ? 'ok' : 'error'} />
@@ -20026,20 +20337,20 @@ export default function App() {
                 <DiagRow label="Variables" value={`${getThemeVars(activeThemeId).length} defined`} status={getThemeVars(activeThemeId).length > 0 ? 'ok' : 'info'} />
               </div>
               {/* Templates */}
-              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Templates' ? 'hidden' : ''}`}>
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Templates</p>
                 <DiagRow label="Page Layouts" value={`${pageLayouts.length} layouts`} status="ok" />
                 <DiagRow label="HTML Master Pages" value={`${htmlMasterPages.length} masters`} status="ok" />
               </div>
               {/* Sources */}
-              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Sources' ? 'hidden' : ''}`}>
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Sources</p>
                 <DiagRow label="Source Files" value={`${sources.length} files`} status={sources.length > 0 || isDemoMode ? 'ok' : 'info'} />
                 <DiagRow label="Sources Revision" value={String(sourcesRevision)} status="ok" />
                 {isDemoMode && <DiagRow label="Mode" value="Demo Mode active" status="warn" />}
               </div>
               {/* Analysis */}
-              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Analysis' ? 'hidden' : ''}`}>
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Analysis</p>
                 {isDemoMode ? (
                   <>
@@ -20062,7 +20373,7 @@ export default function App() {
                 )}
               </div>
               {/* TOC */}
-              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'TOC' ? 'hidden' : ''}`}>
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">TOC</p>
                 {(() => {
                   let tocStatus = 'Not Generated'
@@ -20081,24 +20392,25 @@ export default function App() {
                 })()}
               </div>
               {/* Content */}
-              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Content' ? 'hidden' : ''}`}>
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Content</p>
                 <DiagRow label="Content Revision" value={String(contentRevision)} status="ok" />
                 <DiagRow label="Doc Blocks (in memory)" value={`${sharedDocBlocksRef.current.length} blocks`} status="ok" />
               </div>
               {/* Review */}
-              <div className="bg-[#F9F8F6] rounded-xl p-3 space-y-1.5">
+              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Review' ? 'hidden' : ''}`}>
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Review</p>
                 <DiagRow label="Review Status" value={aiReviewDone ? 'Complete' : 'Not run'} status={aiReviewDone ? 'ok' : 'info'} />
                 <DiagRow label="Review Revision" value={reviewRevision < 0 ? 'Never' : String(reviewRevision)} status={reviewRevision >= 0 ? 'ok' : 'info'} />
                 <DiagRow label="Stale" value={reviewStaleContent ? `Yes — content at rev ${contentRevision}, reviewed at ${reviewRevision}` : 'No'} status={reviewStaleContent ? 'warn' : 'ok'} />
               </div>
-            </div>
+            </div>}
             <div className="mt-4 pt-3 border-t border-[#F4F2EE] flex justify-end">
-              <button onClick={() => setDiagOpen(false)} className="px-4 py-2 bg-[#5B5BD6] text-white text-[12px] font-medium rounded-xl hover:bg-[#4A4AC4]">Close</button>
+              <button onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }} className="px-4 py-2 bg-[#5B5BD6] text-white text-[12px] font-medium rounded-xl hover:bg-[#4A4AC4]">Close</button>
             </div>
           </div>
         </div>
+        </DiagnosticsStatusContext.Provider>
       )}
     </div>
     </AuthorSettingsPermissionContext.Provider>
@@ -20107,6 +20419,8 @@ export default function App() {
 }
 
 function DiagRow({ label, value, status, warnText }: { label: string; value: string; status: 'ok' | 'warn' | 'error' | 'info'; warnText?: string }) {
+  const filter = React.useContext(DiagnosticsStatusContext)
+  if (filter !== 'all' && status !== filter) return null
   const dot = status === 'ok' ? 'bg-[#22C55E]' : status === 'warn' ? 'bg-[#F59E0B]' : status === 'error' ? 'bg-[#EF4444]' : 'bg-[#9898AB]'
   return (
     <div className="flex items-start gap-2">

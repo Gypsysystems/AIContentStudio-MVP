@@ -37,3 +37,4 @@
 - [Async AI result boundary](async-ai-result-boundary.md) — worker execution must recheck signed connection readiness and sanitize persisted drafts separately from provider prompts.
 - [Playwright navigation timeouts](playwright-navigation-timeouts.md) — full UI suites can time out during dev-server page loads before assertions; distinguish this from feature failures.
 - [GitHub connector sync](github-connector-sync.md) — an added GitHub connection can write through its proxy even when the HTTPS git remote rejects push authentication.
+- [Management scope and origin](management-scope-origin.md) — selecting a project in management does not redefine where Back returns; explicit Continue can enter the selected project.

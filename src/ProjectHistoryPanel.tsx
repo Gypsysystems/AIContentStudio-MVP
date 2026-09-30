@@ -21,6 +21,7 @@ export type ProjectHistoryPanelProps = {
   projectId: string
   currentToc: unknown[]
   onBack: () => void
+  backLabel?: string
   onCreateCheckpoint: (reason: string) => Promise<ProjectCheckpointSummary>
   listCheckpoints: (projectId: string) => Promise<ProjectCheckpointSummary[]>
   getCheckpointRecord: (projectId: string, checkpointId: string) => Promise<ProjectCheckpoint | null>
@@ -284,7 +285,7 @@ function CheckpointDetailView({ checkpoint, fullVerification, changes, changesLo
 }
 
 export function ProjectHistoryPanel({
-  projectId, currentToc, onBack, onCreateCheckpoint, listCheckpoints, getCheckpointRecord, verifyCheckpoint,
+  projectId, currentToc, onBack, backLabel = 'Back to project', onCreateCheckpoint, listCheckpoints, getCheckpointRecord, verifyCheckpoint,
 }: ProjectHistoryPanelProps) {
   const [checkpoints, setCheckpoints] = useState<ProjectCheckpointSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -510,7 +511,7 @@ export function ProjectHistoryPanel({
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
         <div>
           <button type="button" onClick={onBack} className="mb-3 rounded text-[12px] font-medium text-[#5958B8] hover:text-[#38378E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
-            <span aria-hidden="true">← </span>Back to project
+            <span aria-hidden="true">← </span>{backLabel}
           </button>
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#777786]">Project record</p>
           <h1 id="project-history-title" className="mt-1 text-2xl font-semibold tracking-tight text-[#171722]">History</h1>
