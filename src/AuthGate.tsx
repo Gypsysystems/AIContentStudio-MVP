@@ -20,6 +20,9 @@ type CloudAccount = {
 }
 
 const CloudAccountContext = createContext<CloudAccount | null>(null)
+const CONNECTION_ERROR = 'Unable to connect. Try again shortly.'
+const CREDENTIAL_ERROR = 'Incorrect email or password.'
+const INACTIVE_ERROR = 'Your account is inactive. Contact an administrator.'
 
 export function useCloudAccount(): CloudAccount | null {
   return useContext(CloudAccountContext)
@@ -41,10 +44,9 @@ async function authRequest(action: 'session' | 'login' | 'logout' | 'refresh',
 }
 
 function sessionState(status: number, body: Record<string, unknown>): AuthState {
-  if (status === 503) return { kind: 'unavailable', message: String(body.error ?? 'Authentication is not configured.') }
-  if (body.code === 'LOCAL_DEV_PRIVATE_ONLY')
-    return { kind: 'unavailable', message: 'Local development access is limited to loopback. Configure Supabase sign-in for a hosted preview.' }
-  if (status === 403) return { kind: 'signed-out', message: 'Your workspace membership is inactive. Contact a workspace administrator.' }
+  if (status === 503 || body.code === 'LOCAL_DEV_PRIVATE_ONLY')
+    return { kind: 'unavailable', message: CONNECTION_ERROR }
+  if (status === 403) return { kind: 'signed-out', message: INACTIVE_ERROR }
   if (status === 200 && body.authenticated === true) {
     if (body.mode === 'local-dev') return { kind: 'signed-in', mode: 'local-dev' }
     if (body.mode === 'supabase'
@@ -62,9 +64,10 @@ function sessionState(status: number, body: Record<string, unknown>): AuthState 
         organizationName: body.activeOrganizationName,
         workspaceName: body.activeWorkspaceName,
       }
-    return { kind: 'unavailable', message: 'The authentication server did not return a valid workspace.' }
+    return { kind: 'unavailable', message: CONNECTION_ERROR }
   }
-  return { kind: 'signed-out', message: status === 401 ? 'Sign in to continue.' : undefined }
+  if (status === 401 || status === 200) return { kind: 'signed-out' }
+  return { kind: 'unavailable', message: CONNECTION_ERROR }
 }
 
 export default function AuthGate({ children }: { children: ReactNode }) {
@@ -111,7 +114,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       }
       setState(next)
     } catch {
-      setState({ kind: 'unavailable', message: 'Authentication server is unavailable. Local project changes are paused.' })
+      setState({ kind: 'unavailable', message: CONNECTION_ERROR })
     }
   }, [])
 
@@ -123,19 +126,20 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   async function login(event: FormEvent) {
     event.preventDefault()
+    setState({ kind: 'signed-out' })
     setBusy(true)
     try {
       const { status, body } = await authRequest('login', { email, password })
       if (status === 200) {
         setPassword('')
         await checkSession()
+      } else if (status === 400 || status === 401 || status === 422) {
+        setState({ kind: 'signed-out', message: CREDENTIAL_ERROR })
       } else {
         setState(sessionState(status, body))
-        if (status !== 403 && status !== 503)
-          setState({ kind: 'signed-out', message: String(body.error ?? 'Sign-in failed.') })
       }
     } catch {
-      setState({ kind: 'unavailable', message: 'Authentication server is unavailable.' })
+      setState({ kind: 'unavailable', message: CONNECTION_ERROR })
     } finally {
       setBusy(false)
     }
@@ -150,10 +154,10 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         cloudAppReady.current = false
         setCloudProjectMode(false)
         setCloudAuthSession(null)
-        setState({ kind: 'signed-out', message: 'Signed out.' })
+        setState({ kind: 'signed-out' })
       }
     } catch {
-      setState({ kind: 'unavailable', message: 'Could not reach the authentication server to sign out.' })
+      setState({ kind: 'unavailable', message: CONNECTION_ERROR })
     } finally {
       setBusy(false)
     }
@@ -187,8 +191,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
    return <main className="min-h-screen bg-[#F7F5F0] flex items-center justify-center p-5">
     <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-7 shadow-sm">
        <h1><img src="/brand/header-logo.svg" alt="AI Content Studio" className="h-7 w-auto max-w-full" /></h1>
-      <p className="mt-2 text-sm text-gray-600">{state.kind === 'unavailable'
-        ? 'Cloud sign-in is not available yet.' : 'Sign in to your workspace.'}</p>
+       <p className="mt-2 text-sm text-gray-600">Sign in to your workspace.</p>
       {state.message && <p role="alert" className="mt-4 text-sm text-red-700">{state.message}</p>}
       {state.kind === 'signed-out' && <form onSubmit={event => { void login(event) }} className="mt-6 space-y-4">
         <label className="block text-sm">Email
@@ -204,8 +207,6 @@ export default function AuthGate({ children }: { children: ReactNode }) {
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>}
-      <button type="button" onClick={() => { setState({ kind: 'loading' }); void checkSession() }}
-         className="mt-4 text-xs font-medium text-[#B94E09]">Retry session check</button>
     </div>
   </main>
 }
