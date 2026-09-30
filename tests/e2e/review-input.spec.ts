@@ -385,6 +385,8 @@ test('persists and reloads real Review inputs and exposes stable topic and block
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Review', exact: true }).click()
   await expect(page.getByTestId('review-input-diagnostics')).toBeVisible()
+  await expect(page.getByTestId('review-input-topics')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Input details' }).click()
   await page.getByTestId('review-input-topics').locator('summary').click()
   await expect(page.getByTestId('review-input-topics')).toContainText('topic-persisted')
   await expect(page.getByTestId('review-input-topics')).toContainText('block-persisted')
@@ -399,6 +401,7 @@ test('persists and reloads real Review inputs and exposes stable topic and block
   await page.reload()
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Review', exact: true }).click()
+  await page.getByRole('button', { name: 'Input details' }).click()
   await page.waitForTimeout(1_500)
   await expect.poll(async () =>
     (await readProject(page, projectName)).reviewModel.inputSnapshot?.provenance.contentFingerprint,

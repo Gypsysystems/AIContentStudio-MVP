@@ -14800,18 +14800,11 @@ function AiReviewControls({
   }
   const canRun = !!selectedWorkflow && readiness?.status === 'ready' && !checking && !running
   return (
-    <section data-testid="ai-review-controls" className="mb-5 rounded-xl border border-[#C8C4EE] bg-[#F7F6FF] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-[12px] font-semibold text-[#403B85]">AI Review · advisory only</p>
-          <p className="mt-1 max-w-2xl text-[11px] leading-relaxed text-[#626277]">
-            AI observations are grounded in this project’s current Review inputs. Verify each finding against its cited evidence; AI findings never edit content.
-          </p>
-        </div>
-        <span className="rounded-full border border-[#D8D5F4] bg-white px-2.5 py-1 text-[9px] font-semibold uppercase tracking-wide text-[#514188]">
-          Separate from deterministic Review
-        </span>
-      </div>
+    <details data-testid="ai-review-controls" className="mb-4 rounded-lg border border-[#D8D5F4] bg-[#F7F6FF] px-3 py-2">
+      <summary className="cursor-pointer text-[12px] font-semibold text-[#403B85]">AI Review · advisory only <span className="font-normal">— optional</span></summary>
+      <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-[#626277]">
+        Separate from deterministic Review. Verify findings against cited evidence; AI findings never edit content or clear required blockers.
+      </p>
       <label className="mt-3 block text-[10px] font-medium text-[#575766]">
         Published AI Review workflow
         <select
@@ -14862,7 +14855,7 @@ function AiReviewControls({
         </button>
       )}
       {running && <p role="status" data-testid="ai-review-running" className="mt-2 text-[10px] text-[#514188]">Running grounded AI Review… Keep this project open; current content must remain unchanged.</p>}
-    </section>
+    </details>
   )
 }
 
@@ -14899,6 +14892,7 @@ function RealReviewFindingsPanel({
 }) {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [statusFilter, setStatusFilter] = useState('active')
+  const [findingSearch, setFindingSearch] = useState('')
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null)
   const latestRunId = reviewModel.runs[reviewModel.runs.length - 1]?.reviewRunId ?? reviewModel.activeReviewRunId
   const [viewRunId, setViewRunId] = useState<string | null>(latestRunId)
@@ -14924,27 +14918,36 @@ function RealReviewFindingsPanel({
 
   const selectedRunId = viewRunId ?? reviewModel.activeReviewRunId
   const run = reviewModel.runs.find(item => item.reviewRunId === selectedRunId) ?? null
-  const runFindings = run
+  const findingById = useMemo(() => new Map(reviewModel.findings.map(item => [item.findingId, item])), [reviewModel.findings])
+  const topicByStableId = useMemo(() => new Map(topics.map(item => [stableAuthorTopicId(item), item.title])), [topics])
+  const runFindings = useMemo(() => run
     ? run.findingIds.flatMap(id => {
-        const finding = reviewModel.findings.find(item => item.findingId === id)
+        const finding = findingById.get(id)
         return finding ? [finding] : []
       })
-    : []
+    : [], [run, findingById])
   const deterministicRun = reviewModel.runs.find(item => item.reviewRunId === reviewModel.activeReviewRunId) ?? null
-  const deterministicFindings = deterministicRun
+  const deterministicFindings = useMemo(() => deterministicRun
     ? deterministicRun.findingIds.flatMap(id => {
-        const finding = reviewModel.findings.find(item => item.findingId === id)
+        const finding = findingById.get(id)
         return finding ? [finding] : []
       })
-    : []
-  const categories = ['All', 'Unsupported Claim', 'Source Gap', 'Conflict', 'Terminology', 'Grammar', 'Spelling', 'Writing Style', 'Formatting / Standards']
-  const visibleFindings = runFindings.filter(finding =>
+    : [], [deterministicRun, findingById])
+  const categories = useMemo(() => ['All', ...new Set(runFindings.map(finding => finding.category))], [runFindings])
+  const visibleFindings = useMemo(() => runFindings.filter(finding =>
     (categoryFilter === 'All' || finding.category === categoryFilter)
     && (statusFilter === 'all'
       || (statusFilter === 'active'
         ? finding.status === 'open' || finding.status === 'in-review'
-        : finding.status === statusFilter)))
-  const selectedFinding = reviewModel.findings.find(item => item.findingId === selectedFindingId) ?? null
+        : finding.status === statusFilter))
+    && (!findingSearch.trim() || [
+      finding.category, finding.originalText, finding.rationale, finding.topicId,
+      finding.topicId ? topicByStableId.get(finding.topicId) : null,
+      ...finding.evidenceReferences.map(reference => reference.sourceFileName),
+    ].some(value => value?.toLocaleLowerCase().includes(findingSearch.trim().toLocaleLowerCase())))), [runFindings, categoryFilter, statusFilter, findingSearch, topicByStableId])
+  const selectedFinding = selectedFindingId ? findingById.get(selectedFindingId) ?? null : null
+  const activeCount = runFindings.filter(finding => finding.status === 'open' || finding.status === 'in-review').length
+  const isAiRun = (run as AiReviewRunUi | null)?.method === 'ai-grounded-review-v1'
   const categoryClass: Record<string, string> = {
     'Unsupported Claim': 'bg-[#FEF3C7] text-[#92400E]',
     'Source Gap': 'bg-[#FEE2E2] text-[#991B1B]',
@@ -14974,9 +14977,9 @@ function RealReviewFindingsPanel({
     <div data-testid="real-review-findings">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-[#111218]">Grounded Review</h2>
+          <h2 className="text-lg font-semibold text-[#111218]">Findings</h2>
           <p className="mt-1 text-[13px] text-[#6B6B7E]">
-            Grounded evidence, terminology, language, writing, and explicit formatting checks for this project.
+            {run ? `${activeCount} open or in review · ${runFindings.length} total${isAiRun ? ' · AI advisory only' : ' · deterministic Review'}` : 'Run a grounded review to see what needs attention.'}
           </p>
         </div>
         <button
@@ -15009,12 +15012,12 @@ function RealReviewFindingsPanel({
         </div>
       )}
       {runError && (
-        <div className="mb-5 rounded-xl border border-[#FECACA] bg-[#FEF2F2] p-4 text-[12px] text-[#991B1B]">
-          {runError}
+        <div role="alert" className="mb-5 rounded-xl border border-[#FECACA] bg-[#FEF2F2] p-4 text-[12px] text-[#991B1B]">
+          Review could not complete. Check the inputs and try again.
         </div>
       )}
       {actionError && (
-        <p data-testid="review-action-error" role="alert" className="mb-5 rounded-xl border border-[#FECACA] bg-[#FEF2F2] p-4 text-[12px] text-[#991B1B]">{actionError}</p>
+        <p data-testid="review-action-error" role="alert" className="mb-5 rounded-xl border border-[#FECACA] bg-[#FEF2F2] p-4 text-[12px] text-[#991B1B]">This finding could not be updated. Please retry.</p>
       )}
 
       {reviewModel.runs.length === 0 ? (
@@ -15024,14 +15027,21 @@ function RealReviewFindingsPanel({
         </div>
       ) : (
         <>
-          <div className="mb-4 grid gap-3 rounded-xl border border-[#E2DED7] bg-[#F9F8F6] p-3 sm:grid-cols-3">
+          <div className="mb-4 flex flex-wrap items-end gap-2 rounded-lg border border-[#E2DED7] bg-[#F9F8F6] p-3">
             <label className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">
               Review run
               <select
                 data-testid="review-run-filter"
                 value={selectedRunId ?? ''}
-                onChange={event => setViewRunId(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
+                onChange={event => {
+                  const nextRun = reviewModel.runs.find(item => item.reviewRunId === event.target.value)
+                  if (categoryFilter !== 'All' && !nextRun?.findingIds.some(id => findingById.get(id)?.category === categoryFilter)) {
+                    setCategoryFilter('All')
+                  }
+                  setViewRunId(event.target.value)
+                  setSelectedFindingId(null)
+                }}
+                className="mt-1 block w-full max-w-[220px] rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
               >
                 {[...reviewModel.runs].reverse().map((item, index) => (
                   <option key={item.reviewRunId} value={item.reviewRunId}>
@@ -15050,7 +15060,7 @@ function RealReviewFindingsPanel({
                 data-testid="review-category-filter"
                 value={categoryFilter}
                 onChange={event => setCategoryFilter(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
+                className="mt-1 block w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
               >
                 {categories.map(category => <option key={category}>{category}</option>)}
               </select>
@@ -15061,7 +15071,7 @@ function RealReviewFindingsPanel({
                 data-testid="review-status-filter"
                 value={statusFilter}
                 onChange={event => setStatusFilter(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
+                className="mt-1 block w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]"
               >
                 <option value="active">Open / In Review</option>
                 <option value="all">All</option>
@@ -15071,10 +15081,16 @@ function RealReviewFindingsPanel({
                 <option value="retired">Retired</option>
               </select>
             </label>
+            <label className="min-w-[170px] flex-1 text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">
+              Search findings
+              <input type="search" aria-label="Search findings" value={findingSearch} onChange={event => setFindingSearch(event.target.value)} placeholder="Topic, text, or source" className="mt-1 block w-full rounded-lg border border-[#E2DED7] bg-white px-2 py-1.5 text-[11px] normal-case text-[#3D3D4E]" />
+            </label>
           </div>
 
           {run && (
-            <div data-testid="review-run-provenance" className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-[#9898AB]">
+            <details data-testid="review-run-provenance" className="mb-4 text-[10px] text-[#6B6B7E]">
+              <summary className="cursor-pointer">Run details · {run.findingIds.length} findings {isAiRun ? '· AI advisory only' : '· deterministic'}</summary>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
               <span className="font-mono">{run.reviewRunId}</span>
               <span>Snapshot <span className="font-mono">{run.inputSnapshotId}</span></span>
               <span>Content revision {run.inputProvenance.contentRevision}</span>
@@ -15091,13 +15107,14 @@ function RealReviewFindingsPanel({
                 )}
               </>
             )}
-            </div>
+              </div>
+            </details>
           )}
 
           <div className="space-y-3">
             {visibleFindings.length === 0 && (
               <div className="rounded-xl border border-[#E2DED7] bg-white p-6 text-center text-[12px] text-[#9898AB]">
-                No findings match these filters.
+                {runFindings.length === 0 ? 'No findings in this run.' : activeCount === 0 && statusFilter === 'active' && !findingSearch ? 'No open findings. Review complete for this run.' : 'No findings match these filters.'}
               </div>
             )}
             {visibleFindings.map(finding => {
@@ -15107,33 +15124,35 @@ function RealReviewFindingsPanel({
               const findingRun = reviewModel.runs.find(item => item.reviewRunId === finding.reviewRunId) as AiReviewRunUi | undefined
               const isAiFinding = findingRun?.method === 'ai-grounded-review-v1'
               return (
-              <article id={`review-finding-${finding.findingId}`} tabIndex={-1} data-testid="grounded-review-finding" key={finding.findingId} className="rounded-xl border border-[#E2DED7] bg-white p-4 outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
+              <article id={`review-finding-${finding.findingId}`} tabIndex={-1} data-testid="grounded-review-finding" data-status={finding.status} key={finding.findingId} className={`rounded-xl border bg-white p-4 outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] ${['resolved', 'dismissed', 'rejected', 'retired'].includes(finding.status) ? 'border-[#E2DED7] bg-[#FCFBFA] text-[#6B6B7E]' : 'border-[#D8D5CF]'}`}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-2 flex flex-wrap items-center gap-1.5">
                       <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${categoryClass[finding.category] ?? 'bg-[#F4F2EE] text-[#6B6B7E]'}`}>
                         {finding.category}
                       </span>
                       <span className="text-[10px] font-semibold uppercase text-[#6B6B7E]">{finding.severity}</span>
-                      <span className="text-[10px] text-[#9898AB]">{finding.required ? 'Required' : 'Optional'}</span>
-                      <span className="text-[10px] text-[#9898AB]">{finding.status}</span>
+                      {finding.required && <span className="text-[10px] font-medium text-[#92400E]">Required</span>}
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${finding.status === 'open' ? 'bg-[#FEF3C7] text-[#92400E]' : finding.status === 'in-review' ? 'bg-[#EEEEFF] text-[#4D4DC2]' : 'bg-[#F4F2EE] text-[#6B6B7E]'}`}>{finding.status}</span>
                       {isAiFinding && <span data-testid="ai-review-advisory-badge" className="rounded bg-[#EEEEFF] px-1.5 py-0.5 text-[10px] font-semibold text-[#514188]">AI advisory · verify evidence</span>}
                       {finding.freshness.status === 'stale' && <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-semibold text-[#92400E]">Stale history</span>}
                       {finding.reviewRunId !== reviewModel.activeReviewRunId && <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-semibold text-[#92400E]">Earlier run · read-only</span>}
                     </div>
-                    <p className="text-[13px] font-medium text-[#111218]">{finding.originalText ?? finding.rationale}</p>
-                    <p className="mt-1 font-mono text-[10px] text-[#9898AB]">
-                      {finding.topicId ?? 'project'}{finding.blockId ? ` / ${finding.blockId}` : ''} · {finding.findingId}
+                    <p className="text-[13px] font-medium text-[#111218] break-words">{finding.originalText ?? finding.rationale}</p>
+                    {finding.originalText && <p className="mt-1 text-[11px] text-[#6B6B7E] break-words">{finding.rationale}</p>}
+                    <p className="mt-2 text-[11px] text-[#6B6B7E] break-words">
+                      {finding.topicId ? topicByStableId.get(finding.topicId) ?? finding.topicId : 'Project context'}
+                      {finding.evidenceReferences[0] && <> · Source: {finding.evidenceReferences[0].sourceFileName}</>}
                     </p>
                   </div>
-                  <div className="shrink-0 flex flex-wrap gap-2 justify-end">
+                   <div className="flex flex-wrap gap-2">
                     {finding.topicId && finding.blockId && (
                       <button
                         type="button"
                         data-testid="review-open-in-author"
                         disabled={navigation.status !== 'ready'}
                         onClick={() => { void onOpenFinding(finding).then(setActionError) }}
-                        className="rounded-lg bg-[#5B5BD6] px-3 py-1.5 text-[11px] font-medium text-white hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-40"
+                       className="rounded-lg border border-[#D8D5CF] px-3 py-1.5 text-[11px] font-medium text-[#4D4DC2] hover:bg-[#EEEEFF] disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Open in Author
                       </button>
@@ -15141,6 +15160,7 @@ function RealReviewFindingsPanel({
                     <button
                       type="button"
                       onClick={() => setSelectedFindingId(selectedFindingId === finding.findingId ? null : finding.findingId)}
+                      aria-expanded={selectedFindingId === finding.findingId}
                       className="rounded-lg border border-[#E2DED7] px-3 py-1.5 text-[11px] font-medium text-[#5B5BD6] hover:bg-[#EEEEFF]"
                     >
                       {selectedFindingId === finding.findingId ? 'Close' : 'Inspect'}
@@ -15164,7 +15184,9 @@ function RealReviewFindingsPanel({
                     )}
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Rationale</p>
                     <p className="mt-1 text-[12px] text-[#3D3D4E]">{selectedFinding.rationale}</p>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <details className="mt-3 rounded-lg border border-[#E2DED7] bg-[#F9F8F6] p-3 text-[11px] text-[#6B6B7E]">
+                      <summary className="cursor-pointer font-medium text-[#4D4DC2]">Technical references</summary>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       <div className="rounded-lg bg-[#F9F8F6] p-3 text-[10px] text-[#6B6B7E]">
                         <p><span className="font-semibold">Finding key:</span> <span className="font-mono">{selectedFinding.findingKey}</span></p>
                         <p className="mt-1"><span className="font-semibold">Claim fingerprint:</span> <span className="font-mono">{selectedFinding.claimFingerprint}</span></p>
@@ -15176,10 +15198,11 @@ function RealReviewFindingsPanel({
                         <p className="mt-1"><span className="font-semibold">Created from content revision:</span> {selectedFinding.inputProvenance.contentRevision}</p>
                       </div>
                     </div>
+                    </details>
                     <div className="mt-3">
                       <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9898AB]">Supporting evidence</p>
                       {selectedFinding.evidenceReferences.length === 0 ? (
-                        <p className="mt-1 text-[11px] text-[#9898AB]">No near-match evidence exists for this unsupported claim.</p>
+                        <p className="mt-1 text-[11px] text-[#6B6B7E]">{selectedFinding.category === 'Unsupported Claim' ? 'No near-match evidence exists for this unsupported claim.' : 'No supporting evidence is cited for this finding.'}</p>
                       ) : (
                         <div className="mt-2 space-y-2">
                           {selectedFinding.evidenceReferences.map(reference => (
@@ -15390,6 +15413,7 @@ function QualityScreen({
   const [visualType, setVisualType] = useState('screenshot')
   const [visualGenerated, setVisualGenerated] = useState(false)
   const [sourceAdded, setSourceAdded] = useState(false)
+  const [inputDetailsOpen, setInputDetailsOpen] = useState(false)
 
   const getStatus = (id: number): FindingStatus => findingStatuses[id] ?? 'open'
 
@@ -15680,9 +15704,8 @@ function QualityScreen({
     if (isDemoMode) return null
     if (!reviewInputSnapshot) {
       return (
-        <section data-testid="review-input-diagnostics" className="mb-6 rounded-xl border border-[#E2DED7] bg-white p-5">
-          <p className="text-[13px] font-semibold text-[#111218]">Review inputs</p>
-          <p className="mt-1 text-[12px] text-[#6B6B7E]">Preparing the project input snapshot…</p>
+        <section data-testid="review-input-diagnostics" className="mb-4 rounded-lg border border-[#E2DED7] bg-white px-4 py-3" role="status">
+          <p className="text-[12px] text-[#6B6B7E]">Preparing Review inputs…</p>
         </section>
       )
     }
@@ -15699,20 +15722,30 @@ function QualityScreen({
         ? 'bg-[#FEF3C7] text-[#92400E]'
         : 'bg-[#FEE2E2] text-[#B91C1C]'
     return (
-      <section data-testid="review-input-diagnostics" className="mb-6 rounded-xl border border-[#E2DED7] bg-white p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-[13px] font-semibold text-[#111218]">Review input snapshot</p>
-            <p className="mt-0.5 text-[11px] text-[#9898AB]">
-              Read-only · {snapshot.snapshotId} · {snapshot.contentType} · {snapshot.language}
-            </p>
-          </div>
-          <span data-testid="review-input-readiness" className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${readinessClass}`}>
-            {readinessLabel}
-          </span>
+      <section data-testid="review-input-diagnostics" className="mb-4 rounded-lg border border-[#E2DED7] bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-[12px] font-semibold text-[#111218]">Review inputs</span>
+          <span data-testid="review-input-readiness" className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${readinessClass}`}>{readinessLabel}</span>
+          <button type="button" aria-expanded={inputDetailsOpen} onClick={() => setInputDetailsOpen(value => !value)} className="ml-auto rounded px-2 py-1 text-[11px] font-medium text-[#4D4DC2] hover:bg-[#EEEEFF]">{inputDetailsOpen ? 'Hide input details' : 'Input details'}</button>
         </div>
-
-        <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">
+        {snapshot.issues.length > 0 && (
+          <div data-testid="review-input-issues" className="mt-3 space-y-1.5">
+            {snapshot.issues.map((issue, index) => (
+              <div key={`${issue.code}-${issue.topicId ?? issue.sourceId ?? index}`} className={`rounded-lg border px-3 py-2 text-[11px] ${
+                issue.severity === 'stale'
+                  ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
+                  : 'border-[#FECACA] bg-[#FEF2F2] text-[#991B1B]'
+              }`}>
+                <span className="font-semibold">{issue.severity === 'stale' ? 'Stale' : 'Missing'}:</span>{' '}
+                {issue.message}
+                {issue.topicId && <span className="ml-1 font-mono text-[10px]">({issue.topicId})</span>}
+              </div>
+            ))}
+          </div>
+        )}
+        {inputDetailsOpen && <>
+          <p className="mt-3 text-[11px] text-[#9898AB]">Read-only · {snapshot.snapshotId} · {snapshot.contentType} · {snapshot.language}</p>
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {[
             ['Topics', snapshot.topics.length],
             ['Blocks', blockCount],
@@ -15727,22 +15760,6 @@ function QualityScreen({
             </div>
           ))}
         </div>
-
-        {snapshot.issues.length > 0 && (
-          <div data-testid="review-input-issues" className="mt-4 space-y-1.5">
-            {snapshot.issues.map((issue, index) => (
-              <div key={`${issue.code}-${issue.topicId ?? issue.sourceId ?? index}`} className={`rounded-lg border px-3 py-2 text-[11px] ${
-                issue.severity === 'stale'
-                  ? 'border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]'
-                  : 'border-[#FECACA] bg-[#FEF2F2] text-[#991B1B]'
-              }`}>
-                <span className="font-semibold">{issue.severity === 'stale' ? 'Stale' : 'Missing'}:</span>{' '}
-                {issue.message}
-                {issue.topicId && <span className="ml-1 font-mono text-[10px]">({issue.topicId})</span>}
-              </div>
-            ))}
-          </div>
-        )}
 
         <div className="mt-4 space-y-2">
           <details data-testid="review-input-topics" className="rounded-lg border border-[#E2DED7] bg-[#FCFBFA] px-3 py-2">
@@ -15808,6 +15825,7 @@ function QualityScreen({
             </div>
           </details>
         </div>
+        </>}
       </section>
     )
   }
@@ -15940,7 +15958,7 @@ function QualityScreen({
                       <p className="text-[13px] text-[#111218] mb-2">{f.text}</p>
                       {!isDone && (
                         <div className="flex items-center gap-2 flex-wrap">
-                          <button onClick={() => activeWorkflow === f.id ? closeWorkflow() : openWorkflow(f.id)} className="text-[12px] font-medium text-white bg-[#5B5BD6] hover:bg-[#4A4AC4] px-3 py-1 rounded-lg transition-colors">
+                          <button type="button" aria-expanded={activeWorkflow === f.id} onClick={() => activeWorkflow === f.id ? closeWorkflow() : openWorkflow(f.id)} className="text-[12px] font-medium text-white bg-[#5B5BD6] hover:bg-[#4A4AC4] px-3 py-1 rounded-lg transition-colors">
                             Fix
                           </button>
                           {isInReview && <span className="text-[11px] font-medium text-[#D97706] bg-[#FEF3C7] px-2 py-0.5 rounded">In Review</span>}
@@ -15965,7 +15983,7 @@ function QualityScreen({
                     <div className={`border-t px-4 py-4 ${sevBg(f.severity)} ${sevBorder(f.severity)}`}>
                       <div className="flex items-center justify-between mb-3">
                         <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider">{f.category} · {f.section}</p>
-                        <button onClick={closeWorkflow} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
+                        <button type="button" aria-label="Close finding details" onClick={closeWorkflow} className="text-[#C8C6C0] hover:text-[#9898AB] transition-colors">
                           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
                         </button>
                       </div>
@@ -16047,16 +16065,13 @@ function QualityScreen({
 
   return (
     <div className="flex-1 overflow-auto bg-[#F4F2EE]">
-      <div className="max-w-3xl mx-auto w-full p-8 pb-20 fade-in">
+      <div className="max-w-5xl mx-auto w-full min-w-0 p-4 sm:p-6 pb-20 fade-in">
         {/* Page header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="mb-5">
           <div>
-            <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Quality Review</p>
-            <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">Review Pipeline</h1>
+            <h1 className="text-2xl font-semibold text-[#111218] tracking-tight">{isDemoMode ? 'Review' : 'Grounded Review'}</h1>
+            <p className="mt-1 text-[12px] text-[#6B6B7E]">Review findings and decide what needs action.</p>
           </div>
-          <button onClick={() => onNav('studio')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
-            Back to Editor
-          </button>
         </div>
 
         {reviewStaleContent && (
@@ -16067,9 +16082,9 @@ function QualityScreen({
           </div>
         )}
         {renderReviewInputDiagnostics()}
-        {renderStageStepper()}
+        {isDemoMode && renderStageStepper()}
 
-        <div className="bg-white rounded-2xl border border-[#E2DED7] p-6 shadow-sm">
+        <div className={isDemoMode ? 'rounded-2xl border border-[#E2DED7] bg-white p-4 sm:p-6' : 'min-w-0'}>
           {stage === 1 && renderStage1()}
           {stage === 2 && renderStage4()}
         </div>
@@ -16078,7 +16093,7 @@ function QualityScreen({
       {/* Dismiss confirmation dialog */}
       {dismissTarget !== null && (
         <div className="fixed inset-0 bg-black/25 z-50 flex items-center justify-center fade-in" onClick={() => setDismissTarget(null)}>
-          <div className="bg-white rounded-2xl popover-shadow max-w-sm w-full mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label="Dismiss finding" onKeyDown={event => { if (event.key === 'Escape') { setDismissTarget(null); setDismissReason('') } }} className="bg-white rounded-2xl popover-shadow max-w-sm w-full mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-[#E2DED7]">
               <p className="text-[13px] font-semibold text-[#111218]">Dismiss finding?</p>
               <p className="text-[12px] text-[#6B6B7E] mt-0.5">{QUALITY_FINDINGS.find(f => f.id === dismissTarget)?.category} · {QUALITY_FINDINGS.find(f => f.id === dismissTarget)?.section}</p>
