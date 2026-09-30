@@ -109,6 +109,15 @@ async function openSearch(page: Page) {
   return page.getByPlaceholder("Search extracted content…")
 }
 
+test("selecting the same source name twice in one upload does not add it twice", async ({ page }) => {
+  await createProjectAtSources(page, `Bulk Source Dedup ${Date.now()}`)
+  const file = { name: "one-source.md", mimeType: "text/markdown", buffer: Buffer.from("# Only one source\n\nEvidence for this project.") }
+  await page.locator('input[type="file"]').setInputFiles([file, file])
+  await expect(page.getByTestId("source-file-row")).toHaveCount(1)
+  await expect(page.getByText("Duplicate filename")).toBeVisible()
+  await expect(page.getByTestId("source-file-row").getByTestId("extraction-status")).toContainText("Extracted")
+})
+
 test("persists real extraction, structured blocks, and search results across reload", async ({ page }) => {
   test.setTimeout(60_000)
   const projectName = `Source Extraction ${Date.now()}`
@@ -241,6 +250,7 @@ test("removing a source cleans its persisted extraction, file bytes, and search 
   expect(before.project.sourceExtractions[fileId]?.extractedText).toContain(uniqueText)
   expect(before.storedFileIds).toContain(fileId)
 
+  await row.getByLabel("More actions for remove-me.txt").click()
   await row.getByRole("button", { name: "Remove remove-me.txt" }).click()
   await expect(page.getByTestId("source-file-row")).toHaveCount(0)
 

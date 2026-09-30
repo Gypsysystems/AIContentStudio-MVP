@@ -262,6 +262,48 @@ header.relative.z-30 .studio-header-mark { display: none; width: 28px; height: 2
 .studio-project-tile.is-active { border-color: #db8e53; }
 .studio-topbar-preview { border-color: #e2e4e8 !important; color: #4b5563 !important; }
 .studio-topbar-preview:hover { border-color: #f0c7a7 !important; background: #fff0e3 !important; color: #ad4e0d !important; }
+/* Sources and Structure share the project frame, but not its older purple-led panels. */
+.sources-workspace, .structure-workspace { color: #20242a; }
+.sources-workspace :is(button, summary, input, select, [tabindex]):focus-visible,
+.structure-workspace :is(button, summary, input, select, [tabindex]):focus-visible {
+  outline: 2px solid #ff7a1a !important;
+  outline-offset: 2px;
+}
+.sources-workspace [data-testid="source-file-row"] { background: #fff; }
+.sources-workspace [data-testid="source-file-row"] > div:first-child { min-width: 0; }
+.sources-workspace [data-testid="view-extracted-content"] { white-space: nowrap; }
+.sources-workspace [data-testid="evidence-index-panel"] { margin-top: 4px; }
+.sources-workspace [data-testid="evidence-index-panel"] [class*="bg-[#FAFAFE]"] { background: #faf9f7 !important; }
+.sources-workspace [data-testid="evidence-index-panel"] [class*="text-[#5B5BD6]"] { color: #b65311 !important; }
+.sources-workspace [data-testid="rebuild-evidence-index"] { border-color: #f0c7a7 !important; color: #b65311 !important; }
+.sources-workspace [data-testid="sources-next-step"] [data-testid="analyze-sources"]:not(:disabled),
+.structure-workspace [data-testid="analysis-generate-toc"]:not(:disabled),
+.structure-workspace [data-testid="generate-grounded-toc"]:not(:disabled),
+.structure-workspace [data-testid="commit-toc-proposal"]:not(:disabled),
+.structure-workspace [data-testid="confirm-toc-merge"] { background: #ff7a1a !important; color: #20242a !important; }
+.structure-workspace [data-testid="analysis-generate-toc"]:hover:not(:disabled),
+.structure-workspace [data-testid="generate-grounded-toc"]:hover:not(:disabled),
+.structure-workspace [data-testid="commit-toc-proposal"]:hover:not(:disabled) { background: #ffc857 !important; }
+.structure-workspace [data-testid="ai-toc-controls"] { border-color: #e2e4e8; background: #fbfaf7; }
+.structure-workspace [data-testid="generate-ai-toc"]:not(:disabled) { background: #20242a; }
+.structure-workspace [data-testid="ai-toc-readiness"] { border: 1px solid #ead8c8; background: #fff9f2; color: #8c430d; }
+.structure-workspace [data-testid="analysis-summary"],
+.structure-workspace [data-testid="analysis-next-step"],
+.structure-workspace [data-testid="real-toc-next-step"] { border-radius: 8px; padding: 9px 12px; }
+.structure-workspace .analysis-metrics > div { min-width: 0; padding: 10px 12px; }
+.structure-workspace .analysis-metrics p:last-child { font-size: 17px; line-height: 1.2; }
+.structure-workspace [data-testid="toc-proposal-topic"] { min-width: 0; }
+.structure-workspace [data-testid="toc-proposal-topic"] > span:nth-child(3) { min-width: 0; overflow-wrap: anywhere; }
+.structure-workspace .toc-topic-actions { margin-left: auto; }
+.structure-workspace .toc-topic-actions button { min-width: 22px; min-height: 28px; border-radius: 4px; }
+.structure-workspace .toc-topic-actions button:hover:not(:disabled) { background: #fff0e3; }
+.structure-workspace [data-testid="toc-topic-details"] { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .sources-workspace [data-testid="source-file-row"] [data-testid="view-extracted-content"] { margin-left: 44px; }
+  .sources-workspace [data-testid="source-file-row"] > div:first-child > details { margin-left: auto; }
+  .structure-workspace [data-testid="toc-proposal-topic"] { margin-left: 0 !important; padding-left: 8px; }
+  .structure-workspace .toc-topic-actions { width: 100%; justify-content: flex-end; }
+}
 /* Secondary routes stay directly accessible, but do not compete with navigation. */
 header.relative.z-30 #author-project-tools > button:not(.studio-topbar-preview):not(.studio-topbar-create) {
   min-height: 30px;

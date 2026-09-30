@@ -5495,16 +5495,19 @@ function EvidenceIndexPanel({
                   <span className="ml-auto text-[9px] text-[#C8C6C0]">#{item.order + 1}</span>
                 </div>
                 <p className="text-[11px] text-[#3D3D4E] leading-relaxed whitespace-pre-wrap">{item.text}</p>
-                <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[9px] text-[#9898AB]">
-                  <span>fileId: {item.fileId}</span>
-                  <span>blockId: {item.blockId}</span>
-                  {item.page != null && <span>page: {item.page}</span>}
-                  {item.listLevel != null && <span>{item.orderedList ? 'ordered' : 'unordered'} list · level {item.listLevel}</span>}
-                  {item.tableData && <span>table: {item.tableData.length} rows</span>}
-                  {item.links?.map((link, index) => (
-                    <span key={`${link.url}-${index}`} className="text-[#5B5BD6]">link: {link.text || link.url} → {link.url}</span>
-                  ))}
-                </div>
+                <details className="mt-2 text-[10px] text-[#667085]">
+                  <summary className="w-fit cursor-pointer">Source details</summary>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                    <span>fileId: {item.fileId}</span>
+                    <span>blockId: {item.blockId}</span>
+                    {item.page != null && <span>page: {item.page}</span>}
+                    {item.listLevel != null && <span>{item.orderedList ? 'ordered' : 'unordered'} list · level {item.listLevel}</span>}
+                    {item.tableData && <span>table: {item.tableData.length} rows</span>}
+                    {item.links?.map((link, index) => (
+                      <span key={`${link.url}-${index}`} className="text-[#B65311]">link: {link.text || link.url} → {link.url}</span>
+                    ))}
+                  </div>
+                </details>
               </div>
             ))}
           </div>
@@ -5535,24 +5538,32 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
   const [dragOver, setDragOver] = useState(false)
   const [unsupportedNames, setUnsupportedNames] = useState<string[]>([])
   const [duplicateNames, setDuplicateNames] = useState<string[]>([])
+  const [uploadError, setUploadError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [viewingFileId, setViewingFileId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
 
   const processFiles = (rawFiles: FileList | File[]) => {
+    setUploadError('')
     const arr = Array.from(rawFiles)
     const bad = arr.filter(f => !isAcceptedFile(f)).map(f => f.name)
     if (bad.length) setUnsupportedNames(prev => [...prev, ...bad.filter(n => !prev.includes(n))])
 
     const good = arr.filter(isAcceptedFile)
     const existingNames = new Set(entries.map(e => e.file.name))
-    const dupes = good.filter(f => existingNames.has(f.name))
+    const fresh: File[] = []
+    const dupes: File[] = []
+    for (const file of good) {
+      if (existingNames.has(file.name)) dupes.push(file)
+      else {
+        existingNames.add(file.name)
+        fresh.push(file)
+      }
+    }
     if (dupes.length) {
       setDuplicateNames(prev => [...prev, ...dupes.map(f => f.name).filter(n => !prev.includes(n))])
     }
-    const fresh = good.filter(f => !existingNames.has(f.name))
-
     fresh.forEach(file => {
       const entryId = crypto.randomUUID()
       setEntries(prev => [...prev, { id: entryId, fileId: null, file, status: 'adding' as const }])
@@ -5561,6 +5572,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
           setEntries(prev => prev.map(e => e.id === entryId ? { ...e, fileId, status: 'ready' as const } : e))
         }).catch(() => {
           setEntries(prev => prev.filter(e => e.id !== entryId))
+          setUploadError(`Could not add ${file.name}. Try uploading it again.`)
         })
       } else {
         setTimeout(() => {
@@ -5625,6 +5637,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
     setEntries([])
     setUnsupportedNames([])
     setDuplicateNames([])
+    setUploadError('')
   }
 
   const deactivateDemoMode = () => {
@@ -5632,7 +5645,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
   }
 
   return (
-    <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
+    <div className="sources-workspace flex-1 overflow-auto p-4 sm:p-8 max-w-5xl mx-auto w-full fade-in">
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -5645,9 +5658,8 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
         onChange={handleInputChange}
       />
 
-      <div className="mb-7">
-        <div className="flex items-end justify-between mb-1">
-          <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest">Step 1 of 3</p>
+      <div className="mb-6">
+        <div className="flex items-end justify-end mb-1">
           {!isDemoMode ? (
             <button
               onClick={activateDemoMode}
@@ -5664,64 +5676,48 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
             </button>
           )}
         </div>
-        <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Add Source Material</h1>
-        <p className="text-[14px] text-[#6B6B7E]">Upload the documents, specs, and references that contain your product knowledge.</p>
+        <h1 className="text-2xl font-semibold text-[#20242A] tracking-tight mb-1">Add Source Material</h1>
+        <p className="text-[13px] text-[#667085]">Add reference files and check when their content is ready for analysis.</p>
       </div>
 
       {isDemoMode && (
-        <div className="mb-4 flex items-center gap-3 bg-[#F3F0FF] border border-[#DDD6FE] rounded-xl px-4 py-3 fade-in">
-          <span className="rounded bg-white/70 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-[#6D28D9]">DEMO</span>
-          <p className="text-[12px] text-[#5B21B6] flex-1">Demo mode active — using the Nexus Platform sample project with 4 pre-loaded source documents.</p>
-          <button onClick={deactivateDemoMode} className="text-[11px] font-medium text-[#8B5CF6] hover:text-[#5B21B6] transition-colors flex-shrink-0">Exit demo</button>
+        <div className="mb-4 rounded-lg border border-[#F0C7A7] bg-[#FFF0E3] px-4 py-2.5 text-[12px] text-[#8C430D]" role="status">
+          Demo mode · Sample files are read-only and are not source-verified evidence.
         </div>
       )}
 
-      <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 md:grid-cols-3 md:gap-5">
-        <div className="min-w-0 space-y-4 md:col-span-2">
+      <div className="min-w-0 space-y-4">
           {/* Drop zone */}
           {!isDemoMode ? (
           <div
-            role="button"
-            tabIndex={0}
-            aria-label="Upload source files — click or drag files here"
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            onClick={openPicker}
-            onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && openPicker()}
-            className={`border-2 border-dashed rounded-xl p-10 text-center transition-all cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 ${
+            className={`rounded-xl border border-dashed p-5 text-center sm:p-6 ${
               dragOver
-                ? 'border-[#5B5BD6] bg-[#EEEEFF] scale-[1.01]'
-                : 'border-[#D8D4CE] bg-white hover:border-[#5B5BD6] hover:bg-[#FAFAFE]'
+                ? 'border-[#FF7A1A] bg-[#FFF0E3]'
+                : 'border-[#D8D4CE] bg-white'
             }`}
           >
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center mx-auto mb-3 transition-colors ${dragOver ? 'bg-[#DDDEFF]' : 'bg-[#F4F2EE]'}`}>
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <path d="M10 13V4M6 7l4-3 4 3M4 16h12" stroke={dragOver ? '#5B5BD6' : '#9898AB'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </div>
             {dragOver ? (
-              <p className="text-[14px] font-medium text-[#5B5BD6] mb-1">Release to add files</p>
+              <p className="text-[13px] font-medium text-[#B65311]">Drop files to add them</p>
             ) : (
               <>
-                <p className="text-[14px] font-medium text-[#111218] mb-1">
-                  Drop files here or{' '}
-                  <span className="text-[#5B5BD6] underline underline-offset-2 decoration-dotted">browse</span>
-                </p>
-                <p className="text-[12px] text-[#9898AB]">PDF, DOCX, PPTX, TXT, Markdown, PNG, JPG, MP4</p>
+                <button type="button" onClick={openPicker} className="rounded-lg bg-[#FF7A1A] px-4 py-2 text-[13px] font-semibold text-[#20242A] hover:bg-[#FFC857]">
+                  Add source files
+                </button>
+                <p className="mt-2 text-[11px] text-[#667085]">Or drop files here · PDF, DOCX, PPTX, TXT, Markdown, PNG, JPG, MP4</p>
               </>
             )}
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={e => { e.stopPropagation(); openPicker() }}
-              className="mt-4 text-[12px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] border border-[#5B5BD6] hover:border-[#4A4AC4] px-4 py-1.5 rounded-lg transition-colors"
-            >
-              Choose Files
-            </button>
           </div>
           ) : null}
 
+          {uploadError && (
+            <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-4 py-2.5 text-[12px] text-[#991B1B]">
+              <span>{uploadError}</span>
+              <button type="button" onClick={() => setUploadError('')} className="font-semibold underline underline-offset-2">Dismiss</button>
+            </div>
+          )}
           {/* Duplicate filename warning */}
           {duplicateNames.length > 0 && (
             <div className="flex items-start gap-3 bg-[#FEE2E2] border border-[#FECACA] rounded-xl px-4 py-3">
@@ -5772,30 +5768,24 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
 
           {/* Demo file list */}
           {isDemoMode && (
-            <div className="bg-white border border-[#DDD6FE] rounded-xl overflow-hidden fade-in">
-              <div className="px-4 py-3 border-b border-[#DDD6FE] flex items-center justify-between">
+            <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden fade-in">
+              <div className="px-4 py-3 border-b border-[#E2DED7] flex items-center justify-between">
                 <span className="text-[12px] font-semibold text-[#111218]">Demo Source Files</span>
-                <span className="text-[11px] text-[#8B5CF6] font-medium">4 files · read-only</span>
+                <span className="text-[11px] text-[#667085] font-medium">4 files · read-only</span>
               </div>
               {DEMO_SOURCE_NAMES.map(name => {
                 const ext = name.split('.').pop()?.toLowerCase() ?? ''
-                const bgColor = TYPE_BG[ext] ?? 'bg-[#6B6B7E]'
                 const sizes: Record<string, string> = { 'Nexus_Technical_Specification_v3.2.pdf': '4.2 MB', 'UX_Research_Findings_Q3.docx': '1.8 MB', 'Product_Roadmap_Deck.pptx': '12.4 MB', 'Support_Ticket_Analysis_Oct.pdf': '890 KB' }
                 return (
                   <div key={name} className="flex items-center gap-3 px-4 py-3 border-b border-[#F4F2EE] last:border-0">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 ${bgColor}`}>
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-[#F0EEE8] text-[10px] font-bold text-[#626B77] flex-shrink-0">
                       {ext.toUpperCase().slice(0, 4)}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-medium text-[#111218] truncate">{name}</p>
                       <p className="text-[11px] text-[#9898AB]">{sizes[name] ?? '—'}</p>
                     </div>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <div className="w-3.5 h-3.5 rounded-full bg-[#DCFCE7] flex items-center justify-center">
-                        <svg width="7" height="7" viewBox="0 0 7 7" fill="none"><path d="M1 3.5l2 2L6 1.5" stroke="#16A34A" strokeWidth="1.2" strokeLinecap="round"/></svg>
-                      </div>
-                      <span className="text-[11px] text-[#16A34A] font-medium">Ready</span>
-                    </div>
+                    <span className="flex-shrink-0 rounded-md bg-[#F0EEE8] px-2 py-1 text-[10px] font-medium text-[#667085]">Sample</span>
                   </div>
                 )
               })}
@@ -5803,6 +5793,12 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
           )}
 
           {/* File list */}
+          {!isDemoMode && entries.length === 0 && (
+            <div className="rounded-xl border border-[#E2DED7] bg-white px-4 py-6 text-center">
+              <p className="text-[13px] font-semibold text-[#20242A]">No sources yet</p>
+              <p className="mt-1 text-[12px] text-[#667085]">Add a file above to prepare evidence for analysis.</p>
+            </div>
+          )}
           {!isDemoMode && entries.length > 0 && (
             <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
               <div className="px-4 py-3 border-b border-[#E2DED7] flex items-center justify-between">
@@ -5868,15 +5864,14 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
               )}
               {entries.map(entry => {
                 const ext = getFileExt(entry.file)
-                const bgColor = TYPE_BG[ext] ?? 'bg-[#6B6B7E]'
                 const extraction = entry.fileId ? sourceExtractions?.[entry.fileId] : undefined
                 const isViewing = viewingFileId === entry.fileId
                 const extractionFresh = isExtractionFresh(extraction, sourcesRevision)
                 return (
                   <div key={entry.id} data-testid="source-file-row" data-file-name={entry.file.name} className="border-b border-[#F4F2EE] last:border-0">
-                    <div className="flex items-center gap-3 px-4 py-3 group">
+                    <div className="flex flex-wrap items-center gap-3 px-4 py-3 sm:flex-nowrap">
                       {/* Type badge */}
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0 ${bgColor}`}>
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-[#F0EEE8] text-[10px] font-bold text-[#626B77] flex-shrink-0">
                         {ext.toUpperCase().slice(0, 4)}
                       </div>
 
@@ -5885,63 +5880,53 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                         <p className="text-[13px] font-medium text-[#111218] truncate" title={entry.file.name}>
                           {entry.file.name}
                         </p>
-                        <div className="flex items-center gap-2 mt-0.5">
+                        <div className="flex flex-wrap items-center gap-2 mt-0.5" aria-live="polite">
                           <span className="text-[11px] text-[#9898AB]">{fmtSize(entry.file.size)}</span>
                           {entry.status === 'ready' && (
                             <>
                               <span className="text-[#E2DED7]">·</span>
                               {!extraction && (
-                                <span data-testid="extraction-status" className="text-[10px] text-[#9898AB] font-medium">Not Extracted</span>
+                                <span data-testid="extraction-status" className="text-[11px] text-[#667085] font-medium">Waiting to process</span>
                               )}
                               {extraction?.status === 'extracting' && (
-                                <span data-testid="extraction-status" className="flex items-center gap-1 text-[10px] text-[#5B5BD6]">
-                                  <span className="w-2 h-2 border border-[#5B5BD6] border-t-transparent rounded-full animate-spin inline-block" />
-                                  Extracting
+                                  <span data-testid="extraction-status" className="flex items-center gap-1 text-[11px] text-[#B65311]">
+                                  <span className="w-2 h-2 border border-[#FF7A1A] border-t-transparent rounded-full animate-spin inline-block" />
+                                  Processing
                                 </span>
                               )}
                               {extraction?.status === 'extracted' && (
-                                <span data-testid="extraction-status" className="text-[10px] text-[#16A34A] font-medium">
+                                <span data-testid="extraction-status" className="text-[11px] text-[#43845B] font-medium">
                                   Extracted · {extraction.blocks.length} blocks
                                 </span>
                               )}
                               {extraction?.status === 'partial' && (
-                                <span data-testid="extraction-status" className="text-[10px] text-[#D97706] font-medium">
-                                  Partial extraction — {extraction.blocks.length} blocks
+                                <span data-testid="extraction-status" className="text-[11px] text-[#A85C08] font-medium">
+                                  Partially extracted · {extraction.blocks.length} blocks
                                 </span>
                               )}
                               {extraction?.status === 'failed' && (
-                                <span data-testid="extraction-status" className="text-[10px] text-[#DC2626] font-medium">Failed — Extraction failed</span>
+                                <span data-testid="extraction-status" className="text-[11px] text-[#B42323] font-medium">Failed to process</span>
                               )}
                               {extraction?.status === 'unsupported' && (
-                                <span data-testid="extraction-status" className="text-[10px] text-[#9898AB] font-medium">Unsupported — Extraction not yet supported</span>
+                                <span data-testid="extraction-status" className="text-[11px] text-[#667085] font-medium">Unsupported · Preview not available</span>
                               )}
                               {extraction?.status === 'not-extracted' && (
-                                <span data-testid="extraction-status" className="text-[10px] text-[#9898AB] font-medium">Not Extracted</span>
+                                <span data-testid="extraction-status" className="text-[11px] text-[#667085] font-medium">Not Extracted</span>
                               )}
                               {extraction && !extractionFresh && !['extracting', 'not-extracted'].includes(extraction.status) && (
-                                <span className="text-[9px] text-[#D97706] font-medium">Stale at source revision {extraction.extractionRevision ?? 'unknown'}</span>
+                                <span className="text-[10px] text-[#A85C08] font-medium">Needs refresh</span>
                               )}
                             </>
                           )}
                         </div>
                       </div>
 
-                      {/* Upload status */}
                       {entry.status === 'adding' ? (
                         <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <div className="w-3 h-3 border-[1.5px] border-[#5B5BD6] border-t-transparent rounded-full animate-spin" />
-                          <span className="text-[11px] text-[#5B5BD6] font-medium">Adding…</span>
+                          <div className="w-3 h-3 border-[1.5px] border-[#FF7A1A] border-t-transparent rounded-full animate-spin" />
+                          <span className="text-[11px] text-[#B65311] font-medium">Adding…</span>
                         </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <div className="w-3.5 h-3.5 rounded-full bg-[#DCFCE7] flex items-center justify-center">
-                            <svg width="7" height="7" viewBox="0 0 7 7" fill="none">
-                              <path d="M1 3.5l2 2L6 1.5" stroke="#16A34A" strokeWidth="1.2" strokeLinecap="round"/>
-                            </svg>
-                          </div>
-                          <span className="text-[11px] text-[#16A34A] font-medium">Saved</span>
-                        </div>
-                      )}
+                      ) : null}
 
                       {/* View extraction button */}
                       {entry.fileId && extraction && (extraction.status === 'extracted' || extraction.status === 'partial') && (
@@ -5953,30 +5938,28 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                           {isViewing ? 'Hide Extracted Content' : 'View Extracted Content'}
                         </button>
                       )}
-                      {entry.fileId && extraction?.status === 'failed' && (
+                      {entry.fileId && extraction && (extraction.status === 'failed'
+                        || (!extractionFresh && ['extracted', 'partial'].includes(extraction.status))) && (
                         <button
                           onClick={() => onRetryExtraction?.(entry.fileId!, entry.file)}
                           className="text-[11px] font-medium text-[#DC2626] hover:text-[#991B1B] px-2 py-1 rounded-md hover:bg-[#FEE2E2] transition-colors flex-shrink-0"
                         >
-                          Retry
+                          {extraction.status === 'failed' ? 'Retry' : 'Refresh'}
                         </button>
                       )}
 
-                      {/* Remove */}
-                      <button
-                        onClick={() => removeEntry(entry.id)}
-                        aria-label={`Remove ${entry.file.name}`}
-                        className="w-6 h-6 rounded flex items-center justify-center text-[#C8C6C0] hover:text-[#DC2626] hover:bg-[#FEE2E2] opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-all outline-none focus-visible:ring-1 focus-visible:ring-[#DC2626] flex-shrink-0"
-                      >
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                          <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-                        </svg>
-                      </button>
+                      <details className="relative flex-shrink-0">
+                        <summary className="cursor-pointer rounded-md px-2 py-1 text-[11px] font-medium text-[#667085] hover:bg-[#FFF0E3]" aria-label={`More actions for ${entry.file.name}`}>More</summary>
+                        <div className="absolute right-0 top-full z-10 mt-1 min-w-28 rounded-lg border border-[#E2DED7] bg-white p-1 shadow-lg">
+                          <button type="button" onClick={() => removeEntry(entry.id)} aria-label={`Remove ${entry.file.name}`}
+                            className="w-full rounded px-2 py-1.5 text-left text-[11px] text-[#B42323] hover:bg-[#FEF2F2]">Remove source</button>
+                        </div>
+                      </details>
                     </div>
 
                     {/* Inline extraction view */}
                     {isViewing && viewingExtraction && (
-                      <div data-testid="extracted-content-view" className="border-t border-[#E2DED7] bg-[#FAFAFE] px-4 py-4 max-h-[32rem] overflow-y-auto">
+                      <div data-testid="extracted-content-view" className="border-t border-[#E2DED7] bg-[#FAF9F7] px-4 py-4 max-h-[32rem] overflow-y-auto">
                         <div className="flex items-center justify-between mb-3">
                           <div>
                             <p className="text-[12px] font-semibold text-[#111218]">{viewingExtraction.fileName}</p>
@@ -6005,7 +5988,7 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
                         )}
                         {viewingExtraction.extractionError && (
                           <div className="mb-3 bg-[#FEF2F2] border border-[#FECACA] rounded-lg px-3 py-2 text-[11px] text-[#991B1B]">
-                            {viewingExtraction.extractionError}
+                            Some content could not be processed. Review the extracted content below.
                           </div>
                         )}
                         {viewingExtraction.warnings.map((w, i) => (
@@ -6077,52 +6060,6 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
               onRebuild={onRebuildEvidence}
             />
           )}
-        </div>
-
-        {/* Integrations sidebar — unchanged */}
-        <div className="min-w-0 w-full space-y-4">
-          <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
-            <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-3">Import From</p>
-            {[
-              { label: 'SharePoint', icon: 'SP' },
-              { label: 'OneDrive', icon: 'OD' },
-              { label: 'Microsoft Teams', icon: 'MT' },
-              { label: 'Google Drive', icon: 'GD' },
-              { label: 'URL / Web Page', icon: 'URL' },
-            ].map(int => (
-              <div key={int.label} className="flex items-center gap-2.5 py-2 border-b border-[#F4F2EE] last:border-0 opacity-50">
-                <span aria-hidden="true" className="flex h-6 min-w-6 items-center justify-center rounded bg-[#F4F2EE] px-1 text-[8px] font-bold tracking-wide text-[#858493]">{int.icon}</span>
-                <span className="text-[13px] text-[#111218] flex-1">{int.label}</span>
-                <span className="text-[9px] font-semibold text-[#9898AB] uppercase tracking-wider bg-[#F4F2EE] px-1.5 py-0.5 rounded">
-                  Soon
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-[#F9F8F6] border border-[#E2DED7] rounded-xl p-4">
-            <p className="text-[12px] font-medium text-[#6B6B7E] leading-relaxed">
-              AI will analyze your sources to identify concepts, coverage, and potential gaps before proposing a structure.
-            </p>
-          </div>
-
-          <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
-            <p className="text-[11px] font-semibold text-[#9898AB] uppercase tracking-wider mb-2">Or try a demo</p>
-            <p className="text-[12px] text-[#6B6B7E] leading-relaxed mb-3">
-              Explore the full workflow with a pre-loaded demonstration project.
-            </p>
-            <button
-              onClick={isDemoMode ? deactivateDemoMode : activateDemoMode}
-              className={`w-full text-[12px] font-medium border py-2 rounded-lg transition-colors ${
-                isDemoMode
-                  ? 'bg-[#EEEEFF] text-[#5B5BD6] border-[#5B5BD6]'
-                  : 'text-[#5B5BD6] border-[#5B5BD6] hover:bg-[#EEEEFF]'
-              }`}
-            >
-              {isDemoMode ? 'Demo project active' : 'Use demo project'}
-            </button>
-          </div>
-        </div>
       </div>
 
       <div data-testid="sources-next-step" className="mt-6 flex flex-col gap-3 border-t border-[#E2DED7] pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -6139,9 +6076,6 @@ function SourcesScreen({ onNav, sources, onSourceAdd, onSourceRemove, sourceExtr
           {analyzeBlockReason && (
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
               <p className="text-[11px] text-[#6B6B7E]">{analyzeBlockReason}</p>
-              {!isDemoMode && readyEntries.length === 0 && addingEntries.length === 0 && (
-                <button type="button" onClick={openPicker} className="text-[11px] font-semibold text-[#5B5BD6] underline underline-offset-2">Choose files</button>
-              )}
               {!isDemoMode && readyEntries.length > 0 && !evidenceFresh && canRebuildEvidence && (
                 <button type="button" onClick={onRebuildEvidence} className="text-[11px] font-semibold text-[#5B5BD6] underline underline-offset-2">Refresh Evidence Index</button>
               )}
@@ -6251,12 +6185,12 @@ function EvidenceAnalysisScreen({
   )
 
   return (
-    <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in">
+    <div className="structure-workspace flex-1 overflow-auto p-4 sm:p-8 max-w-5xl mx-auto w-full fade-in" data-testid="analysis-workspace">
       <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1.5">Source-backed Analysis</h1>
           <p className="text-[13px] text-[#6B6B7E]">
-            Concepts, terminology, conflicts, and gaps derived only from the current Evidence Index.
+            Review source-backed findings before generating a proposed table of contents.
           </p>
         </div>
         <div className="flex items-center gap-2 self-start">
@@ -6288,13 +6222,12 @@ function EvidenceAnalysisScreen({
         </div>
       </div>
 
-      <div className="mb-5 flex items-center gap-3 bg-[#F4F2EE] border border-[#E2DED7] rounded-xl px-4 py-3">
-        <div className="w-2 h-2 rounded-full bg-[#6B6B7E] flex-shrink-0" />
-        <p className="text-[11px] text-[#6B6B7E]">
-          <span className="font-semibold text-[#3D3D4E]">Method:</span>{' '}
+      <details className="mb-4 text-[11px] text-[#667085]">
+        <summary className="w-fit cursor-pointer">How this analysis is prepared</summary>
+        <p className="mt-2 max-w-3xl">
           Conservative deterministic evidence heuristics ({CONCEPT_ANALYSIS_METHOD}). Conflicts require concrete opposing source statements; gaps report only source-signaled absence or insufficient coverage. No AI, external expectations, or simulated findings are used.
         </p>
-      </div>
+      </details>
 
       {summary && (
         <div data-testid="analysis-summary" data-severity={summary.severity} role="status"
@@ -6331,13 +6264,7 @@ function EvidenceAnalysisScreen({
         </div>
       ) : (
         <div className="space-y-5">
-          {!analysisFresh && (
-            <div className="bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3 text-[12px] text-[#92400E]">
-              The Evidence Index changed after this analysis was built. Rebuild Analysis to use only the current evidence.
-            </div>
-          )}
-
-          <div className="grid grid-cols-6 gap-3">
+          <div className="analysis-metrics grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
             <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
               <p className="text-[10px] uppercase tracking-wide text-[#9898AB] mb-1">Concepts</p>
               <p data-testid="concept-count" className="text-xl font-semibold text-[#111218]">{analysis.concepts.length}</p>
@@ -7804,7 +7731,10 @@ function AiTocWorkflowControls({
     try {
       await onGenerate(selectedWorkflow.id, selectedWorkflow.version, replaceExisting)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'AI TOC generation failed. The proposal was not changed.')
+      const message = cause instanceof Error ? cause.message : ''
+      setError(message.includes('previous proposal was safely restored')
+        ? message
+        : 'Could not generate a new TOC proposal. Review any saved recovery copy, then try again.')
     } finally {
       setGenerating(false)
     }
@@ -8687,6 +8617,7 @@ function RealTocProposalScreen({
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null)
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null)
   const [confirmCommit, setConfirmCommit] = useState(false)
+  const [showCurrentToc, setShowCurrentToc] = useState(false)
   const evidenceById = new Map((evidenceIndex?.items ?? []).map(item => [item.id, item]))
 
   const updateItems = (updater: (items: ProposedTopic[]) => ProposedTopic[]) => {
@@ -8803,7 +8734,7 @@ function RealTocProposalScreen({
 
   if (!proposal) {
     return (
-      <div className="flex-1 overflow-auto p-8 max-w-5xl mx-auto w-full fade-in" data-testid="real-toc-screen">
+      <div className="structure-workspace flex-1 overflow-auto p-4 sm:p-8 max-w-5xl mx-auto w-full fade-in" data-testid="real-toc-screen">
         <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Proposed TOC</h1>
@@ -8849,11 +8780,6 @@ function RealTocProposalScreen({
             </button>
           )}
         </div>
-        {committedTocStale && (
-          <div data-testid="committed-toc-stale" className="mb-5 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-3 text-[12px] text-[#92400E]">
-            The committed TOC is stale because its supporting evidence or grounded analysis changed. Existing topics remain unchanged.
-          </div>
-        )}
         {toc.length > 0 ? (
           <section className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden" data-testid="committed-toc-panel">
             <div className="px-5 py-3.5 border-b border-[#E2DED7] flex items-center justify-between">
@@ -8865,6 +8791,11 @@ function RealTocProposalScreen({
                 {committedTocStale ? 'Stale' : 'Current'}
               </span>
             </div>
+            {committedTocStale && (
+              <p data-testid="committed-toc-stale" className="border-b border-[#FDE68A] bg-[#FFFBEB] px-5 py-2 text-[11px] text-[#92400E]">
+                Supporting evidence changed. Your committed topics are unchanged; review current analysis before generating again.
+              </p>
+            )}
             <div className="p-3">
               {normalizeTopicIds(toc).map(item => (
                 <div key={item.topicId} data-testid="committed-toc-topic" data-topic-id={item.topicId} className="px-3 py-2 flex items-center gap-2" style={{ paddingLeft: `${12 + (item.level - 1) * 20}px` }}>
@@ -8888,7 +8819,7 @@ function RealTocProposalScreen({
   const selectedTopic = proposal.items.find(item => item.topicId === selectedTopicId) ?? null
   const selectedEvidence = selectedEvidenceId ? evidenceById.get(selectedEvidenceId) : null
   return (
-    <div className="flex-1 overflow-auto p-8 max-w-6xl mx-auto w-full fade-in" data-testid="toc-proposal-review">
+    <div className="structure-workspace flex-1 overflow-auto p-4 sm:p-8 max-w-6xl mx-auto w-full fade-in" data-testid="toc-proposal-review">
       <div className="flex flex-col gap-3 mb-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -8898,7 +8829,7 @@ function RealTocProposalScreen({
             </span>
           </div>
           <p className="text-[12px] text-[#6B6B7E]">
-            Evidence-backed topics and optional structural sections are labeled separately. The current TOC remains unchanged until commit.
+            Proposed topics are separate from your current structure. Review and accept them explicitly.
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -8917,9 +8848,27 @@ function RealTocProposalScreen({
         onRecoverRecovery={onRecoverRecovery}
         onGenerate={onGenerateAi}
       />
+      {toc.length > 0 && (
+        <section className="mb-4 rounded-lg border border-[#E2DED7] bg-white">
+          <button type="button" onClick={() => setShowCurrentToc(open => !open)} aria-expanded={showCurrentToc}
+            className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-[12px] font-semibold text-[#20242A]">
+            <span>Current committed TOC · {toc.length} {toc.length === 1 ? 'topic' : 'topics'}</span>
+            <span className="text-[11px] font-medium text-[#B65311]">{showCurrentToc ? 'Hide' : 'View'} current structure</span>
+          </button>
+          {showCurrentToc && (
+            <ol className="border-t border-[#E2DED7] px-4 py-2 text-[11px] text-[#596371]">
+              {normalizeTopicIds(toc).map(item => (
+                <li key={item.topicId} className="py-1" style={{ paddingLeft: `${(item.level - 1) * 16}px` }}>
+                  <span className="mr-2 text-[#858D9A]">H{item.level}</span>{item.title}
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      )}
       {proposal.method === 'ai-grounded-toc-v1' && proposal.aiProvenance && (
-        <div data-testid="ai-toc-provenance" role="status" className="mb-5 rounded-xl border border-[#C7D2FE] bg-[#EEF2FF] px-4 py-3 text-[11px] text-[#3730A3]">
-          <p className="font-semibold">AI-generated proposal · Not yet accepted</p>
+        <details data-testid="ai-toc-provenance" className="mb-4 rounded-lg border border-[#F0C7A7] bg-[#FFF9F2] px-4 py-2.5 text-[11px] text-[#8C430D]">
+          <summary className="cursor-pointer font-semibold">AI-generated proposal · Not yet accepted · View generation details</summary>
           <p className="mt-1">
             {proposal.aiProvenance.providerId} / {proposal.aiProvenance.modelId}
             {' · '}Workflow {proposal.aiProvenance.workflow.id} v{proposal.aiProvenance.workflow.version}
@@ -8939,7 +8888,7 @@ function RealTocProposalScreen({
           <a href="#proposed-toc-topics" data-testid="review-ai-toc-proposal" className="mt-2 inline-block font-semibold underline underline-offset-2">
             Review proposed structure
           </a>
-        </div>
+        </details>
       )}
 
       <div id={!proposalFresh ? 'toc-proposal-stale-reason' : proposal.items.length === 0 ? 'toc-commit-reason' : undefined} data-testid="real-toc-next-step" role="status" aria-live="polite" className={`mb-5 flex flex-col gap-2 rounded-xl border px-4 py-3 text-[12px] sm:flex-row sm:items-center sm:justify-between ${
@@ -8986,7 +8935,11 @@ function RealTocProposalScreen({
                 data-topic-id={item.topicId}
                 data-topic-kind={item.proposalKind}
                 onClick={() => setSelectedTopicId(item.topicId)}
-                className={`group flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer ${selectedTopicId === item.topicId ? 'border-[#B9B9EA] bg-[#F3F0FF]' : 'border-transparent hover:bg-[#F9F8F6]'}`}
+                onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setSelectedTopicId(item.topicId) } }}
+                tabIndex={0}
+                role="group"
+                aria-label={`Proposed topic: ${item.title}`}
+                className={`group flex min-w-0 flex-wrap items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer ${selectedTopicId === item.topicId ? 'border-[#F0C7A7] bg-[#FFF0E3]' : 'border-transparent hover:bg-[#FAF9F7]'}`}
                 style={{ marginLeft: `${(item.level - 1) * 18}px` }}
               >
                 <span className="text-[9px] text-[#9898AB] font-mono">H{item.level}</span>
@@ -9010,13 +8963,13 @@ function RealTocProposalScreen({
                 <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${item.proposalKind === 'evidence-backed' ? 'bg-[#DCFCE7] text-[#15803D]' : item.proposalKind === 'manual' ? 'bg-[#DBEAFE] text-[#1D4ED8]' : 'bg-[#F4F2EE] text-[#6B6B7E]'}`}>
                   {item.proposalKind === 'evidence-backed' ? 'Evidence-backed' : item.proposalKind === 'manual' ? 'Manual' : 'Optional structure'}
                 </span>
-                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
-                  <button type="button" aria-label="Move topic up" disabled={index === 0} onClick={event => { event.stopPropagation(); move(item.topicId, -1) }} className="px-1 text-[#9898AB] disabled:opacity-20">↑</button>
-                  <button type="button" aria-label="Move topic down" disabled={index === proposal.items.length - 1} onClick={event => { event.stopPropagation(); move(item.topicId, 1) }} className="px-1 text-[#9898AB] disabled:opacity-20">↓</button>
-                  <button type="button" aria-label="Unnest topic" disabled={!item.parentTopicId} onClick={event => { event.stopPropagation(); unnest(item.topicId) }} className="px-1 text-[#9898AB] disabled:opacity-20">←</button>
-                  <button type="button" aria-label="Nest topic" disabled={index === 0} onClick={event => { event.stopPropagation(); nest(item.topicId) }} className="px-1 text-[#9898AB] disabled:opacity-20">→</button>
-                  <button type="button" aria-label="Rename topic" onClick={event => { event.stopPropagation(); setEditingTopicId(item.topicId); setEditTitle(item.title) }} className="px-1 text-[#5B5BD6]">✎</button>
-                  <button type="button" aria-label="Reject topic" onClick={event => { event.stopPropagation(); rejectTopic(item.topicId) }} className="px-1 text-[#DC2626]">×</button>
+                <div className="toc-topic-actions flex items-center gap-0.5">
+                  <button type="button" aria-label="Move topic up" title="Move topic up" disabled={index === 0} onClick={event => { event.stopPropagation(); move(item.topicId, -1) }} className="px-1 text-[#667085] disabled:opacity-30">↑</button>
+                  <button type="button" aria-label="Move topic down" title="Move topic down" disabled={index === proposal.items.length - 1} onClick={event => { event.stopPropagation(); move(item.topicId, 1) }} className="px-1 text-[#667085] disabled:opacity-30">↓</button>
+                  <button type="button" aria-label="Unnest topic" title="Move out one level" disabled={!item.parentTopicId} onClick={event => { event.stopPropagation(); unnest(item.topicId) }} className="px-1 text-[#667085] disabled:opacity-30">←</button>
+                  <button type="button" aria-label="Nest topic" title="Nest under previous topic" disabled={index === 0} onClick={event => { event.stopPropagation(); nest(item.topicId) }} className="px-1 text-[#667085] disabled:opacity-30">→</button>
+                  <button type="button" aria-label="Rename topic" title="Rename topic" onClick={event => { event.stopPropagation(); setEditingTopicId(item.topicId); setEditTitle(item.title) }} className="px-1 text-[#B65311]">✎</button>
+                  <button type="button" aria-label="Reject topic" title="Remove proposed topic" onClick={event => { event.stopPropagation(); rejectTopic(item.topicId) }} className="px-1 text-[#B42323]">×</button>
                 </div>
               </div>
             ))}

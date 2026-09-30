@@ -143,6 +143,7 @@ test('workflow exits return to the originating project while Brand Continue open
 
   await rail.getByRole('button', { name: 'Brand & Output' }).click()
   await page.getByRole('combobox', { name: 'Project' }).selectOption({ label: second })
+  await expect(page.getByRole('combobox', { name: 'Project' })).toBeEnabled()
   await page.getByRole('button', { name: 'Continue — Sources' }).click()
   await expect(page.getByRole('heading', { name: 'Add Source Material' })).toBeVisible()
   await expect(page.locator('header').getByText(second, { exact: true })).toBeVisible()

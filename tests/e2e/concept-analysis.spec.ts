@@ -214,6 +214,7 @@ test("derives persisted concepts and terminology only from evidence with inspect
   await openRealAnalysis(page)
 
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
+  await page.getByText("How this analysis is prepared").click()
   await expect(page.getByText("Conservative deterministic evidence heuristics", { exact: false })).toBeVisible()
   await expect(page.getByTestId("grounded-concept").filter({ hasText: "Orbital Access Control" })).toBeVisible()
   await expect(page.getByTestId("grounded-term").filter({ hasText: "OAC" })).toBeVisible()
