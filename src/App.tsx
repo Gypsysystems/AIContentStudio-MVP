@@ -16318,9 +16318,12 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
   const [errors, setErrors] = useState<Partial<Record<'pdf' | 'word' | 'html', string>>>({})
   const generationId = useRef(0)
   const [generatedFor, setGeneratedFor] = useState<{ snapshot: string; condition?: string; id: number } | null>(null)
+  // Keep the exact snapshot comparison, but serialize once per projection change,
+  // not on every local status update or download click.
+  const projectionSnapshot = useMemo(() => JSON.stringify(projection), [projection])
   const outputsCurrent = generatedFor?.id === generationId.current
     && generatedFor.condition === selectedCondition
-    && generatedFor.snapshot === JSON.stringify(projection)
+    && generatedFor.snapshot === projectionSnapshot
   const visibleBlobs = outputsCurrent ? blobs : {}
   const visibleErrors = outputsCurrent ? errors : {}
   const missingFormats = selectedFormats.filter(format => !visibleBlobs[format] && !visibleErrors[format])
@@ -16329,7 +16332,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
     && selectedFormats.every(format => !!visibleBlobs[format])
   const [activePreviewFormat, setActivePreviewFormat] = useState<'pdf' | 'word' | 'html'>('pdf')
 
-  const [showVariantMenu, setShowVariantMenu] = useState(false)
   const [qaExpanded, setQaExpanded] = useState(true)
 
   const OUTPUT_VARIANTS = [
@@ -16358,7 +16360,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
 
   const handleGenerate = async () => {
     const id = ++generationId.current
-    const snapshot = JSON.stringify(projection)
+    const snapshot = projectionSnapshot
     const newBlobs: Partial<Record<'pdf' | 'word' | 'html', Blob>> = {}
     const newErrors: Partial<Record<'pdf' | 'word' | 'html', string>> = {}
     setBlobs({})
@@ -16474,14 +16476,12 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
       : fmt === 'word'
         ? `Editable Word output uses ${contentLayout?.name ?? 'the configured layout'}; final pagination depends on the Word viewer.`
         : `Fixed-page PDF output uses ${contentLayout?.name ?? 'the configured layout'}; fonts without supplied files use bundled PDF substitutes.`
-    return <div data-testid="publish-format-summary" className="bg-white rounded-xl border border-[#E2DED7] p-6 text-[#3D3D4E]">
-      <p className="text-sm font-semibold mb-2">{FORMAT_META[fmt].label} configuration summary</p>
+    return <div data-testid="publish-format-summary" className="rounded-xl border border-[#E2DED7] bg-white p-4 sm:p-5 text-[#3D3D4E]">
+      <p className="text-sm font-semibold mb-2">{FORMAT_META[fmt].label} settings</p>
       <p className="text-xs text-[#6B6B7E] mb-4">This is not a rendered output file. Open the full-project Preview to inspect authored content, then generate a file to verify final formatting.</p>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
         <dt className="text-[#6B6B7E]">Project</dt><dd>{projection.projectName}</dd>
         <dt className="text-[#6B6B7E]">Committed topics</dt><dd>{projection.topics.length}</dd>
-        <dt className="text-[#6B6B7E]">Style Profile</dt><dd>{projection.styleProfile.name}</dd>
-        <dt className="text-[#6B6B7E]">Content layout</dt><dd>{contentLayout?.name ?? 'None configured'}</dd>
         <dt className="text-[#6B6B7E]">Unresolved variables</dt><dd>{projection.unresolvedVariables.length}</dd>
       </dl>
       <p className="text-xs text-[#6B6B7E] mt-4">{details}</p>
@@ -16490,37 +16490,43 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
           ? conditionError ?? `HTML will include only blocks matching "${selectedCondition}" plus unconditional content.`
           : 'Word and PDF reject conditional blocks because their export projection has no audience filter.'}
       </p>}
+      <details className="mt-4 border-t border-[#E2DED7] pt-3 text-xs">
+        <summary className="cursor-pointer font-medium text-[#4D4DC2] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">Detailed output settings</summary>
+        <dl className="mt-3 space-y-2">
+          {configRows[fmt].map(row => (
+            <div key={row.label} className="flex flex-wrap justify-between gap-x-4 gap-y-1">
+              <dt className="text-[#6B6B7E]">{row.label}</dt><dd className="min-w-0 break-words font-medium text-[#111218]">{row.value}</dd>
+            </div>
+          ))}
+        </dl>
+        {activeBrand && <p className="mt-3 text-[#6B6B7E]">Brand: {activeBrand.name} · {activeBrand.bodyFont}</p>}
+        <button type="button" onClick={() => onNav('branding')} className="mt-3 font-medium text-[#4D4DC2] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">Edit in Theme &amp; Styles →</button>
+      </details>
     </div>
   }
 
   return (
     <div className="flex-1 overflow-auto bg-[#F4F2EE]">
-      <div className="max-w-5xl mx-auto w-full p-8 pb-20 fade-in">
+      <div className="mx-auto w-full max-w-5xl min-w-0 p-4 pb-20 sm:p-6 fade-in">
         {/* Review stale banner */}
         {reviewStaleContent && (
           <div className="mb-4 flex items-center gap-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl px-4 py-2.5">
             <div className="w-2 h-2 rounded-full bg-[#F59E0B] animate-pulse flex-shrink-0" />
-            <p className="text-[12px] text-[#92400E] flex-1"><span className="font-semibold">Content changed since last review.</span> Review may be outdated — consider re-running Review before publishing.</p>
-            <button onClick={() => onNav('quality')} className="text-[11px] font-semibold text-[#92400E] border border-[#FDE68A] px-2.5 py-1 rounded-lg hover:bg-[#FDE68A]/50">Go to Review</button>
+            <p className="text-[12px] text-[#92400E] flex-1"><span className="font-semibold">Review may be out of date.</span> Content changed since the last review.</p>
+            <button onClick={() => onNav('quality')} className="shrink-0 rounded-lg border border-[#FDE68A] px-2.5 py-1 text-[11px] font-semibold text-[#92400E] hover:bg-[#FDE68A]/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">Go to Review</button>
           </div>
         )}
         {/* Header */}
-        <div className="flex items-start justify-between mb-6">
-          <div>
-            <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Publish</p>
-            <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Publish Document</h1>
-            <p className="text-[14px] text-[#6B6B7E]">Generate outputs using the configured theme, master pages, and page layouts.</p>
-          </div>
-          <button onClick={() => onNav('studio')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] bg-white px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors">
-            Back to Author
-          </button>
+        <div className="mb-5">
+          <h1 className="text-2xl font-semibold tracking-tight text-[#111218]">Publish outputs</h1>
+          <p className="mt-1 text-[13px] text-[#6B6B7E]">Choose formats and generate downloadable files for this project.</p>
         </div>
         <div data-testid="publish-stage-status" role="status" aria-live="polite" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E2DED7] bg-white px-4 py-3">
           <div>
             <p className={`text-[11px] font-semibold uppercase tracking-wide ${
               generating ? 'text-[#5B5BD6]' : selectedFormats.length === 0 || failedFormats.length > 0 ? 'text-[#A85C08]' : 'text-[#43845B]'
             }`}>
-              {generating ? 'In progress' : selectedFormats.length === 0 || failedFormats.length > 0 ? 'Needs attention' : outputsComplete ? 'Complete' : 'Ready'}
+              {generating ? 'Generating' : selectedFormats.length === 0 || failedFormats.length > 0 ? 'Needs attention' : outputsComplete ? 'Outputs generated' : 'Ready to generate'}
             </p>
             <p className="mt-0.5 text-[11px] text-[#6B6B7E]">
               {generating
@@ -16533,10 +16539,10 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
                     ? 'Current files match this project snapshot.'
                     : missingFormats.length > 0 && selectedFormats.length > missingFormats.length
                       ? `Generate outputs to create the selected ${missingFormats.map(format => format.toUpperCase()).join(', ')} file${missingFormats.length === 1 ? '' : 's'}.`
-                    : `${selectedFormats.length} output ${selectedFormats.length === 1 ? 'format' : 'formats'} selected.`}
+                    : `${selectedFormats.length} output ${selectedFormats.length === 1 ? 'format' : 'formats'} selected. This is not a publish approval.`}
             </p>
           </div>
-          <button type="button" data-testid="publish-preview-document" onClick={() => onNav('preview')} className="rounded-lg border border-[#D8D5CF] px-3 py-2 text-[11px] font-semibold text-[#4D4DC2] hover:bg-[#F8F7FF]">
+          <button type="button" data-testid="publish-preview-document" onClick={() => onNav('preview')} className="shrink-0 rounded-lg border border-[#D8D5CF] px-3 py-2 text-[11px] font-semibold text-[#4D4DC2] hover:bg-[#F8F7FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
             Preview document
           </button>
         </div>
@@ -16547,7 +16553,7 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L14.5 13H1.5L8 2z" stroke="#D97706" strokeWidth="1.3" strokeLinejoin="round"/><path d="M8 6v3.5M8 11v.5" stroke="#D97706" strokeWidth="1.4" strokeLinecap="round"/></svg>
             <div className="flex-1">
               <p className="text-[12px] font-semibold text-[#92400E]">Unresolved variables detected</p>
-              <p className="text-[11px] text-[#B45309]">{[...unresolvedVars].map(v => `{{${v}}}`).join(', ')} — define these in Variables before generating.</p>
+              <p className="break-words text-[11px] text-[#92400E]">{[...unresolvedVars].map(v => `{{${v}}}`).join(', ')} — define these in Variables before generating.</p>
             </div>
           </div>
         )}
@@ -16557,38 +16563,24 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
               ? 'bg-red-50 border-red-300 text-red-950' : 'bg-blue-50 border-blue-300 text-blue-950'}`}>
             <strong>{conditionError ? 'HTML needs an audience condition before publishing.' : `HTML audience condition: ${selectedCondition}`}</strong>
             <p className="mt-1">{conditionError ?? 'HTML includes only matching conditional blocks and unconditional content.'}
-              {' '}Word and PDF still reject conditional blocks. Affected topics: {conditionalTopicTitles.join(', ')}.</p>
+              {' '}Word and PDF still reject conditional blocks. {conditionalTopicTitles.length} affected {conditionalTopicTitles.length === 1 ? 'topic' : 'topics'}.</p>
           </div>
         )}
 
-        <div className="grid grid-cols-5 gap-6">
+        <div className="grid min-w-0 gap-5 lg:grid-cols-5 lg:gap-6">
           {/* Left column */}
-          <div className="col-span-2 space-y-4">
+          <div className="min-w-0 space-y-4 lg:col-span-2">
 
             {/* Output Variant */}
             <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[13px] font-semibold text-[#111218]">Output Variant</p>
               </div>
-              <div className="relative">
-                <button
-                  onClick={() => setShowVariantMenu(v => !v)}
-                  className="w-full flex items-center justify-between border border-[#E2DED7] rounded-lg px-3 py-2 text-[12px] text-[#111218] hover:border-[#5B5BD6] transition-colors text-left"
-                >
-                  <span className="truncate">{OUTPUT_VARIANTS.find(v => v.id === activeVariant)?.label ?? '—'}</span>
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 ml-2"><path d="M2 3.5l3 3 3-3" stroke="#9898AB" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </button>
-                {showVariantMenu && (
-                  <div className="absolute top-full mt-1 left-0 right-0 bg-white border border-[#E2DED7] rounded-lg shadow-md z-20 overflow-hidden">
-                    {OUTPUT_VARIANTS.map(v => (
-                      <button key={v.id} onClick={() => { setActiveVariant(v.id); setShowVariantMenu(false) }}
-                        className={`w-full text-left px-3 py-2 text-[12px] hover:bg-[#EEEEFF] transition-colors ${v.id === activeVariant ? 'text-[#5B5BD6] font-semibold' : 'text-[#111218]'}`}>
-                        {v.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <select aria-label="Output variant" value={activeVariant} onChange={event => setActiveVariant(event.target.value)}
+                className="w-full min-w-0 rounded-lg border border-[#E2DED7] bg-white px-3 py-2 text-[12px] text-[#111218] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
+                {OUTPUT_VARIANTS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+              <p className="mt-2 text-[11px] text-[#6B6B7E]">Saved for reference; this choice does not change generated files or select an HTML audience.</p>
             </div>
 
             {conditionalTopicTitles.length > 0 && <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
@@ -16604,39 +16596,98 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
               <p className="text-xs text-[#6B6B7E] mt-2">This selection filters HTML only. The output variant above does not select an audience; Word and PDF still reject conditional blocks.</p>
             </div>}
 
-            {/* Format-specific Output Configuration */}
+            {/* Format selection */}
             <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[13px] font-semibold text-[#111218]">Output Configuration</p>
-                <span className="text-[10px] font-bold uppercase text-[#5B5BD6] tracking-wide">{activePreviewFormat}</span>
-              </div>
-              <div className="space-y-2.5">
-                {configRows[activePreviewFormat].map(row => (
-                  <div key={row.label} className="flex items-start justify-between gap-2">
-                    <span className="text-[11px] text-[#9898AB] flex-shrink-0">{row.label}</span>
-                    <span className="text-[11px] font-medium text-[#111218] text-right">{row.value}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 pt-3 border-t border-[#F4F2EE]">
-                {activeBrand && (
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-4 h-4 rounded flex items-center justify-center text-[6px] font-bold text-white flex-shrink-0" style={{ backgroundColor: activeBrand.primaryColor }}>{activeBrand.logoLabel?.slice(0,2)}</div>
-                    <div><p className="text-[11px] font-semibold text-[#111218]">{activeBrand.name}</p><p className="text-[10px] text-[#9898AB]">{activeBrand.bodyFont} · {activeBrand.primaryColor}</p></div>
-                  </div>
-                )}
-                <button onClick={() => onNav('branding')} className="text-[11px] text-[#5B5BD6] hover:text-[#4A4AC4] font-medium transition-colors">Edit in Theme & Styles →</button>
+              <p className="text-[13px] font-semibold text-[#111218] mb-3">Output Formats</p>
+              <div className="space-y-2">
+                {(['pdf', 'word', 'html'] as const).map(f => {
+                  const m = FORMAT_META[f]
+                  const checked = selectedFormats.includes(f)
+                  return (
+                    <label key={f} className={`flex items-center gap-3 rounded-xl border p-3 cursor-pointer transition-all focus-within:ring-2 focus-within:ring-[#5B5BD6] ${checked ? 'border-[#5B5BD6] bg-[#EEEEFF]' : 'border-[#E2DED7] hover:border-[#C8C6C0]'}`}>
+                      <input type="checkbox" checked={checked} onChange={() => { setActivePreviewFormat(f); toggleFormat(f) }} className="h-4 w-4 shrink-0 rounded accent-[#5B5BD6]" />
+                      <div className="flex-shrink-0" style={{ color: checked ? m.color : '#9898AB' }}>{m.icon}</div>
+                      <div>
+                        <p className={`text-[13px] font-semibold ${checked ? 'text-[#111218]' : 'text-[#6B6B7E]'}`}>{m.label}</p>
+                        <p className="text-[11px] text-[#9898AB]">{m.desc}</p>
+                      </div>
+                    </label>
+                  )
+                })}
               </div>
             </div>
 
-            {/* Pre-publish QA */}
-            <div className="bg-white border border-[#E2DED7] rounded-xl overflow-hidden">
-              <button onClick={() => setQaExpanded(v => !v)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-[#F9F8F6] transition-colors">
-                <p className="text-[13px] font-semibold text-[#111218]">Pre-publish Check</p>
+            {/* Generate */}
+            <button
+              disabled={selectedFormats.length === 0 || generating}
+              onClick={handleGenerate}
+              data-testid="publish-generate-outputs"
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#5B5BD6] py-3.5 text-[14px] font-semibold text-white transition-colors hover:bg-[#4A4AC4] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5B5BD6]"
+            >
+              {generating ? (
+                <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> {genStep}</>
+              ) : (
+                <><svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 1v10M4 8l3.5 3.5L11 8M1.5 13h12" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg> Generate Outputs</>
+              )}
+            </button>
+            {selectedFormats.length === 0 && (
+              <p data-testid="publish-format-required" className="text-center text-[11px] text-[#6B6B7E]">
+                Select at least one output format above to generate files.
+              </p>
+            )}
+
+            {/* Output files are separate from configuration and remain bound to this snapshot. */}
+            {selectedFormats.length > 0 && (
+              <section data-testid="publish-output-results" aria-label="Output files" className="space-y-2 border-t border-[#E2DED7] pt-4">
+                <h2 className="text-[13px] font-semibold text-[#111218]">Output files</h2>
+                {(['pdf', 'word', 'html'] as const).filter(f => selectedFormats.includes(f)).map(f => {
+                  const blob = visibleBlobs[f]
+                  const err = visibleErrors[f]
+                  const exts: Record<string, string> = { pdf: `${safeFilename}.pdf`, word: `${safeFilename}.docx`, html: `${safeFilename}-html.zip` }
+                  const formatLabel = f === 'html' ? 'HTML ZIP' : f === 'word' ? 'Word (.docx)' : 'PDF'
+                  if (generating || (!blob && !err)) return (
+                    <div key={f} className="rounded-xl border border-[#E2DED7] bg-white p-3 text-[12px] text-[#575766]">
+                      <span className="font-semibold text-[#111218]">{formatLabel}</span> · {generating ? 'Generating…' : 'Not generated yet'}
+                    </div>
+                  )
+                  if (err) return (
+                    <div key={f} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] p-3">
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-semibold text-[#991B1B]">{formatLabel} · Failed</p>
+                        <p className="text-[11px] text-[#991B1B]">{f === 'html' && conditionError ? 'Choose an HTML audience above, then retry.' : 'Could not generate this file. Check the settings and retry.'}</p>
+                      </div>
+                      <button type="button" onClick={handleGenerate} className="shrink-0 rounded border border-[#FCA5A5] px-2 py-1 text-[11px] font-medium text-[#991B1B] hover:bg-[#FEE2E2] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">Retry outputs</button>
+                    </div>
+                  )
+                  if (!blob) return null
+                  return (
+                    <div key={f} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#BBF7D0] bg-[#F0FDF4] p-3">
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-semibold text-[#166534]">{FORMAT_META[f].label} Ready</p>
+                        <p className="break-all text-[11px] text-[#166534]">{(blob.size / 1024).toFixed(1)} KB · {exts[f]}</p>
+                      </div>
+                      <button onClick={() => {
+                        if (outputsCurrent) downloadBlob(blob, exts[f])
+                      }} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[#BBF7D0] bg-white px-3 py-2 text-[12px] font-medium text-[#166534] transition-colors hover:bg-[#DCFCE7] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v8M3 6.5L6 9.5 9 6.5M1.5 10.5h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        Download
+                      </button>
+                    </div>
+                  )
+                })}
+              </section>
+            )}
+          </div>
+
+          {/* Secondary checks and snapshot settings; these are not rendered output previews. */}
+          <div className="min-w-0 space-y-4 lg:col-span-3">
+            <div className="overflow-hidden rounded-xl border border-[#E2DED7] bg-white">
+              <button type="button" aria-expanded={qaExpanded} onClick={() => setQaExpanded(v => !v)} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-[#F9F8F6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
+                <span className="text-[13px] font-semibold text-[#111218]">Pre-publish Check</span>
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className={`transition-transform ${qaExpanded ? 'rotate-180' : ''}`}><path d="M2 4l4 4 4-4" stroke="#9898AB" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
               {qaExpanded && (
-                <div className="border-t border-[#F4F2EE] px-4 py-3 space-y-2">
+                <div className="space-y-2 border-t border-[#F4F2EE] px-4 py-3">
                   {[
                     { label: 'Variables', value: hasUnresolvedVars ? `${unresolvedVars.size} unresolved` : 'All resolved', ok: !hasUnresolvedVars },
                     { label: 'HTML Conditions', value: conditionError ?? (conditionalTopicTitles.length
@@ -16654,13 +16705,12 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
                     { label: 'Theme', value: activeTheme ? activeTheme.name : 'Not selected', ok: !!activeTheme },
                     { label: 'Review', value: reviewStaleContent ? 'Out of date' : 'Not checked by Publish', ok: false },
                   ].map(row => (
-                    <div key={row.label} className="flex items-center justify-between">
-                      <span className="text-[11px] text-[#6B6B7E]">{row.label}</span>
-                      <span className={`text-[11px] font-medium flex items-center gap-1 ${row.ok ? 'text-[#16A34A]' : 'text-[#D97706]'}`}>
+                    <div key={row.label} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                      <span className="text-[11px] text-[#575766]">{row.label}</span>
+                      <span className={`flex min-w-0 items-center gap-1 break-words text-[11px] font-medium ${row.ok ? 'text-[#15803D]' : 'text-[#92400E]'}`}>
                         {row.ok
                           ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.5 5l3 3 4-4" stroke="#16A34A" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                          : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 2v4M5 7.5v.5" stroke="#D97706" strokeWidth="1.3" strokeLinecap="round"/></svg>
-                        }
+                          : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 2v4M5 7.5v.5" stroke="#D97706" strokeWidth="1.3" strokeLinecap="round"/></svg>}
                         {row.value}
                       </span>
                     </div>
@@ -16668,93 +16718,12 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
                 </div>
               )}
             </div>
-
-            {/* Format selection */}
-            <div className="bg-white border border-[#E2DED7] rounded-xl p-4">
-              <p className="text-[13px] font-semibold text-[#111218] mb-3">Output Formats</p>
-              <div className="space-y-2">
-                {(['pdf', 'word', 'html'] as const).map(f => {
-                  const m = FORMAT_META[f]
-                  const checked = selectedFormats.includes(f)
-                  return (
-                    <label key={f} onClick={() => { setActivePreviewFormat(f) }} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${checked ? 'border-[#5B5BD6] bg-[#EEEEFF]' : 'border-[#E2DED7] hover:border-[#C8C6C0]'}`}>
-                      <input type="checkbox" checked={checked} onChange={() => toggleFormat(f)} className="w-4 h-4 rounded accent-[#5B5BD6]" onClick={e => e.stopPropagation()} />
-                      <div className="flex-shrink-0" style={{ color: checked ? m.color : '#9898AB' }}>{m.icon}</div>
-                      <div>
-                        <p className={`text-[13px] font-semibold ${checked ? 'text-[#111218]' : 'text-[#6B6B7E]'}`}>{m.label}</p>
-                        <p className="text-[11px] text-[#9898AB]">{m.desc}</p>
-                      </div>
-                    </label>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Generate */}
-            <button
-              disabled={selectedFormats.length === 0 || generating}
-              onClick={handleGenerate}
-              data-testid="publish-generate-outputs"
-              className="w-full flex items-center justify-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-50 text-white text-[14px] font-semibold py-3.5 rounded-xl transition-colors"
-            >
-              {generating ? (
-                <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> {genStep}</>
-              ) : (
-                <><svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 1v10M4 8l3.5 3.5L11 8M1.5 13h12" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg> Generate Outputs</>
-              )}
-            </button>
-            {selectedFormats.length === 0 && (
-              <p data-testid="publish-format-required" className="text-center text-[11px] text-[#6B6B7E]">
-                Select at least one output format above to generate files.
-              </p>
-            )}
-
-            {/* Per-format download cards */}
-            {(Object.keys(visibleBlobs).length > 0 || Object.keys(visibleErrors).length > 0) && (
-              <div className="space-y-2">
-                {(['pdf', 'word', 'html'] as const).filter(f => selectedFormats.includes(f)).map(f => {
-                  const blob = visibleBlobs[f]
-                  const err = visibleErrors[f]
-                  const exts: Record<string, string> = { pdf: `${safeFilename}.pdf`, word: `${safeFilename}.docx`, html: `${safeFilename}-html.zip` }
-                  if (err) return (
-                    <div key={f} className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-xl p-3 flex items-center justify-between">
-                      <div>
-                        <p className="text-[12px] font-semibold text-[#DC2626]">{FORMAT_META[f].label} generation failed</p>
-                        <p className="text-[10px] text-[#DC2626] opacity-70">{err}</p>
-                      </div>
-                      <button onClick={handleGenerate} className="text-[11px] font-medium text-[#DC2626] border border-[#FCA5A5] px-2 py-1 rounded hover:bg-[#FEE2E2] flex-shrink-0">Retry</button>
-                    </div>
-                  )
-                  if (!blob) return null
-                  return (
-                    <div key={f} className="bg-[#DCFCE7] border border-[#BBF7D0] rounded-xl p-3 flex items-center justify-between">
-                      <div>
-                        <p className="text-[12px] font-semibold text-[#15803D]">{FORMAT_META[f].label} Ready</p>
-                        <p className="text-[10px] text-[#16A34A]">{(blob.size / 1024).toFixed(1)} KB · {exts[f]}</p>
-                      </div>
-                      <button onClick={() => {
-                        if (generatedFor?.id === generationId.current
-                          && generatedFor.condition === selectedCondition
-                          && generatedFor.snapshot === JSON.stringify(projection)) downloadBlob(blob, exts[f])
-                      }} className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[#BBF7D0] rounded-lg text-[12px] text-[#15803D] font-medium hover:bg-[#F0FDF4] transition-colors flex-shrink-0">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v8M3 6.5L6 9.5 9 6.5M1.5 10.5h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        Download
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Right: output preview */}
-          <div className="col-span-3 space-y-4">
-            <div className="flex items-center justify-between">
-              <p className="text-[13px] font-semibold text-[#111218]">Output Configuration Summary</p>
-              <div className="flex items-center gap-1 bg-white border border-[#E2DED7] rounded-lg p-0.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-[13px] font-semibold text-[#111218]">Output settings</h2>
+              <div role="group" aria-label="Output settings format" className="flex items-center gap-1 rounded-lg border border-[#E2DED7] bg-white p-0.5">
                 {(['pdf', 'word', 'html'] as const).map(f => (
-                  <button key={f} onClick={() => { setActivePreviewFormat(f) }}
-                    className={`px-3 py-1 rounded-md text-[11px] font-semibold uppercase transition-all ${activePreviewFormat === f ? 'bg-[#5B5BD6] text-white' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}>
+                  <button key={f} type="button" aria-pressed={activePreviewFormat === f} onClick={() => setActivePreviewFormat(f)}
+                    className={`rounded-md px-3 py-1 text-[11px] font-semibold uppercase transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6] ${activePreviewFormat === f ? 'bg-[#5B5BD6] text-white' : 'text-[#575766] hover:text-[#111218]'}`}>
                     {f}
                   </button>
                 ))}
@@ -16763,14 +16732,6 @@ function PublishScreen({ onNav, projection, reviewStaleContent, publishConfig, o
 
             {renderFormatPreview(activePreviewFormat)}
 
-            <div className="flex items-center justify-between pt-1">
-              <p className="text-[11px] text-[#9898AB]">
-                {FORMAT_META[activePreviewFormat].label} settings from the committed project snapshot
-              </p>
-              <button onClick={() => onNav('preview')} className="text-[11px] font-medium text-[#5B5BD6] hover:text-[#4A4AC4] transition-colors">
-                Open full preview →
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -20085,22 +20046,27 @@ export default function App() {
     void navigate(issue.destination ?? (issue.id === 'toc-stale' || issue.id === 'toc-missing' ? 'structure' : issue.stage))
   }
 
+  // Preview and Publish share a read-only projection. Other app state changes
+  // (including output selection and save status) do not change its inputs.
+  const projectOutputProjection = useMemo<ProjectPublishProjection | null>(() => {
+    if (screen !== 'preview' && screen !== 'publish') return null
+    const theme = themes.find(t => t.id === projectMeta.themeId) ?? themes[0]
+    return buildPublishProjection({
+      projectName: displayName, topics: appToc, topicContent, masterAssignments,
+      variables: themeVariables[projectMeta.themeId] ?? [],
+      theme: theme ? { id: theme.id, name: theme.name } : null,
+      styleProfile: resolveEffectiveStyleProfile({ themes, projectMeta, activeStyleProfileId }),
+      legacyBrandProfile: theme?.brandProfiles[0] ?? null,
+      templatePack: theme?.outputTemplatePacks.find(pack => pack.id === projectMeta.templatePackId)
+        ?? theme?.outputTemplatePacks[0] ?? null,
+      pageLayouts, htmlMasters: htmlMasterPages,
+    })
+  }, [screen, displayName, appToc, topicContent, masterAssignments, themeVariables, themes,
+    projectMeta.themeId, projectMeta.templatePackId, projectMeta.styleProfileId,
+    activeStyleProfileId, pageLayouts, htmlMasterPages])
+
   const renderScreen = () => {
     const effectiveStyleProfile = resolveEffectiveStyleProfile({ themes, projectMeta, activeStyleProfileId })
-    // The same read-only snapshot is used by Publish and the real-project Preview.
-    const publishProjection = (): ProjectPublishProjection => {
-      const theme = themes.find(t => t.id === projectMeta.themeId) ?? themes[0]
-      return buildPublishProjection({
-        projectName: displayName, topics: appToc, topicContent, masterAssignments,
-        variables: getThemeVars(projectMeta.themeId),
-        theme: theme ? { id: theme.id, name: theme.name } : null,
-        styleProfile: effectiveStyleProfile,
-        legacyBrandProfile: theme?.brandProfiles[0] ?? null,
-        templatePack: theme?.outputTemplatePacks.find(pack => pack.id === projectMeta.templatePackId)
-          ?? theme?.outputTemplatePacks[0] ?? null,
-        pageLayouts, htmlMasters: htmlMasterPages,
-      })
-    }
     const context = getAccessContext()
     const access = getAdministrationAccess(context, projectId ? projectOwnershipRef.current : null)
     const selectedManagementProject = !management || (management.selectedProjectId !== '' && management.selectedProjectId !== 'all')
@@ -20170,10 +20136,9 @@ export default function App() {
         : <RealTocProposalScreen onNav={navigate} toc={appToc} proposal={tocProposal} proposalFresh={tocProposalFresh} committedTocStale={committedTocStale} evidenceIndex={evidenceIndex} canGenerate={!!evidenceIndex && evidenceFresh && !!conceptAnalysis && conceptAnalysisFresh} canGenerateAi={canGenerateAiToc} recovery={activeAiTocRecovery} onDismissRecovery={handleDiscardAiTocRecovery} onRecoverRecovery={handleRecoverAiTocProposal} onGenerate={handleGenerateTocProposal} onGenerateAi={handleGenerateAiTocProposal} onProposalChange={handleTocProposalChange} onDiscardProposal={handleDiscardTocProposal} onCommit={handleCommitTocProposal} />
        case 'studio':    return <StudioScreen onNav={navigate} reviewContext={reviewContext} onClearReviewContext={clearReviewContext} realReviewTarget={realReviewTarget} onClearRealReviewTarget={() => setRealReviewTarget(null)} requestedTopicId={requestedStudioTopicId} onRequestedTopicOpened={() => setRequestedStudioTopicId(null)} variables={getThemeVars(projectMeta.themeId)} onVariablesChange={vars => setThemeVars(projectMeta.themeId, vars)} onDocBlocksChange={blocks => { sharedDocBlocksRef.current = blocks }} onContentEdit={() => { setContentRevision(r => r + 1); triggerAutosave() }} toc={appToc} onTocChange={handleTocChange} contentExplorer={resolvedContentExplorer} contentExplorerAssets={contentExplorerAssets} onContentExplorerChange={handleContentExplorerChange} explorerReadOnly={isCloudProjectMode() && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write !== true} canBrowseCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).workspace.read} canCopyCatalog={isCloudProjectMode() && !!projectId && !isDemoMode && getAdministrationAccess(getAccessContext(), projectOwnershipRef.current).project?.write === true} loadCatalogProjects={loadCatalogProjects} loadCatalogItems={loadCatalogItems} loadCatalogPreview={loadCatalogPreview} onCatalogCopy={handleCatalogCopy} topicContent={topicContent} onTopicContentChange={handleTopicContentChange} authorTopicMetadata={authorTopicMetadata} onAuthorTopicMetadataChange={handleAuthorTopicMetadataChange} groundingFreshnessByTopic={groundingFreshnessByTopic} onRefreshTopicGrounding={handleRefreshTopicGrounding} onGenerateTopicDraft={handleGenerateTopicDraft} onGenerateAiTopicDraft={handleGenerateAiTopicDraft} onRewriteAiTopicDraft={handleRewriteAiTopicDraft} canGenerateAiTopic={canGenerateAiTopic} projectId={projectId} onSetDraftDiffSelection={handleSetDraftDiffSelection} onApplyTopicDraft={handleApplyTopicDraft} projectSources={sources.map(source => ({ fileId: source.fileId, name: source.file.name }))} evidenceIndex={evidenceIndex} sourceExtractions={sourceExtractions} reviewModel={reviewModel} snippets={snippets} onSnippetsChange={handleSnippetsChange} conditionGroups={conditionGroups} onConditionGroupsChange={handleConditionGroupsChange} docComments={docComments} onDocCommentsChange={handleDocCommentsChange} isDemoMode={isDemoMode} projectName={displayName} documentType={projectMeta.contentType} reviewInputSnapshot={currentReviewInputSnapshot} onRunGroundedReview={handleRunGroundedReview} />
       case 'quality':   return <QualityScreen onNav={navigate} findingStatuses={findingStatuses} onSetFindingStatus={setFindingStatus} onJumpToSection={jumpToSection} aiReviewDone={aiReviewDone} onSetAiReviewDone={v => { setAiReviewDone(v); if (v) handleReviewDone() }} reviewStage={reviewStage} onSetReviewStage={setReviewStage} reviewStaleContent={reviewStaleContent} isDemoMode={isDemoMode} reviewInputSnapshot={currentReviewInputSnapshot} reviewModel={reviewModel} topics={appToc} topicContent={topicContent} onRunGroundedReview={handleRunGroundedReview} canRunAiReview={canRunAiReview} projectId={projectId} onRunAiReview={handleRunAiReview} onSetGroundedFindingStatus={handleSetGroundedFindingStatus} onApplyGroundedFinding={handleApplyGroundedFinding} onOpenGroundedFinding={handleOpenGroundedFinding} requestedFindingId={requestedQualityFindingId} onRequestedFindingOpened={() => setRequestedQualityFindingId(null)} />
-      case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : publishProjection()} selectedCondition={publishConfig.selectedCondition} />
+      case 'preview':   return <PreviewScreen onNav={navigate} isDemoMode={isDemoMode} projectName={displayName} toc={appToc} topicContent={topicContent} projection={isDemoMode ? undefined : projectOutputProjection!} selectedCondition={publishConfig.selectedCondition} />
       case 'publish': {
-        const projection = publishProjection()
-        return <PublishScreen onNav={navigate} projection={projection} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
+        return <PublishScreen onNav={navigate} projection={projectOutputProjection!} reviewStaleContent={reviewStaleContent} publishConfig={publishConfig} onPublishConfigChange={handlePublishConfigChange} />
       }
       default:          return <DashboardScreen onNav={navigate} onManagement={openManagement} activeProjectId={projectId} onOpenProject={handleOpenProject} onDeleteProject={handleDeleteProject} onDuplicateProject={handleDuplicateProject} onRestored={handleRestoredProject} onNewProject={startNewProject} />
     }

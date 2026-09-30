@@ -121,7 +121,7 @@ test('Author describes missing Review inputs and runs Review when ready; Review 
   await expect(page.getByTestId('publish-stage-status')).toContainText(/Ready|Complete/)
   await expect(page.getByTestId('publish-generate-outputs')).toBeEnabled()
   await page.getByTestId('publish-generate-outputs').click()
-  await expect(page.getByTestId('publish-stage-status')).toContainText('Complete', { timeout: 20_000 })
+  await expect(page.getByTestId('publish-stage-status')).toContainText('Outputs generated', { timeout: 20_000 })
   await page.getByRole('checkbox', { name: /PDF/ }).check()
   await expect(page.getByTestId('publish-stage-status')).toContainText('Ready')
   await expect(page.getByTestId('publish-stage-status')).toContainText('PDF file')

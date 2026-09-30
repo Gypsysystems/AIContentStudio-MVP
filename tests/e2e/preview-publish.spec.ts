@@ -12,8 +12,39 @@ async function createProject(page: Page) {
 async function openPreview(page: Page) {
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Publish', exact: true }).click()
-  await page.getByRole('button', { name: 'Full Preview' }).click()
+  await page.getByTestId('publish-preview-document').click()
 }
+
+test('Publish keeps one preview entry and responsive, keyboard-usable output controls', async ({ page }) => {
+  await createProject(page)
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Publish', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: 'Publish outputs' })).toHaveCount(1)
+  await expect(page.getByTestId('publish-preview-document')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: 'Open full preview' })).toHaveCount(0)
+  await expect(page.getByTestId('publish-stage-status')).toContainText('Needs attention')
+  await expect(page.getByRole('button', { name: 'Pre-publish Check' })).toHaveAttribute('aria-expanded', 'true')
+
+  const variant = page.getByRole('combobox', { name: 'Output variant' })
+  await variant.selectOption('internal')
+  await expect(variant).toHaveValue('internal')
+  await expect(page.getByText('this choice does not change generated files')).toBeVisible()
+
+  for (const format of ['PDF', 'Word', 'HTML']) {
+    await page.getByRole('checkbox', { name: new RegExp(format) }).check()
+  }
+  await expect(page.getByTestId('publish-stage-status')).toContainText('Ready to generate')
+  await expect(page.getByTestId('publish-output-results')).toContainText('Not generated yet')
+  await expect(page.getByTestId('publish-output-results')).toContainText('Word (.docx)')
+  await expect(page.getByTestId('publish-output-results')).toContainText('HTML ZIP')
+
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await expect(page.getByTestId('publish-generate-outputs')).toBeVisible()
+  await page.getByTestId('publish-preview-document').click()
+  await expect(page.getByTestId('project-preview')).toBeVisible()
+})
 
 test('real Preview renders all committed stable-ID topics and structures, selected style/layout/master, media and warnings after reload', async ({ page }) => {
   test.setTimeout(90_000)
@@ -108,7 +139,7 @@ test('real Preview renders all committed stable-ID topics and structures, select
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Publish', exact: true }).click()
   await expect(page.getByTestId('publish-conditional-warning')).toContainText('HTML export condition context is required')
-  await page.getByRole('button', { name: 'Full Preview' }).click()
+  await page.getByTestId('publish-preview-document').click()
   const preview = page.getByTestId('project-preview')
   await expect(preview).toBeVisible()
   const nav = preview.getByRole('navigation', { name: 'Committed table of contents' })

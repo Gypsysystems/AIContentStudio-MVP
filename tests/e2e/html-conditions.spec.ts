@@ -106,7 +106,7 @@ async function openPublish(page: Page) {
   await page.reload()
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Publish', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Publish Document' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Publish outputs' })).toBeVisible()
 }
 
 test('HTML fails closed when conditional blocks have no selected audience or an invalid selection', async () => {
@@ -181,7 +181,8 @@ test('Publish QA explains missing HTML condition context and selected condition 
   const audience = page.getByRole('combobox', { name: 'HTML audience condition' })
   await expect(audience).toBeVisible()
   await page.getByRole('button', { name: 'Generate Outputs' }).click()
-  await expect(page.getByText(/HTML generation failed:.*condition context is required/i)).toBeVisible()
+  await expect(page.getByTestId('publish-output-results')).toContainText('HTML ZIP · Failed')
+  await expect(page.getByTestId('publish-output-results')).toContainText('Choose an HTML audience above, then retry.')
 
   await audience.selectOption('internal')
   await expect.poll(async () => page.evaluate(async () => {
@@ -197,7 +198,7 @@ test('Publish QA explains missing HTML condition context and selected condition 
   await audience.selectOption('external')
   await expect(page.getByText('HTML Ready', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Download', exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: 'Full Preview' }).click()
+  await page.getByTestId('publish-preview-document').click()
   await expect(page.getByTestId('project-preview')).toContainText('External content.')
   await expect(page.getByTestId('project-preview')).not.toContainText('Internal content.')
   await page.getByRole('button', { name: 'Go to Publish' }).click()
