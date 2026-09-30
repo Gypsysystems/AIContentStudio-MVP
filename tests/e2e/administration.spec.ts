@@ -58,7 +58,7 @@ test('administration is separate from workflow and saved project settings return
     return (await repo.loadProject(projectId))?.version
   }, id)
   expect(persisted).toBe('2.4')
-  await workspace.getByRole('button', { name: 'Back to workspace' }).click()
+  await page.getByRole('button', { name: 'Return to project' }).click()
   await expect(page.getByTestId('administration-workspace')).toHaveCount(0)
 })
 
@@ -234,7 +234,7 @@ test('administration entry and settings remain usable at narrow viewport widths'
   await expect(workspace.getByRole('heading', { name: 'Administration' })).toBeVisible()
   await expect(workspace).toContainText('No project selected')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await workspace.getByRole('button', { name: 'Back to workspace' }).click()
+  await page.getByRole('button', { name: 'Return to Projects' }).click()
   await expect(page.getByTestId('administration-workspace')).toHaveCount(0)
 })
 
@@ -248,7 +248,7 @@ test('dashboard New project starts a new project even when an older project rema
   }, id)
   await page.reload()
   await page.getByTestId('topbar-administration').click()
-  await page.getByTestId('administration-workspace').getByRole('button', { name: 'Back to workspace' }).click()
+  await page.getByRole('button', { name: 'Return to project' }).click()
   await page.getByRole('button', { name: 'Content Studio home' }).click()
   await page.getByRole('button', { name: 'New Project', exact: true }).click()
   await expect(page.getByText('Step 1 — Project Details')).toBeVisible()

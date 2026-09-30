@@ -720,8 +720,8 @@ test("Home settings and branding are reachable and return to the same project", 
   await openProjectHome(page, name)
 
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Project Settings" }).click()
-  await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
-  await page.getByRole("button", { name: "Back to project" }).click()
+  await expect(page.getByRole("heading", { name: "Project Settings" })).toBeVisible()
+  await page.getByRole("button", { name: "Return to project" }).click()
   await expect(page.getByTestId("project-home")).toBeVisible()
   await expect(homeProjectHeading(page, name)).toBeVisible()
 
@@ -774,7 +774,7 @@ test("Home navigation respects a pending project-settings save", async ({ page }
   // Settings guards an in-flight save; the header's ordinary Home action
   // cannot bypass that write barrier.
   await page.getByTestId("topbar-project-home").click()
-  await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Project Settings" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Saving changes…" })).toBeVisible()
   releaseSave()
   await expect(page.getByRole("button", { name: "Saving changes…" })).toHaveCount(0)
@@ -824,8 +824,8 @@ test("cloud account and sign-out controls never cover project header actions", a
     await rail.getByRole("button", { name: "Project Home" }).click()
     await expect(page.getByTestId("project-home")).toBeVisible()
     await rail.getByRole("button", { name: "Project Settings" }).click()
-    await expect(page.getByRole("heading", { name: "Project Details" })).toBeVisible()
-    await page.getByRole("button", { name: "Back to project" }).click()
+    await expect(page.getByRole("heading", { name: "Project Settings" })).toBeVisible()
+    await page.getByRole("button", { name: "Return to project" }).click()
     await expect(page.getByTestId("project-home")).toBeVisible()
     await rail.getByRole("button", { name: "Brand & Output" }).click()
     await expect(page.getByRole("heading", { name: "Theme & Style Profiles" })).toBeVisible()

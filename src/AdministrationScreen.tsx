@@ -17,6 +17,7 @@ type AdministrationScreenProps = {
   } | null
   saveStatus: 'idle' | 'saving' | 'saved' | 'error'
   onBack: () => void
+  showBack?: boolean
   onProjectSettings: () => void
   onDiscardProject: () => void
 }
@@ -78,6 +79,7 @@ export default function AdministrationScreen({
   project,
   saveStatus,
   onBack,
+  showBack = true,
   onProjectSettings,
   onDiscardProject,
 }: AdministrationScreenProps) {
@@ -93,11 +95,9 @@ export default function AdministrationScreen({
     <div className="min-h-0 flex-1 overflow-auto bg-[#F7F6F3] text-[#20202C]" data-testid="administration-workspace">
       <div className="mx-auto w-full max-w-6xl px-4 pb-12 pt-5 sm:px-7 sm:pt-8 lg:px-10">
         <nav aria-label="Breadcrumb" className="mb-7 flex items-center gap-2 text-[11px] text-[#858391]">
-          <button type="button" onClick={onBack} className="rounded-sm transition-colors hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
-            Workspace
-          </button>
+          <span>{displayWorkspace}</span>
           <span aria-hidden="true">/</span>
-          <span className="font-medium text-[#434250]">Administration</span>
+          <span aria-current="page" className="font-medium text-[#434250]">Administration</span>
         </nav>
 
         <header className="relative mb-8 overflow-hidden rounded-2xl border border-[#E1DFD9] bg-[#FCFBF9] px-5 py-6 sm:px-8 sm:py-8">
@@ -113,16 +113,29 @@ export default function AdministrationScreen({
             </div>
             <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
               <div>
-                 <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#77758B]">Workspace access</p>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#77758B]">Workspace administration</p>
                 <h1 className="mt-2 text-[29px] font-semibold leading-tight tracking-[-0.045em] text-[#22222E] sm:text-[36px]">Administration</h1>
                 <p className="mt-2 max-w-xl text-[13px] leading-6 text-[#747381]">
-                  A clear view of who you are here, what this workspace allows, and where project controls live.
+                  Workspace membership and settings are shown separately from controls for the project currently in scope.
                 </p>
               </div>
-              <button type="button" onClick={onBack} className="inline-flex min-h-9 w-fit items-center gap-2 rounded-lg border border-[#DCDAD4] bg-white px-3 text-[11px] font-semibold text-[#555461] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">
+              {showBack && <button type="button" onClick={onBack} className="inline-flex min-h-9 w-fit items-center gap-2 rounded-lg border border-[#DCDAD4] bg-white px-3 text-[11px] font-semibold text-[#555461] transition-colors hover:border-[#C7C5F4] hover:bg-[#F8F7FF] hover:text-[#4D4DC2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">
                 <svg aria-hidden="true" width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M10 3.5 5.5 8 10 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 Back to workspace
-              </button>
+              </button>}
+            </div>
+            <div className="mt-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-[#ECE9E2] pt-4 text-[11px]">
+              <span className="font-medium text-[#777685]">Project in scope</span>
+              {project && canReadProject ? (
+                <>
+                  <span className="max-w-full truncate rounded-md border border-[#DEDDF1] bg-[#F5F4FC] px-2.5 py-1 font-semibold text-[#4D4B9B]">{project.name}</span>
+                  <span className="text-[#8A8895]">{canWriteProject ? 'Read and write' : 'Read only'}</span>
+                </>
+              ) : project ? (
+                <span className="rounded-md border border-[#E4E2DC] bg-white/70 px-2.5 py-1 text-[#858391]">Access restricted</span>
+              ) : (
+                <span className="rounded-md border border-[#E4E2DC] bg-white/70 px-2.5 py-1 text-[#858391]">No project selected</span>
+              )}
             </div>
           </div>
         </header>
@@ -191,20 +204,22 @@ export default function AdministrationScreen({
             <section aria-labelledby="workspace-settings-heading" className="rounded-2xl border border-[#E2E0DA] bg-[#FCFBF9] p-5 sm:p-6">
                <SectionHeading id="workspace-settings-heading" index="03" eyebrow="Workspace" title="Workspace settings" description="Scope and configuration access for the current workspace." />
               <div className="divide-y divide-[#ECEAE5] rounded-xl border border-[#E8E6E0]">
-                <div className="flex items-start justify-between gap-4 px-4 py-3.5">
-                  <div>
-                    <p className="text-[11px] font-medium text-[#393844]">Organization</p>
-                    <p className="mt-1 text-[10px] text-[#8C8A96]">{displayOrganization}</p>
-                  </div>
-                  <span className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#92909A]">Context</span>
-                </div>
-                <div className="flex items-start justify-between gap-4 px-4 py-3.5">
-                  <div>
-                    <p className="text-[11px] font-medium text-[#393844]">Workspace</p>
-                    <p className="mt-1 text-[10px] text-[#8C8A96]">{displayWorkspace}</p>
-                  </div>
-                  <span className="mt-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#92909A]">Context</span>
-                </div>
+                <details className="group">
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[11px] font-medium text-[#555460] marker:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#5B5BD6] [&::-webkit-details-marker]:hidden">
+                    <span>Workspace context details</span>
+                    <span aria-hidden="true" className="text-[#858391] transition-transform group-open:rotate-180">⌄</span>
+                  </summary>
+                  <dl className="grid gap-3 border-t border-[#E8E6E0] bg-[#F8F7F4] px-4 py-3 sm:grid-cols-2">
+                    <div className="min-w-0">
+                      <dt className="text-[10px] text-[#8C8A96]">Organization</dt>
+                      <dd className="mt-1 break-words text-[11px] font-medium text-[#555460]">{displayOrganization}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-[10px] text-[#8C8A96]">Workspace</dt>
+                      <dd className="mt-1 break-words text-[11px] font-medium text-[#555460]">{displayWorkspace}</dd>
+                    </div>
+                  </dl>
+                </details>
               </div>
               <div className="mt-4 rounded-xl bg-[#F5F4F1] px-4 py-3.5">
                  <p className="text-[11px] font-semibold text-[#4A4955]">Settings are unavailable</p>
@@ -215,7 +230,7 @@ export default function AdministrationScreen({
             </section>
 
             <section aria-labelledby="project-settings-heading" className="rounded-2xl border border-[#E2E0DA] bg-[#FCFBF9] p-5 sm:p-6">
-               <SectionHeading id="project-settings-heading" index="04" eyebrow="Project" title="Project settings" description="Project details are scoped by your effective project access." />
+              <SectionHeading id="project-settings-heading" index="04" eyebrow="Project scope" title="Project settings" description="These controls apply only to the project in scope—not to workspace membership or permissions." />
               {!project ? (
                 <div className="rounded-xl border border-dashed border-[#DCDAD4] bg-[#F8F7F4] px-4 py-5">
                    <p className="text-[11px] font-semibold text-[#555460]">No project selected</p>
@@ -232,12 +247,18 @@ export default function AdministrationScreen({
               ) : (
                 <>
                   <div className="mb-4 rounded-xl border border-[#E8E6E0] bg-[#F8F7F4] px-4 py-3.5">
-                    <p className="mb-3 text-[9px] font-semibold uppercase tracking-[0.13em] text-[#92909A]">Current project</p>
-                    <dl className="grid grid-cols-[96px_1fr] gap-x-3 gap-y-2.5 text-[11px]">
-                      <dt className="text-[#898793]">Name</dt><dd className="truncate font-medium text-[#42414D]">{project.name}</dd>
-                      <dt className="text-[#898793]">Document type</dt><dd className="truncate font-medium text-[#42414D]">{project.documentType}</dd>
-                      <dt className="text-[#898793]">Version</dt><dd className="truncate font-medium text-[#42414D]">{project.version || 'Not set'}</dd>
-                    </dl>
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-[#92909A]">Current project</p>
+                    <p className="mt-1 break-words text-[13px] font-semibold text-[#42414D]">{project.name}</p>
+                    <details className="group mt-2 border-t border-[#E8E6E0] pt-2">
+                      <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 text-[10px] font-medium text-[#777685] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] [&::-webkit-details-marker]:hidden">
+                        Technical details
+                        <span aria-hidden="true" className="transition-transform group-open:rotate-180">⌄</span>
+                      </summary>
+                      <dl className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-2 pt-2 text-[11px]">
+                        <dt className="text-[#898793]">Document type</dt><dd className="break-words font-medium text-[#42414D]">{project.documentType}</dd>
+                        <dt className="text-[#898793]">Version</dt><dd className="break-words font-medium text-[#42414D]">{project.version || 'Not set'}</dd>
+                      </dl>
+                    </details>
                   </div>
                   <div className="mb-4 flex items-center justify-between rounded-lg bg-[#F3F2EF] px-3.5 py-2.5">
                     <span className="text-[10px] text-[#777685]">Project access</span>
@@ -259,15 +280,15 @@ export default function AdministrationScreen({
                 <p className="font-semibold">Cannot safely leave with unsaved changes</p>
                 <p className="mt-1 leading-5">If access was removed or saving failed, you can discard unsaved edits in this tab and return to the workspace. Already saved changes are not undone.</p>
                 <button type="button" onClick={() => setConfirmDiscard(true)} disabled={saveStatus === 'saving'}
-                  className="mt-3 min-h-9 rounded-md border border-[#B98D5D] px-3 font-semibold hover:bg-[#FFF0D7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] disabled:cursor-not-allowed disabled:opacity-50">
+                  className="mt-3 min-h-9 rounded-md border border-[#B98D5D] px-3 font-semibold hover:bg-[#FFF0D7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
                   Discard unsaved edits and leave project
                 </button>
                 {confirmDiscard && <div role="alertdialog" aria-labelledby="discard-project-title" aria-describedby="discard-project-description" className="mt-3 rounded-lg border border-[#B98D5D] bg-white p-3">
                   <p id="discard-project-title" className="font-semibold">Discard unsaved edits?</p>
                   <p id="discard-project-description" className="mt-1 leading-5">Edits not saved to this project will be lost. Saved project data remains unchanged.</p>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button type="button" onClick={onDiscardProject} className="min-h-9 rounded-md bg-[#7B4B26] px-3 font-semibold text-white">Discard and leave</button>
-                    <button type="button" onClick={() => setConfirmDiscard(false)} className="min-h-9 rounded-md border border-[#D8D5CF] px-3">Keep working</button>
+                    <button type="button" onClick={onDiscardProject} className="min-h-9 rounded-md bg-[#7B4B26] px-3 font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">Discard and leave</button>
+                    <button type="button" onClick={() => setConfirmDiscard(false)} className="min-h-9 rounded-md border border-[#D8D5CF] px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6] focus-visible:ring-offset-2">Keep working</button>
                   </div>
                 </div>}
               </div>}
@@ -275,9 +296,19 @@ export default function AdministrationScreen({
           </div>
         </div>
 
-        <div id="ai-control-center" className="mt-7">
-          <AiControlCenter key={`${mode}:${context.workspace.id}:${context.user.id}`} mode={mode} context={context} />
-        </div>
+        <section aria-labelledby="ai-administration-heading" className="mt-8 rounded-2xl border border-[#DCD9EF] bg-[#F2F1FA] p-4 sm:p-7">
+          <div className="mb-5 flex flex-col gap-3 border-b border-[#DEDDF0] pb-5 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#6462A0]">Separate administration area</p>
+              <h2 id="ai-administration-heading" className="mt-1 text-[18px] font-semibold tracking-[-0.025em] text-[#29283D]">AI Control Center</h2>
+              <p className="mt-1 max-w-2xl text-[12px] leading-5 text-[#74738A]">Manage AI definitions and controls independently from workspace membership and project settings.</p>
+            </div>
+            <span className="w-fit rounded-full border border-[#D9D7EA] bg-white/70 px-2.5 py-1 text-[10px] font-medium text-[#64627C]">AI administration</span>
+          </div>
+          <div id="ai-control-center">
+            <AiControlCenter key={`${mode}:${context.workspace.id}:${context.user.id}`} mode={mode} context={context} />
+          </div>
+        </section>
 
         <footer className="mt-7 border-t border-[#E4E2DC] pt-4 text-[10px] leading-5 text-[#92909A]">
           Workspace roles and settings remain read-only. Personal settings and AI definitions use their own confirmed save paths.

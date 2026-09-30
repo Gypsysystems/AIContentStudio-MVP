@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AuthorTopicMetadata } from './authorMetadata'
 import {
   type CheckpointVerification, type ProjectCheckpoint, type ProjectCheckpointSummary,
@@ -22,6 +22,7 @@ export type ProjectHistoryPanelProps = {
   currentToc: unknown[]
   onBack: () => void
   backLabel?: string
+  showBackButton?: boolean
   onCreateCheckpoint: (reason: string) => Promise<ProjectCheckpointSummary>
   listCheckpoints: (projectId: string) => Promise<ProjectCheckpointSummary[]>
   getCheckpointRecord: (projectId: string, checkpointId: string) => Promise<ProjectCheckpoint | null>
@@ -31,6 +32,21 @@ export type ProjectHistoryPanelProps = {
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp)
   return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleString()
+}
+
+function dateKey(timestamp: number): string {
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function readableActor(actorId: string): string | null {
+  const actor = actorId.trim()
+  if (!actor || /^(?:user|auth|account)[_:-]/i.test(actor)
+    || /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(actor)
+    || /^[0-9a-f]{24,}$/i.test(actor)
+    || /^[A-Za-z0-9_-]{24,}$/.test(actor)) return null
+  return actor
 }
 
 function parentCheckpointLabel(parentId: unknown, ambiguousRoot = false): string {
@@ -44,6 +60,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function CheckpointMetadata({ checkpoint, ambiguousRoot }: { checkpoint: ProjectCheckpointSummary; ambiguousRoot: boolean }) {
+  const [open, setOpen] = useState(false)
+  return <details className="mt-2 text-[10px] text-[#686879]" onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary className="w-fit cursor-pointer rounded text-[10px] font-medium hover:text-[#41414F] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6865A8]">More checkpoint metadata</summary>
+    {open && <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-3">
+      <div><dt className="text-[#858391]">Originating revision</dt><dd className="mt-0.5 text-[#444351]">Revision {checkpoint.originatingRecordRevision}</dd></div>
+      <div><dt className="text-[#858391]">Parent checkpoint</dt><dd className="mt-0.5 break-all text-[#444351]">{parentCheckpointLabel(checkpoint.parentCheckpointId, ambiguousRoot)}</dd></div>
+      <div><dt className="text-[#858391]">Checkpoint ID</dt><dd className="mt-0.5 break-all text-[#444351]">{checkpoint.checkpointId}</dd></div>
+      {!readableActor(checkpoint.actorUserId) && checkpoint.actorUserId && <div><dt className="text-[#858391]">Actor ID</dt><dd className="mt-0.5 break-all text-[#444351]">{checkpoint.actorUserId}</dd></div>}
+    </dl>}
+  </details>
 }
 
 function TopicBlock({ value, index }: { value: unknown; index: number }) {
@@ -160,7 +189,7 @@ function TopicHistoryView({ topic }: { topic: TopicHistoryTopic }) {
             <span className="text-[10px] text-[#777786]">Checkpoint {version.checkpointId}</span>
           </div>
           <dl className="mt-3 grid grid-cols-1 gap-x-5 gap-y-2 text-[10px] sm:grid-cols-3">
-            <div><dt className="text-[#858391]">Actor</dt><dd className="mt-0.5 break-all text-[#444351]">{version.actorUserId || 'Unknown'}</dd></div>
+             {readableActor(version.actorUserId) && <div><dt className="text-[#858391]">Actor</dt><dd className="mt-0.5 break-all text-[#444351]">{readableActor(version.actorUserId)}</dd></div>}
             <div><dt className="text-[#858391]">Originating record revision</dt><dd className="mt-0.5 text-[#444351]">Revision {version.originatingRecordRevision}</dd></div>
             <div><dt className="text-[#858391]">Checkpoint provenance</dt><dd className="mt-0.5 text-[#444351]">Committed record</dd></div>
           </dl>
@@ -169,6 +198,7 @@ function TopicHistoryView({ topic }: { topic: TopicHistoryTopic }) {
           </ul>}
           <details className="mt-3">
             <summary className="cursor-pointer text-[11px] font-semibold text-[#5554B8]">Saved topic content and metadata</summary>
+            {!readableActor(version.actorUserId) && version.actorUserId && <p className="mt-3 break-all text-[10px] text-[#686879]">Actor ID: {version.actorUserId}</p>}
             {version.blocks.length === 0 ? <p className="mt-3 text-[11px] text-[#777786]">No saved content blocks in this version.</p> : (
               <div className="mt-3 space-y-3">{version.blocks.map((block, index) => <TopicBlock key={isObject(block) && typeof block.id === 'string' ? block.id : index} value={block} index={index} />)}</div>
             )}
@@ -240,7 +270,7 @@ function CheckpointDetailView({ checkpoint, fullVerification, changes, changesLo
         ['Checkpoint ID', checkpoint.checkpointId],
         ['Note', checkpoint.reason],
         ['Saved at', formatDate(checkpoint.createdAt)],
-        ['Actor', checkpoint.actorUserId || 'Unknown'],
+        [readableActor(checkpoint.actorUserId) ? 'Actor' : 'Actor ID', checkpoint.actorUserId || 'Unknown'],
         ['Originating record revision', `Revision ${checkpoint.originatingRecordRevision}`],
         ['Saved record schema', String(checkpoint.recordSchemaVersion)],
         ['Parent checkpoint', parentCheckpointLabel(checkpoint.parentCheckpointId, ambiguousRoot)],
@@ -285,7 +315,8 @@ function CheckpointDetailView({ checkpoint, fullVerification, changes, changesLo
 }
 
 export function ProjectHistoryPanel({
-  projectId, currentToc, onBack, backLabel = 'Back to project', onCreateCheckpoint, listCheckpoints, getCheckpointRecord, verifyCheckpoint,
+  projectId, currentToc, onBack, backLabel = 'Back to project', showBackButton = true,
+  onCreateCheckpoint, listCheckpoints, getCheckpointRecord, verifyCheckpoint,
 }: ProjectHistoryPanelProps) {
   const [checkpoints, setCheckpoints] = useState<ProjectCheckpointSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -312,12 +343,24 @@ export function ProjectHistoryPanel({
   const [topicFailures, setTopicFailures] = useState<TopicRecordLoad[]>([])
   const [topics, setTopics] = useState<TopicHistoryTopic[]>([])
   const [selectedTopicId, setSelectedTopicId] = useState('')
+  const [checkpointSearch, setCheckpointSearch] = useState('')
+  const [checkpointActivity, setCheckpointActivity] = useState('all')
+  const [checkpointDateFrom, setCheckpointDateFrom] = useState('')
+  const [checkpointDateTo, setCheckpointDateTo] = useState('')
   const listRequestId = React.useRef(0)
   const listCheckpointsRef = React.useRef(listCheckpoints)
   listCheckpointsRef.current = listCheckpoints
   const getCheckpointRecordRef = React.useRef(getCheckpointRecord)
   getCheckpointRecordRef.current = getCheckpointRecord
   const topicRequestId = React.useRef(0)
+
+  useEffect(() => {
+    setCheckpointSearch('')
+    setCheckpointActivity('all')
+    setCheckpointDateFrom('')
+    setCheckpointDateTo('')
+    setSelectedTopicId('')
+  }, [projectId])
 
   const refresh = useCallback(async () => {
     const requestId = ++listRequestId.current
@@ -344,7 +387,7 @@ export function ProjectHistoryPanel({
       setSelectedCheckpointId(current => current && list.some(item => item.checkpointId === current) ? current : null)
     } catch (error) {
       if (requestId === listRequestId.current)
-        setLoadError(`Could not load project history: ${(error as Error).message}`)
+        setLoadError('Could not load project history. Please try again.')
     } finally {
       if (requestId === listRequestId.current) setLoading(false)
     }
@@ -496,28 +539,121 @@ export function ProjectHistoryPanel({
       const result = await verifyCheckpoint(projectId, checkpointId)
       if (generation === verificationGeneration.current)
         setVerification(current => ({ ...current, [checkpointId]: { status: 'verified', result, ...identity } }))
-    } catch (error) {
+    } catch {
       if (generation === verificationGeneration.current)
-        setVerification(current => ({ ...current, [checkpointId]: { status: 'error', message: (error as Error).message, ...identity } }))
+        setVerification(current => ({ ...current, [checkpointId]: { status: 'error', message: 'Verification could not be completed. Try again.', ...identity } }))
     }
   }
 
   const selectedTopic = topics.find(topic => topic.topicId === selectedTopicId)
   const ambiguousRoot = checkpoints.filter(item => item.parentCheckpointId === null).length > 1
+  const filteredCheckpoints = useMemo(() => {
+    const query = checkpointSearch.trim().toLocaleLowerCase()
+    return checkpoints.filter(checkpoint => {
+      const state = verification[checkpoint.checkpointId]
+      const checked = state?.projectId === projectId && state.integrityDigest === checkpoint.integrityDigest ? state : undefined
+      const verifiedResult = checked?.status === 'verified' ? checked.result : null
+      if (checkpointActivity === 'verified' && !verifiedResult?.valid) return false
+      if (checkpointActivity === 'issues' && (!verifiedResult || verifiedResult.valid)) return false
+      if (checkpointActivity === 'not-verified' && verifiedResult) return false
+      const queryMatches = !query || checkpoint.reason.toLocaleLowerCase().includes(query)
+        || checkpoint.actorUserId.toLocaleLowerCase().includes(query)
+        || checkpoint.checkpointId.toLocaleLowerCase().includes(query)
+      const key = dateKey(checkpoint.createdAt)
+      return queryMatches && (!checkpointDateFrom || key >= checkpointDateFrom)
+        && (!checkpointDateTo || key <= checkpointDateTo)
+    })
+  }, [checkpoints, verification, projectId, checkpointSearch, checkpointActivity, checkpointDateFrom, checkpointDateTo])
+
+  const checkpointResults = (
+    <section className="mb-7 rounded-xl border border-[#E3E0DA] bg-white shadow-sm" aria-labelledby="history-list-title">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#ECE9E4] px-5 py-4 sm:px-6">
+        <div>
+          <h2 id="history-list-title" className="text-[15px] font-semibold text-[#22222F]">Checkpoints</h2>
+          <p className="mt-0.5 text-[11px] text-[#777786]">Integrity is checked against the saved record and checkpoint files.</p>
+        </div>
+        <button type="button" onClick={() => void refresh()} disabled={loading} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[11px] font-medium text-[#41414F] hover:bg-[#F8F7F5] disabled:opacity-50">{loading ? 'Refreshing…' : 'Refresh'}</button>
+      </div>
+      {loadError && <p className="m-5 rounded-md bg-[#FEF2F2] px-3 py-2 text-[12px] text-[#B42318]" role="alert">{loadError}</p>}
+      {loading ? <p className="px-6 py-10 text-center text-[12px] text-[#777786]" role="status">Loading checkpoints…</p> : !loadError && checkpoints.length === 0 ? (
+        <div className="px-6 py-10 text-center"><p className="text-[13px] font-medium text-[#353543]">No checkpoints yet</p><p className="mt-1 text-[11px] text-[#777786]">Create a checkpoint to preserve a named, verifiable project state.</p></div>
+      ) : !loadError && <div className="border-b border-[#ECE9E4] px-5 py-4 sm:px-6">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="sm:col-span-2">
+            <label htmlFor="checkpoint-history-search" className="mb-1 block text-[11px] font-medium text-[#353543]">Search notes, actors, or IDs</label>
+            <input id="checkpoint-history-search" type="search" value={checkpointSearch} onChange={event => setCheckpointSearch(event.target.value)} placeholder="Find a checkpoint" className="min-h-9 w-full rounded-md border border-[#D8D5CF] px-3 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-[#6865A8]" />
+          </div>
+          <div>
+            <label htmlFor="checkpoint-history-activity" className="mb-1 block text-[11px] font-medium text-[#353543]">Integrity activity</label>
+            <select id="checkpoint-history-activity" value={checkpointActivity} onChange={event => setCheckpointActivity(event.target.value)} className="min-h-9 w-full rounded-md border border-[#D8D5CF] bg-white px-3 text-[12px] focus-visible:ring-2 focus-visible:ring-[#6865A8]">
+              <option value="all">All checkpoints</option><option value="not-verified">Not verified</option><option value="verified">Verified</option><option value="issues">Integrity issues</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label htmlFor="checkpoint-history-from" className="mb-1 block text-[11px] font-medium text-[#353543]">From</label><input id="checkpoint-history-from" type="date" value={checkpointDateFrom} onChange={event => setCheckpointDateFrom(event.target.value)} className="min-h-9 w-full min-w-0 rounded-md border border-[#D8D5CF] px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-[#6865A8]" /></div>
+            <div><label htmlFor="checkpoint-history-to" className="mb-1 block text-[11px] font-medium text-[#353543]">To</label><input id="checkpoint-history-to" type="date" value={checkpointDateTo} onChange={event => setCheckpointDateTo(event.target.value)} className="min-h-9 w-full min-w-0 rounded-md border border-[#D8D5CF] px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-[#6865A8]" /></div>
+          </div>
+        </div>
+      </div>}
+      {!loading && !loadError && checkpoints.length > 0 && filteredCheckpoints.length === 0
+        ? <p className="px-6 py-10 text-center text-[12px] text-[#777786]" role="status">No checkpoints match these filters.</p>
+        : !loading && !loadError && filteredCheckpoints.length > 0 && <ol className="divide-y divide-[#ECE9E4]">
+        {filteredCheckpoints.map(checkpoint => {
+          const state = verification[checkpoint.checkpointId]
+          const checked = state?.projectId === projectId && state.integrityDigest === checkpoint.integrityDigest ? state : undefined
+          const result = checked?.status === 'verified' ? checked.result : null
+          return <li key={checkpoint.checkpointId} className="px-5 py-4 sm:px-6">
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+              <div className="min-w-0">
+                <p className="break-words text-[13px] font-semibold text-[#292936]">{checkpoint.reason || 'Checkpoint saved'}</p>
+                <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#777786]">
+                  <time dateTime={Number.isNaN(new Date(checkpoint.createdAt).getTime()) ? undefined : new Date(checkpoint.createdAt).toISOString()}>{formatDate(checkpoint.createdAt)}</time>
+                  {readableActor(checkpoint.actorUserId) && <span>By {readableActor(checkpoint.actorUserId)}</span>}
+                  <span>Schema v{checkpoint.recordSchemaVersion}</span>
+                </p>
+              </div>
+              <span className={`w-fit rounded-full px-2.5 py-1 text-[10px] font-semibold ${!checked || checked.status === 'verifying' || checked.status === 'error' ? 'bg-[#F1F0ED] text-[#666572]' : result?.valid ? 'bg-[#E8F4EB] text-[#347348]' : 'bg-[#FDECEC] text-[#A52A2A]'}`}>
+                {!checked ? 'Integrity not verified' : checked.status === 'verifying' ? 'Verifying…' : checked.status === 'error' ? 'Could not verify' : result?.valid ? 'Integrity verified' : 'Integrity issue'}
+              </span>
+            </div>
+            <CheckpointMetadata checkpoint={checkpoint} ambiguousRoot={ambiguousRoot} />
+            {checked?.status === 'error' && <p className="mt-3 text-[11px] text-[#A52A2A]" role="alert">Verification could not be completed: {checked.message}</p>}
+            {result && !result.valid && result.issues.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-[11px] text-[#A52A2A]" aria-label="Integrity issues">{result.issues.map((issue, index) => <li key={`${index}-${issue}`}>{issue}</li>)}</ul>}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" aria-expanded={selectedCheckpointId === checkpoint.checkpointId} aria-controls="checkpoint-detail" onClick={() => setSelectedCheckpointId(current => current === checkpoint.checkpointId ? null : checkpoint.checkpointId)} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[10px] font-semibold text-[#41414F] hover:bg-[#F8F7F5]">{selectedCheckpointId === checkpoint.checkpointId ? 'Close saved detail' : 'Inspect saved checkpoint'}</button>
+              <button type="button" disabled={checked?.status === 'verifying'} onClick={() => void verify(checkpoint.checkpointId)} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[10px] font-semibold text-[#41414F] hover:bg-[#F8F7F5] disabled:opacity-50">{checked?.status === 'verifying' ? 'Verifying…' : result ? 'Verify again' : 'Verify integrity'}</button>
+            </div>
+            {selectedCheckpointId === checkpoint.checkpointId && !loading && !loadError && <>
+              {detailLoading && <p className="mt-4 text-[11px] text-[#686879]" role="status">Checking saved record and manifest metadata…</p>}
+              {detailError && <p className="mt-4 rounded-md bg-[#FEF2F2] p-3 text-[11px] text-[#B42318]" role="alert">{detailError} <button type="button" onClick={() => setDetailRetry(current => current + 1)} className="underline">Retry saved detail</button></p>}
+              {!detailLoading && detailCheckpoint?.checkpointId === checkpoint.checkpointId && detailCheckpoint.projectId === projectId && <CheckpointDetailView
+                checkpoint={detailCheckpoint} fullVerification={result}
+                ambiguousRoot={ambiguousRoot}
+                changes={changeResult?.checkpointId === checkpoint.checkpointId && changeResult.integrityDigest === detailCheckpoint.integrityDigest ? changeResult.summary : null}
+                changesLoading={changesLoading}
+              />}
+            </>}
+          </li>
+        })}
+      </ol>}
+    </section>
+  )
 
   return (
     <section className="min-h-0 w-full flex-1 overflow-y-auto px-4 py-7 sm:px-7 sm:py-10" data-testid="project-history" aria-labelledby="project-history-title">
       <div className="mx-auto max-w-5xl">
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <button type="button" onClick={onBack} className="mb-3 rounded text-[12px] font-medium text-[#5958B8] hover:text-[#38378E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
+          {showBackButton && <button type="button" onClick={onBack} className="mb-3 rounded text-[12px] font-medium text-[#5958B8] hover:text-[#38378E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5B5BD6]">
             <span aria-hidden="true">← </span>{backLabel}
-          </button>
+          </button>}
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#777786]">Project record</p>
           <h1 id="project-history-title" className="mt-1 text-2xl font-semibold tracking-tight text-[#171722]">History</h1>
           <p className="mt-1 max-w-2xl text-[13px] leading-5 text-[#686879]">Review saved project checkpoints, their origin, and integrity status.</p>
         </div>
       </div>
+
+      {checkpointResults}
 
       <section className="mb-7 rounded-xl border border-[#E3E0DA] bg-white p-5 shadow-sm sm:p-6" aria-labelledby="checkpoint-create-title">
         <div className="max-w-2xl">
@@ -573,55 +709,6 @@ export function ProjectHistoryPanel({
       <FileHistoryPanel key={projectId} projectId={projectId} checkpoints={checkpoints} listLoading={loading}
         listError={loadError} getCheckpointRecord={getCheckpointRecordRef.current} />
 
-      <section className="rounded-xl border border-[#E3E0DA] bg-white shadow-sm" aria-labelledby="history-list-title">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#ECE9E4] px-5 py-4 sm:px-6">
-          <div>
-            <h2 id="history-list-title" className="text-[15px] font-semibold text-[#22222F]">Checkpoints</h2>
-            <p className="mt-0.5 text-[11px] text-[#777786]">Integrity is checked against the saved record and checkpoint files.</p>
-          </div>
-          <button type="button" onClick={() => void refresh()} disabled={loading} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[11px] font-medium text-[#41414F] hover:bg-[#F8F7F5] disabled:opacity-50">{loading ? 'Refreshing…' : 'Refresh'}</button>
-        </div>
-        {loadError && <p className="m-5 rounded-md bg-[#FEF2F2] px-3 py-2 text-[12px] text-[#B42318]" role="alert">{loadError}</p>}
-        {loading ? <p className="px-6 py-10 text-center text-[12px] text-[#777786]" role="status">Loading checkpoints…</p> : !loadError && checkpoints.length === 0 ? (
-          <div className="px-6 py-10 text-center"><p className="text-[13px] font-medium text-[#353543]">No checkpoints yet</p><p className="mt-1 text-[11px] text-[#777786]">Create a checkpoint to preserve a named, verifiable project state.</p></div>
-        ) : <ol className="divide-y divide-[#ECE9E4]">
-          {checkpoints.map(checkpoint => {
-             const state = verification[checkpoint.checkpointId]
-             const checked = state?.projectId === projectId && state.integrityDigest === checkpoint.integrityDigest ? state : undefined
-            const result = checked?.status === 'verified' ? checked.result : null
-            return <li key={checkpoint.checkpointId} className="px-5 py-4 sm:px-6">
-              <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
-                <div className="min-w-0"><p className="break-words text-[13px] font-semibold text-[#292936]">{checkpoint.reason}</p><time className="mt-1 block text-[11px] text-[#777786]">{formatDate(checkpoint.createdAt)}</time></div>
-                <span className={`w-fit rounded-full px-2.5 py-1 text-[10px] font-semibold ${!checked || checked.status === 'verifying' || checked.status === 'error' ? 'bg-[#F1F0ED] text-[#666572]' : result?.valid ? 'bg-[#E8F4EB] text-[#347348]' : 'bg-[#FDECEC] text-[#A52A2A]'}`}>
-                  {!checked ? 'Integrity not verified' : checked.status === 'verifying' ? 'Verifying…' : checked.status === 'error' ? 'Could not verify' : result?.valid ? 'Integrity verified' : 'Integrity issue'}
-                </span>
-              </div>
-              <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-[11px] sm:grid-cols-2 lg:grid-cols-4">
-                <div><dt className="text-[#858391]">Actor</dt><dd className="mt-0.5 break-all text-[#444351]">{checkpoint.actorUserId || 'Unknown'}</dd></div>
-                <div><dt className="text-[#858391]">Originating revision</dt><dd className="mt-0.5 text-[#444351]">Revision {checkpoint.originatingRecordRevision}</dd></div>
-                <div><dt className="text-[#858391]">Parent checkpoint</dt><dd className="mt-0.5 break-all text-[#444351]">{parentCheckpointLabel(checkpoint.parentCheckpointId, ambiguousRoot)}</dd></div>
-                <div><dt className="text-[#858391]">Restore</dt><dd className="mt-0.5 text-[#444351]">Not yet available</dd></div>
-              </dl>
-              {checked?.status === 'error' && <p className="mt-3 text-[11px] text-[#A52A2A]" role="alert">Verification could not be completed: {checked.message}</p>}
-              {result && !result.valid && result.issues.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-[11px] text-[#A52A2A]" aria-label="Integrity issues">{result.issues.map((issue, index) => <li key={`${index}-${issue}`}>{issue}</li>)}</ul>}
-               <div className="mt-3 flex flex-wrap gap-2">
-                 <button type="button" aria-expanded={selectedCheckpointId === checkpoint.checkpointId} aria-controls="checkpoint-detail" onClick={() => setSelectedCheckpointId(current => current === checkpoint.checkpointId ? null : checkpoint.checkpointId)} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[10px] font-semibold text-[#41414F] hover:bg-[#F8F7F5]">{selectedCheckpointId === checkpoint.checkpointId ? 'Close saved detail' : 'Inspect saved checkpoint'}</button>
-                 <button type="button" disabled={checked?.status === 'verifying'} onClick={() => void verify(checkpoint.checkpointId)} className="rounded-md border border-[#D8D5CF] px-3 py-1.5 text-[10px] font-semibold text-[#41414F] hover:bg-[#F8F7F5] disabled:opacity-50">{checked?.status === 'verifying' ? 'Verifying…' : result ? 'Verify again' : 'Verify integrity'}</button>
-               </div>
-               {selectedCheckpointId === checkpoint.checkpointId && !loading && !loadError && <>
-                 {detailLoading && <p className="mt-4 text-[11px] text-[#686879]" role="status">Checking saved record and manifest metadata…</p>}
-                 {detailError && <p className="mt-4 rounded-md bg-[#FEF2F2] p-3 text-[11px] text-[#B42318]" role="alert">{detailError} <button type="button" onClick={() => setDetailRetry(current => current + 1)} className="underline">Retry saved detail</button></p>}
-                 {!detailLoading && detailCheckpoint?.checkpointId === checkpoint.checkpointId && detailCheckpoint.projectId === projectId && <CheckpointDetailView
-                   checkpoint={detailCheckpoint} fullVerification={result}
-                   ambiguousRoot={ambiguousRoot}
-                   changes={changeResult?.checkpointId === checkpoint.checkpointId && changeResult.integrityDigest === detailCheckpoint.integrityDigest ? changeResult.summary : null}
-                   changesLoading={changesLoading}
-                 />}
-               </>}
-            </li>
-          })}
-        </ol>}
-      </section>
       </div>
     </section>
   )

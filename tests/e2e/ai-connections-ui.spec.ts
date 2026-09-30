@@ -74,12 +74,12 @@ test('cloud editor and viewer only see safe metadata; a failed load is not an em
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
   }
   await expect(page.getByLabel('Credential')).toHaveCount(0)
-  await page.getByRole('button', { name: 'Back to workspace' }).click()
+  await page.getByRole('button', { name: 'Return to Projects' }).click()
   await enter(page, 'viewer')
   await expect(page.getByText('Read-only access.', { exact: false })).toBeVisible()
   fail = true
   await page.getByRole('button', { name: 'Refresh connections' }).click()
-  await expect(page.getByRole('alert')).toContainText('Connections could not be loaded')
+  await expect(page.getByText('Connections could not be loaded', { exact: false })).toBeVisible()
   await expect(page.getByText('No connection record', { exact: false })).toHaveCount(0)
 })
 

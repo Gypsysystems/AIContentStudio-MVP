@@ -158,6 +158,7 @@ type ManagementScope = {
 }
 const AuthorSettingsPermissionContext = React.createContext(false)
 const DiagnosticsStatusContext = React.createContext<'all' | 'ok' | 'warn' | 'error' | 'info'>('all')
+const DiagnosticsSearchContext = React.createContext('')
 const ProjectRailActionsContext = React.createContext<{
   onHistory: () => void
   onProjectSettings: () => void
@@ -1107,16 +1108,16 @@ function ManagementProjectPicker({ scope, projects, busy, error, onSelect, onBac
 }) {
   const allProjects = scope.destination === 'history' || scope.destination === 'diagnostics'
   return <div className="border-b border-[#E2DED7] bg-white px-4 py-3 sm:px-6" data-testid="management-project-picker">
-    <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3">
+    <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 sm:gap-4">
       <button type="button" onClick={onBack} disabled={busy}
-        className="rounded-md border border-[#E2DED7] px-3 py-2 text-[12px] font-medium hover:bg-[#F4F2EE] disabled:opacity-50">
+        className="rounded-lg border border-[#E2DED7] px-3 py-2 text-[12px] font-medium text-[#393844] hover:bg-[#F4F2EE] disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
         {scope.origin === 'home' ? 'Return to Projects' : 'Return to project'}
       </button>
-      <label className="flex items-center gap-2 text-[12px] font-semibold text-[#393844]">
+      <label className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-[12px] font-semibold text-[#393844] sm:flex-none">
         Project
         <select aria-label="Project" value={scope.selectedProjectId} disabled={busy}
           onChange={event => onSelect(event.target.value)}
-          className="min-w-[190px] max-w-[320px] rounded-md border border-[#D8D4CE] bg-white px-3 py-2 font-normal disabled:opacity-50">
+          className="min-w-0 flex-1 rounded-lg border border-[#D8D4CE] bg-white px-3 py-2 font-normal disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6] sm:w-[240px] sm:flex-none">
           {allProjects && <option value="all">All projects</option>}
           {!allProjects && <option value="">{scope.destination === 'administration' ? 'Workspace' : 'Select project'}</option>}
           {projects.some(project => project.projectId === scope.selectedProjectId) ? null :
@@ -1790,19 +1791,21 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
   }, [projectName, onValidateProjectName])
 
   return (
-    <div className="flex-1 overflow-auto p-8 max-w-4xl mx-auto w-full fade-in">
-      <div className="mb-8">
-        <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">{settingsMode ? 'Project Settings' : 'Step 1 — Project Details'}</p>
-        <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Project Details</h1>
+    <div className="mx-auto w-full max-w-4xl flex-1 overflow-auto p-4 pb-12 sm:p-6 fade-in">
+      <div className="mb-6">
+        {!settingsMode && <p className="mb-1 text-[12px] font-medium uppercase tracking-widest text-[#6B6B7E]">Step 1 — Project Details</p>}
+        <h1 className="mb-1 text-2xl font-semibold tracking-tight text-[#111218]">{settingsMode ? 'Project Settings' : 'Project Details'}</h1>
         <p className="text-[14px] text-[#6B6B7E]">{settingsMode ? 'Update this project’s name and document details. Your changes are saved to this project.' : 'Set the document type and name. Theme and styling are configured in the next step.'}</p>
       </div>
 
       {/* Content type grid */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      <section aria-label="Document type" className="mb-6">
+        <h2 className="mb-3 text-[13px] font-semibold text-[#393844]">Document type</h2>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {CONTENT_TYPES.map(ct => (
           <button key={ct.id}
             onClick={() => { if (ct.active) { setSelected(ct.id); onProjectMetaChange({ contentType: ct.id }) } }}
-            className={`relative text-left p-4 rounded-xl border transition-all ${
+            className={`relative min-w-0 rounded-xl border p-4 text-left transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6] ${
               selected === ct.id ? 'border-[#5B5BD6] bg-[#EEEEFF] shadow-sm'
                 : ct.active ? 'border-[#E2DED7] bg-white hover:border-[#C8C6C0] hover:shadow-sm'
                 : 'border-[#E2DED7] bg-[#FAFAF8] opacity-50 cursor-not-allowed'
@@ -1814,23 +1817,26 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
           </button>
         ))}
       </div>
+      </section>
 
       {/* Project Name */}
-      <div className="bg-white border border-[#E2DED7] rounded-xl p-5 mb-4">
+      <section aria-label="General" className="mb-4 rounded-xl border border-[#E2DED7] bg-white p-5">
+        <h2 className="mb-3 text-[13px] font-semibold text-[#393844]">General</h2>
         <label className="block text-[12px] font-semibold text-[#111218] mb-2 uppercase tracking-wide">Project Name</label>
         <input value={projectName} placeholder="e.g. Nexus Platform v3.2 — User Guide"
           aria-invalid={!!nameError} aria-describedby={nameError ? 'project-name-error' : undefined}
           onChange={e => { onProjectNameChange(e.target.value); setNameError(null) }}
           className="w-full text-[15px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#5B5BD6] transition-colors" />
         {nameError && <p id="project-name-error" role="alert" className="mt-2 text-[12px] text-red-700">{nameError}</p>}
-      </div>
+      </section>
 
 
-      <div className="bg-white border border-[#E2DED7] rounded-xl p-5 mb-6">
+      <section aria-label="Versioning" className="mb-6 rounded-xl border border-[#E2DED7] bg-white p-5">
+        <h2 className="mb-3 text-[13px] font-semibold text-[#393844]">Versioning</h2>
         <label className="block text-[12px] font-semibold text-[#111218] mb-2 uppercase tracking-wide">Document Version <span className="text-[#9898AB] font-normal normal-case">(optional)</span></label>
         <input value={projectMeta?.version ?? ''} onChange={e => onProjectMetaChange({ version: e.target.value })} placeholder="e.g. 3.2"
           className="w-full h-9 px-3 text-[13px] text-[#111218] bg-[#F9F8F6] border border-[#E2DED7] rounded-lg focus:outline-none focus:border-[#5B5BD6]" />
-      </div>
+      </section>
 
       {continueError && <p role="alert" className="mb-3 text-sm text-red-700">{continueError}</p>}
       <div className="flex justify-end gap-2">
@@ -1856,12 +1862,12 @@ function CreateScreen({ onNav, projectName, onProjectNameChange, onValidateProje
               || failure.message.toLowerCase().includes('project with this name')) {
               setNameError(failure.message)
             } else {
-              setContinueError(settingsMode ? `Could not save project settings: ${failure.message}` : `Could not create project: ${failure.message}`)
+                setContinueError(settingsMode ? 'Could not save project settings. Check your access or connection and try again.' : `Could not create project: ${failure.message}`)
             }
           } finally {
             setContinuing(false)
           }
-        }} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] disabled:opacity-60 text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
+        }} className="flex items-center gap-2 rounded-lg bg-[#5B5BD6] px-5 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-[#4A4AC4] disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5B5BD6]">
           {continuing ? (settingsMode ? 'Saving changes…' : 'Creating project…') : settingsMode ? 'Save changes' : 'Continue — Theme & Styles'}
           {!settingsMode && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
         </button>
@@ -2694,7 +2700,7 @@ function BrandingScreen({ onNav, onContinue, returnTo, themes, projectMeta, effe
   }
 
   return (
-    <div className="flex-1 overflow-auto p-8 max-w-6xl mx-auto w-full fade-in">
+    <div className="mx-auto w-full max-w-6xl min-w-0 flex-1 overflow-auto p-4 pb-12 sm:p-6 fade-in">
 
       {/* ── Modals ── */}
       {dupModal && <DuplicateModal title={dupModal.title} defaultName={dupModal.defaultName} onDuplicate={dupModal.onDup} onCancel={() => setDupModal(null)} />}
@@ -3155,11 +3161,12 @@ function BrandingScreen({ onNav, onContinue, returnTo, themes, projectMeta, effe
       )}
 
       {/* ── Header ── */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <p className="text-[12px] font-medium text-[#9898AB] uppercase tracking-widest mb-1">Step 2 — Theme & Styles</p>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          {!onContinue && <p className="mb-1 text-[12px] font-medium uppercase tracking-widest text-[#6B6B7E]">Step 2 — Theme & Styles</p>}
           <h1 className="text-2xl font-semibold text-[#111218] tracking-tight mb-1">Theme & Style Profiles</h1>
-          <p className="text-[14px] text-[#6B6B7E]">Content remains independent from presentation, allowing the same document to use different Themes and output styles.</p>
+          <p className="text-[13px] text-[#6B6B7E]">Configure brand profiles and output templates. Downloadable files are generated separately in Publish.</p>
+          <p className="mt-1 text-[12px] text-[#4D4DC2]">Current project profile: <strong>{effectiveStyleProfile.name}</strong></p>
         </div>
         {returnTo && (
           <button onClick={() => onNav(returnTo)} className="flex items-center gap-1.5 text-[13px] font-medium text-[#5B5BD6] border border-[#C7C5F4] bg-[#EEEEFF] px-4 py-2 rounded-lg hover:bg-[#E0DEFF] transition-colors flex-shrink-0 ml-6">
@@ -3169,9 +3176,9 @@ function BrandingScreen({ onNav, onContinue, returnTo, themes, projectMeta, effe
       </div>
 
       {/* ── Tabs ── */}
-      <div className="flex gap-1 bg-[#F4F2EE] rounded-lg p-1 mb-6 w-fit">
+      <div className="mb-6 flex w-fit max-w-full flex-wrap gap-1 rounded-lg bg-[#F4F2EE] p-1">
         {([['brandstyle', 'Brand & Style'], ['output', 'Output Templates'], ['variables', 'Variables']] as const).map(([t, l]) => (
-          <button key={t} onClick={() => setTab(t)} className={`px-4 py-1.5 rounded-md text-[12px] font-medium transition-all ${tab === t ? 'bg-white text-[#111218] shadow-sm' : 'text-[#9898AB] hover:text-[#6B6B7E]'}`}>{l}</button>
+          <button key={t} onClick={() => setTab(t)} aria-pressed={tab === t} className={`rounded-md px-4 py-1.5 text-[12px] font-medium transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6] ${tab === t ? 'bg-white text-[#111218] shadow-sm' : 'text-[#575766] hover:text-[#111218]'}`}>{l}</button>
         ))}
       </div>
 
@@ -3179,18 +3186,18 @@ function BrandingScreen({ onNav, onContinue, returnTo, themes, projectMeta, effe
 
       {/* ── BRAND & STYLE TAB ── */}
       {tab === 'brandstyle' && (
-        <div className="flex gap-5" style={{ minHeight: 600 }}>
+        <div className="flex min-w-0 flex-col gap-5 lg:flex-row" style={{ minHeight: 600 }}>
 
           {/* ── LEFT: Brand Profile Library ── */}
-          <div className="flex-shrink-0 space-y-3" style={{ width: 220 }}>
+          <div className="w-full flex-shrink-0 space-y-3 lg:w-[220px]">
 
             {/* Library header + actions */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-[11px] font-semibold text-[#3D3D4E] uppercase tracking-wide">Brand Profiles</p>
                 <div className="flex gap-1">
-                  <button onClick={() => setImportOpen(true)} title="Import from DOCX/PDF"
-                    className="w-6 h-6 flex items-center justify-center text-[#5B5BD6] rounded-md hover:bg-[#EEEEFF] transition-colors">
+                  <button onClick={() => setImportOpen(true)} title="Import from DOCX/PDF" aria-label="Import brand profile from DOCX or PDF"
+                    className="flex h-6 w-6 items-center justify-center rounded-md text-[#5B5BD6] transition-colors hover:bg-[#EEEEFF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
                     <svg width="13" height="13" viewBox="0 0 15 15" fill="none"><path d="M7.5 1v8M4.5 6l3 3 3-3M2 10v2.5A.5.5 0 002.5 13h10a.5.5 0 00.5-.5V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
                   </button>
                 </div>
@@ -5316,7 +5323,7 @@ function BrandingScreen({ onNav, onContinue, returnTo, themes, projectMeta, effe
       })()}
 
       <div className="flex justify-between mt-8 pt-4 border-t border-[#E2DED7]">
-        <button onClick={() => onNav('create')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors bg-white">← Project Details</button>
+        {!onContinue ? <button onClick={() => onNav('create')} className="text-[13px] font-medium text-[#6B6B7E] border border-[#E2DED7] px-4 py-2 rounded-lg hover:bg-[#F9F8F6] transition-colors bg-white">← Project Details</button> : <span />}
         <button onClick={() => onContinue ? onContinue() : onNav('sources')} className="flex items-center gap-2 bg-[#5B5BD6] hover:bg-[#4A4AC4] text-white text-[13px] font-medium px-5 py-2.5 rounded-lg transition-colors">
           Continue — Sources
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6h7M6.5 3l3 3-3 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -16775,6 +16782,7 @@ export default function App() {
   const [managementError, setManagementError] = useState('')
   const [diagnosticsComponent, setDiagnosticsComponent] = useState('all')
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<'all' | 'ok' | 'warn' | 'error' | 'info'>('all')
+  const [diagnosticsSearch, setDiagnosticsSearch] = useState('')
   const [appLoading, setAppLoading] = useState(true)
   const [appLoadError, setAppLoadError] = useState<string | null>(null)
   const startupInitializedRef = useRef(false)
@@ -16934,7 +16942,7 @@ export default function App() {
         selectedProjectId || (destination === 'history' || destination === 'diagnostics' ? 'all' : ''),
     }
     setManagementError('')
-    if (destination === 'diagnostics') { setDiagnosticsComponent('all'); setDiagnosticsStatus('all') }
+    if (destination === 'diagnostics') { setDiagnosticsComponent('all'); setDiagnosticsStatus('all'); setDiagnosticsSearch('') }
     if (!previous) {
       void listProjects().then(setManagementProjects).catch(error => setManagementError(`Could not list projects: ${(error as Error).message}`))
     }
@@ -19757,6 +19765,7 @@ export default function App() {
       setManagementError('')
       setDiagnosticsComponent('all')
       setDiagnosticsStatus('all')
+      setDiagnosticsSearch('')
       return true
     }
     managementSwitchInFlightRef.current = true
@@ -19780,6 +19789,7 @@ export default function App() {
       setManagement(current => current ? { ...current, selectedProjectId } : null)
       setDiagnosticsComponent('all')
       setDiagnosticsStatus('all')
+      setDiagnosticsSearch('')
       return true
     } catch (error) {
       setManagementError(`Could not switch project: ${(error as Error).message}`)
@@ -20075,6 +20085,7 @@ export default function App() {
       project={selectedManagementProject && projectId ? { name: displayName, documentType: projectMeta.contentType,
         version: projectMeta.version, ownership: projectOwnershipRef.current } : null}
       saveStatus={saveStatus}
+      showBack={!management}
       onBack={() => { if (management) void closeManagement(); else void navigate(administrationReturnTo !== 'dashboard' && access.project?.read !== true && projectId ? 'dashboard' : administrationReturnTo) }}
       onProjectSettings={() => { if (access.project?.write) openManagement('create') }}
       onDiscardProject={() => {
@@ -20103,6 +20114,7 @@ export default function App() {
         : projectId && (!management || management.selectedProjectId === projectId) ? <ProjectHistoryPanel key={projectId}
         projectId={projectId}
         currentToc={appToc}
+        showBackButton={!management}
         backLabel={management?.origin === 'home' ? 'Back to Projects' : 'Back to project'}
         onBack={() => { if (management) void closeManagement(); else void navigate(historyReturnTo) }}
         onCreateCheckpoint={createProjectCheckpoint}
@@ -20118,7 +20130,7 @@ export default function App() {
             <p className="mt-2 text-sm">{projectId ? 'Your current workspace access does not allow edits to this project.' : 'Your current workspace access does not allow creating projects.'}</p>
             <button type="button" onClick={() => { void navigate('administration') }} className="mt-4 rounded-md border border-[#D8D5CF] px-3 py-2 text-sm">Open Administration</button>
           </div>
-        : <CreateScreen key={projectId ?? 'new'} onNav={s => { if (management && s === management.returnScreen) void closeManagement(); else void navigate(s) }} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} onSettingsReturn={management ? closeManagement : handleReturnFromProjectSettings} settingsMode={!!projectId} settingsBackLabel={management?.origin === 'home' ? 'Back to Projects' : undefined} returnTo={management?.returnScreen ?? settingsReturnTo} />
+        : <CreateScreen key={projectId ?? 'new'} onNav={s => { if (management && s === management.returnScreen) void closeManagement(); else void navigate(s) }} projectName={projectName} onProjectNameChange={handleProjectNameChange} onValidateProjectName={validateWorkspaceProjectName} themes={themes} projectMeta={projectMeta} onProjectMetaChange={handleProjectMetaChange} onAddTheme={handleAddTheme} onContinue={projectId ? handleSaveProjectSettings : handleCreateProjectPersist} onSettingsReturn={management ? undefined : handleReturnFromProjectSettings} settingsMode={!!projectId} returnTo={management?.returnScreen ?? settingsReturnTo} />
       case 'branding':  return management && !management.selectedProjectId
         ? <p className="p-6 text-sm text-[#686879]">Select a project to configure Brand &amp; Output.</p>
         : <BrandingScreen key={projectId ?? 'new'} onContinue={management ? () => { void openSelectedManagementProject('sources') } : undefined} onNav={s => {
@@ -20126,7 +20138,7 @@ export default function App() {
             else if (management && s === management.returnScreen) void closeManagement()
             else if (management) void openSelectedManagementProject(s)
             else void navigate(s)
-          }} returnTo={management?.returnScreen ?? prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
+          }} returnTo={management ? undefined : prevScreen ?? undefined} themes={themes} projectMeta={projectMeta} effectiveStyleProfile={effectiveStyleProfile} onProjectMetaChange={handleProjectMetaChange} activeStyleProfileId={activeStyleProfileId} onApplyStyleProfile={handleApplyStyleProfile} onAddTheme={handleAddTheme} onThemesChange={handleThemesChange} pageLayouts={pageLayouts} onPageLayoutsChange={handlePageLayoutsChange} htmlMasterPages={htmlMasterPages} onHtmlMasterPagesChange={handleHtmlMasterPagesChange} toc={appToc} themeVariables={themeVariables} onThemeVarsChange={setThemeVars} />
       case 'sources':   return <SourcesScreen onNav={navigate} sources={sources} onSourceAdd={handleSourceAdd} onSourceRemove={handleSourceRemove} sourceExtractions={sourceExtractions} sourcesRevision={sourcesRevision} onRetryExtraction={handleRetryExtraction} evidenceIndex={evidenceIndex} evidenceFresh={evidenceFresh} canRebuildEvidence={canRebuildEvidence} onRebuildEvidence={handleRebuildEvidence} isDemoMode={isDemoMode} onSetDemoMode={mode => { setIsDemoMode(mode); triggerAutosave() }} />
       case 'analysis':  return isDemoMode
         ? <AnalysisScreen onNav={navigate} files={sources.map(s => s.file)} isDemoMode={isDemoMode} analysisStale={analysisStale} onAnalysisDone={handleAnalysisDone} />
@@ -20221,74 +20233,82 @@ export default function App() {
       {/* The same diagnostic rows serve the selected project from either entry point. */}
       {diagOpen && (
         <DiagnosticsStatusContext.Provider value={diagnosticsStatus}>
-        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50" onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }}>
-          <div className="bg-white rounded-2xl shadow-2xl border border-[#E2DED7] w-[520px] max-h-[80vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
+        <DiagnosticsSearchContext.Provider value={diagnosticsSearch}>
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50 p-3 sm:p-5" onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="diagnostics-title" className="w-full max-w-[760px] max-h-[90vh] min-w-0 overflow-y-auto rounded-2xl border border-[#E2DED7] bg-white p-4 shadow-2xl sm:p-6" onClick={e => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-[15px] font-semibold text-[#111218]">Project Pipeline Diagnostics</h2>
-                <p className="text-[11px] text-[#9898AB] mt-0.5">Internal state audit — not visible to end users</p>
+                <h2 id="diagnostics-title" className="text-lg font-semibold text-[#111218]">Diagnostics</h2>
+                <p className="mt-0.5 text-[12px] text-[#6B6B7E]">Inspect the current project’s pipeline state, or choose a project below.</p>
               </div>
-              <button onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }} className="text-[#9898AB] hover:text-[#6B6B7E] text-[18px]">✕</button>
+              <button type="button" aria-label="Close diagnostics" title="Close diagnostics" onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }} className="rounded-md p-2 text-[18px] text-[#575766] hover:bg-[#F4F2EE] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">✕</button>
             </div>
             {management?.destination === 'diagnostics' &&
               <ManagementProjectPicker scope={management} projects={managementProjects} busy={managementBusy}
                 error={managementError} onSelect={id => { void switchManagementProject(id) }}
                 onBack={() => { void closeManagement() }} />}
-            {management?.destination === 'diagnostics' && management.selectedProjectId !== 'all' &&
-              <div className="mt-3 flex flex-wrap gap-3">
-                <label className="text-[11px]">Component <select aria-label="Diagnostic component" value={diagnosticsComponent}
-                  onChange={event => setDiagnosticsComponent(event.target.value)} className="ml-2 rounded border p-1">
+            {management?.destination === 'diagnostics' &&
+              <div className="mt-4 flex flex-wrap items-end gap-2 rounded-xl border border-[#E2DED7] bg-[#F9F8F6] p-3">
+                {management.selectedProjectId !== 'all' && <label className="flex flex-col gap-1 text-[11px] font-semibold text-[#393844]">Component <select aria-label="Diagnostic component" value={diagnosticsComponent}
+                  onChange={event => setDiagnosticsComponent(event.target.value)} className="min-w-0 rounded-lg border border-[#D8D4CE] bg-white px-2 py-2 font-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
                   {['all', 'Project', 'Theme & Style', 'Templates', 'Sources', 'Analysis', 'TOC', 'Content', 'Review'].map(item =>
                     <option key={item} value={item}>{item === 'all' ? 'All components' : item}</option>)}
-                </select></label>
-                <label className="text-[11px]">Status <select aria-label="Diagnostic status" value={diagnosticsStatus}
-                  onChange={event => setDiagnosticsStatus(event.target.value as typeof diagnosticsStatus)} className="ml-2 rounded border p-1">
+                </select></label>}
+                {management.selectedProjectId !== 'all' && <label className="flex flex-col gap-1 text-[11px] font-semibold text-[#393844]">Status <select aria-label="Diagnostic status" value={diagnosticsStatus}
+                  onChange={event => setDiagnosticsStatus(event.target.value as typeof diagnosticsStatus)} className="min-w-0 rounded-lg border border-[#D8D4CE] bg-white px-2 py-2 font-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
                   <option value="all">All statuses</option><option value="ok">OK</option><option value="warn">Warning</option>
                   <option value="error">Error</option><option value="info">Info</option>
-                </select></label>
+                </select></label>}
+                <label className="flex min-w-[160px] flex-1 flex-col gap-1 text-[11px] font-semibold text-[#393844]">Search
+                  <input type="search" aria-label="Search diagnostics" value={diagnosticsSearch} onChange={event => setDiagnosticsSearch(event.target.value)}
+                    placeholder={management.selectedProjectId === 'all' ? 'Find a project' : 'Find a result'}
+                    className="w-full min-w-0 rounded-lg border border-[#D8D4CE] bg-white px-3 py-2 font-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]" />
+                </label>
               </div>}
             {management?.destination === 'diagnostics' && management.selectedProjectId === 'all'
               ? <div className="mt-4 space-y-2" data-testid="all-projects-diagnostics">
                   <p className="text-[12px] text-[#686879]">Select a project to inspect its pipeline diagnostics.</p>
-                  {managementProjects.map(project => <button type="button" key={project.projectId}
+                  {managementProjects.filter(project => project.projectName.toLowerCase().includes(diagnosticsSearch.trim().toLowerCase())).map(project => <button type="button" key={project.projectId}
                     onClick={() => { void switchManagementProject(project.projectId) }}
-                    className="block w-full rounded-lg border border-[#E2DED7] px-3 py-2 text-left text-[12px] hover:bg-[#F8F7FF]">
+                    className="block w-full rounded-lg border border-[#E2DED7] px-3 py-2 text-left text-[12px] hover:bg-[#F8F7FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">
                     {project.projectName} · {project.documentType || 'Content project'}
                   </button>)}
+                  {managementProjects.length > 0 && !managementProjects.some(project => project.projectName.toLowerCase().includes(diagnosticsSearch.trim().toLowerCase())) && <p className="text-[12px] text-[#686879]">No projects match this search.</p>}
+                  {managementProjects.length === 0 && !managementBusy && <p className="text-[12px] text-[#686879]">No projects to inspect yet.</p>}
                 </div>
               : management?.destination === 'diagnostics' && (!projectId || management.selectedProjectId !== projectId)
                 ? <p className="mt-4 text-sm">Select a project to inspect its diagnostics.</p>
                 : <div className="space-y-3">
               {/* Project */}
-              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Project' ? 'hidden' : ''}`}>
+              {(diagnosticsComponent === 'all' || diagnosticsComponent === 'Project') && <div className="space-y-1.5 rounded-xl bg-[#F9F8F6] p-3">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Project</p>
                 <DiagRow label="Name" value={displayName} status={projectName ? 'ok' : 'warn'} warnText="No name set" />
                 <DiagRow label="Document Type" value={projectMeta.contentType || '—'} status={projectMeta.contentType ? 'ok' : 'warn'} />
                 <DiagRow label="Version" value={projectMeta.version || '—'} status={projectMeta.version ? 'ok' : 'info'} />
-              </div>
+              </div>}
               {/* Theme */}
-              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Theme & Style' ? 'hidden' : ''}`}>
+              {(diagnosticsComponent === 'all' || diagnosticsComponent === 'Theme & Style') && <div className="space-y-1.5 rounded-xl bg-[#F9F8F6] p-3">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Theme & Style</p>
                 <DiagRow label="Active Theme ID" value={activeThemeId} status="ok" />
                 <DiagRow label="Active Theme" value={activeTheme?.name ?? '—'} status={activeTheme ? 'ok' : 'error'} />
                 <DiagRow label="Style Profile ID" value={activeProfileId} status="ok" />
                 <DiagRow label="Variables" value={`${getThemeVars(activeThemeId).length} defined`} status={getThemeVars(activeThemeId).length > 0 ? 'ok' : 'info'} />
-              </div>
+              </div>}
               {/* Templates */}
-              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Templates' ? 'hidden' : ''}`}>
+              {(diagnosticsComponent === 'all' || diagnosticsComponent === 'Templates') && <div className="space-y-1.5 rounded-xl bg-[#F9F8F6] p-3">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Templates</p>
                 <DiagRow label="Page Layouts" value={`${pageLayouts.length} layouts`} status="ok" />
                 <DiagRow label="HTML Master Pages" value={`${htmlMasterPages.length} masters`} status="ok" />
-              </div>
+              </div>}
               {/* Sources */}
-              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Sources' ? 'hidden' : ''}`}>
+              {(diagnosticsComponent === 'all' || diagnosticsComponent === 'Sources') && <div className="space-y-1.5 rounded-xl bg-[#F9F8F6] p-3">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Sources</p>
                 <DiagRow label="Source Files" value={`${sources.length} files`} status={sources.length > 0 || isDemoMode ? 'ok' : 'info'} />
                 <DiagRow label="Sources Revision" value={String(sourcesRevision)} status="ok" />
                 {isDemoMode && <DiagRow label="Mode" value="Demo Mode active" status="warn" />}
-              </div>
+              </div>}
               {/* Analysis */}
-              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Analysis' ? 'hidden' : ''}`}>
+              {(diagnosticsComponent === 'all' || diagnosticsComponent === 'Analysis') && <div className="space-y-1.5 rounded-xl bg-[#F9F8F6] p-3">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Analysis</p>
                 {isDemoMode ? (
                   <>
@@ -20309,9 +20329,9 @@ export default function App() {
                     <DiagRow label="Stale" value={conceptAnalysis && !conceptAnalysisFresh ? 'Yes — Evidence Index changed' : 'No'} status={conceptAnalysis && !conceptAnalysisFresh ? 'warn' : 'ok'} />
                   </>
                 )}
-              </div>
+              </div>}
               {/* TOC */}
-              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'TOC' ? 'hidden' : ''}`}>
+              {(diagnosticsComponent === 'all' || diagnosticsComponent === 'TOC') && <div className="space-y-1.5 rounded-xl bg-[#F9F8F6] p-3">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">TOC</p>
                 {(() => {
                   let tocStatus = 'Not Generated'
@@ -20328,26 +20348,27 @@ export default function App() {
                     <DiagRow label="Connected to Author" value="Via shared appToc state" status="ok" />
                   </>
                 })()}
-              </div>
+              </div>}
               {/* Content */}
-              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Content' ? 'hidden' : ''}`}>
+              {(diagnosticsComponent === 'all' || diagnosticsComponent === 'Content') && <div className="space-y-1.5 rounded-xl bg-[#F9F8F6] p-3">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Content</p>
                 <DiagRow label="Content Revision" value={String(contentRevision)} status="ok" />
                 <DiagRow label="Doc Blocks (in memory)" value={`${sharedDocBlocksRef.current.length} blocks`} status="ok" />
-              </div>
+              </div>}
               {/* Review */}
-              <div className={`bg-[#F9F8F6] rounded-xl p-3 space-y-1.5 ${diagnosticsComponent !== 'all' && diagnosticsComponent !== 'Review' ? 'hidden' : ''}`}>
+              {(diagnosticsComponent === 'all' || diagnosticsComponent === 'Review') && <div className="space-y-1.5 rounded-xl bg-[#F9F8F6] p-3">
                 <p className="text-[10px] font-bold text-[#6B6B7E] uppercase tracking-wide">Review</p>
                 <DiagRow label="Review Status" value={aiReviewDone ? 'Complete' : 'Not run'} status={aiReviewDone ? 'ok' : 'info'} />
                 <DiagRow label="Review Revision" value={reviewRevision < 0 ? 'Never' : String(reviewRevision)} status={reviewRevision >= 0 ? 'ok' : 'info'} />
                 <DiagRow label="Stale" value={reviewStaleContent ? `Yes — content at rev ${contentRevision}, reviewed at ${reviewRevision}` : 'No'} status={reviewStaleContent ? 'warn' : 'ok'} />
-              </div>
+              </div>}
             </div>}
             <div className="mt-4 pt-3 border-t border-[#F4F2EE] flex justify-end">
-              <button onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }} className="px-4 py-2 bg-[#5B5BD6] text-white text-[12px] font-medium rounded-xl hover:bg-[#4A4AC4]">Close</button>
+              <button onClick={() => { if (management) void closeManagement(); else setDiagOpen(false) }} className="rounded-xl bg-[#5B5BD6] px-4 py-2 text-[12px] font-medium text-white hover:bg-[#4A4AC4] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5B5BD6]">Close</button>
             </div>
           </div>
         </div>
+        </DiagnosticsSearchContext.Provider>
         </DiagnosticsStatusContext.Provider>
       )}
     </div>
@@ -20358,13 +20379,19 @@ export default function App() {
 
 function DiagRow({ label, value, status, warnText }: { label: string; value: string; status: 'ok' | 'warn' | 'error' | 'info'; warnText?: string }) {
   const filter = React.useContext(DiagnosticsStatusContext)
-  if (filter !== 'all' && status !== filter) return null
+  const search = React.useContext(DiagnosticsSearchContext).trim().toLowerCase()
+  const [detailOpen, setDetailOpen] = useState(false)
+  if ((filter !== 'all' && status !== filter) || (search && !`${label} ${value} ${warnText ?? ''}`.toLowerCase().includes(search))) return null
   const dot = status === 'ok' ? 'bg-[#22C55E]' : status === 'warn' ? 'bg-[#F59E0B]' : status === 'error' ? 'bg-[#EF4444]' : 'bg-[#9898AB]'
+  const technical = /\bID\b|\bRevision\b|in memory|Generated From Analysis Rev|Connected to Author/i.test(label)
   return (
-    <div className="flex items-start gap-2">
+    <div data-diagnostic-row className="flex min-w-0 flex-wrap items-start gap-2">
       <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${dot}`} />
-      <span className="text-[11px] text-[#6B6B7E] w-36 flex-shrink-0">{label}</span>
-      <span className="text-[11px] text-[#111218] font-medium flex-1">{value}</span>
+      <span className="w-36 flex-shrink-0 text-[11px] text-[#575766]">{label}</span>
+      {technical ? <details onToggle={event => setDetailOpen(event.currentTarget.open)} className="min-w-0 flex-1 text-[11px]">
+        <summary className="w-fit cursor-pointer font-medium text-[#4D4DC2] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5B5BD6]">Details</summary>
+        {detailOpen && <span className="mt-1 block break-all text-[#111218]">{value}</span>}
+      </details> : <span className="min-w-0 flex-1 break-words text-[11px] font-medium text-[#111218]">{value}</span>}
       {warnText && status !== 'ok' && <span className="text-[10px] text-[#F59E0B]">{warnText}</span>}
     </div>
   )

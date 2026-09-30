@@ -22,7 +22,7 @@ async function openAdministration(page: Page, role: 'owner' | 'admin' | 'editor'
 }
 
 async function switchAdministrationRole(page: Page, role: 'owner' | 'admin' | 'editor' | 'viewer', workspaceId = 'ai-ui-workspace') {
-  await page.getByRole('button', { name: 'Back to workspace' }).click()
+  await page.getByRole('button', { name: 'Return to Projects' }).click()
   await openAdministration(page, role, workspaceId)
 }
 
