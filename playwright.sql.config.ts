@@ -4,11 +4,14 @@ import {
   getPlaywrightRunId,
 } from "./scripts/playwright-tooling.mjs"
 
-const runPaths = createPlaywrightRunPaths("server", getPlaywrightRunId("server"))
+const runPaths = createPlaywrightRunPaths("sql", getPlaywrightRunId("sql"))
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testMatch: "**/generate-topic-jobs-api.spec.ts",
+  testMatch: [
+    "**/ai-catalog-cloud.spec.ts",
+    "**/generate-topic-jobs-sql.spec.ts",
+  ],
   outputDir: runPaths.outputDir,
   fullyParallel: false,
   workers: 1,

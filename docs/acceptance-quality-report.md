@@ -1,5 +1,7 @@
 # Consolidated Acceptance & Quality
 
+Historical evidence for the earlier acceptance/fixture-cleanup batches. The current final-open-items results, TypeScript status, environment checklist and signed-in acceptance gates are maintained in [Final private-beta readiness](final-private-beta-readiness.md).
+
 ## Scope and evidence boundary
 
 Original acceptance batch starting commit: `c96118c1f1109934bfeec584eee0e292215a4db3`.

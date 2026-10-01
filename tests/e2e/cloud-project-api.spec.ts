@@ -384,6 +384,90 @@ test.describe('workspace cloud project API', () => {
     }
   })
 
+  test('duplicate refuses a stored source path that is not bound to the source project', async () => {
+    let copyRequested = false
+    const restore = provider('editor', true, url => {
+      if (url.pathname === '/rest/v1/cloud_projects') {
+        if (url.searchParams.get('project_id') === 'eq.source-project')
+          return reply([{ record: { projectId: 'source-project', projectName: 'Source', recordRevision: 0 } }])
+        if (url.searchParams.has('limit')) return reply([])
+        return reply([{ project_id: 'source-project', projectName: 'Source' }])
+      }
+      if (url.pathname === '/rest/v1/cloud_project_files')
+        return reply([{
+          file_id: 'source-file',
+          project_id: 'source-project',
+          name: 'source.txt',
+          type: 'text/plain',
+          size: 1,
+          uploaded_at: 1,
+          storage_path: 'project-files/workspace-1/other-project/source-file',
+          state: 'ready',
+        }])
+      if (url.pathname === '/storage/v1/object/copy') copyRequested = true
+      throw new Error(`Unexpected provider call: ${url.pathname}`)
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      await expect(api.execute({ action: 'duplicate', projectId: 'source-project' }))
+        .rejects.toMatchObject({ status: 503, code: 'STORAGE_RESPONSE_INVALID' })
+      expect(copyRequested).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
+  test('file removal rejects traversal paths before calling Storage', async () => {
+    let storageDeleteRequested = false
+    const restore = provider('editor', true, (url, init) => {
+      if (url.pathname === '/rest/v1/cloud_project_files')
+        return reply([{
+          file_id: 'file-1',
+          project_id: 'project-1',
+          name: 'file.txt',
+          type: 'text/plain',
+          size: 1,
+          uploaded_at: 1,
+          storage_path: 'project-files/workspace-1/project-1/../file-1',
+          state: 'ready',
+        }])
+      if (url.pathname.startsWith('/storage/v1/object/')) {
+        storageDeleteRequested = init?.method === 'DELETE'
+        return reply({})
+      }
+      throw new Error(`Unexpected provider call: ${url.pathname}`)
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      await expect(api.execute({ action: 'remove-file', fileId: 'file-1' }))
+        .rejects.toMatchObject({ status: 503, code: 'STORAGE_RESPONSE_INVALID' })
+      expect(storageDeleteRequested).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
+  test('cloud storage provider errors do not expose database messages', async () => {
+    const privateDetail = 'private-db-detail: select secret_value from internal_credentials'
+    const restore = provider('viewer', true, url => {
+      if (url.pathname === '/rest/v1/cloud_projects' && url.searchParams.get('limit') === '0')
+        return reply([])
+      if (url.pathname === '/rest/v1/cloud_projects')
+        return reply({ message: privateDetail }, 500)
+      throw new Error(`Unexpected provider call: ${url.pathname}`)
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      await expect(api.execute({ action: 'list' })).rejects.toMatchObject({
+        status: 503,
+        code: 'CLOUD_STORAGE_ERROR',
+        message: 'Cloud project storage is unavailable',
+      })
+    } finally {
+      restore()
+    }
+  })
+
   test('viewer role cannot create even when the storage is ready', async () => {
     const restore = provider('viewer')
     try {
@@ -614,6 +698,52 @@ test.describe('workspace cloud project API', () => {
       } finally {
         restore()
       }
+    }
+  })
+
+  test('abandon-restore rejects a file path bound to another restore stage', async () => {
+    const stageId = '123e4567-e89b-12d3-a456-426614174000'
+    const otherStageId = '223e4567-e89b-12d3-a456-426614174000'
+    let storageDeleteRequested = false
+    let finishRequested = false
+    const restore = provider('editor', true, (url, init) => {
+      if (url.pathname === '/rest/v1/cloud_project_restore_stages')
+        return reply([{
+          stage_id: stageId,
+          project_id: 'staged-project',
+          mode: 'new',
+          owner_user_id: 'user-1',
+        }])
+      if (url.pathname === '/rest/v1/rpc/begin_cloud_project_restore_abandon') return reply(true)
+      if (url.pathname === '/rest/v1/cloud_project_files')
+        return reply([{
+          file_id: 'staged-file',
+          project_id: 'staged-project',
+          name: 'asset.bin',
+          type: 'application/octet-stream',
+          size: 3,
+          uploaded_at: 1,
+          storage_path: `project-files/workspace-1/_staging/${otherStageId}/staged-file`,
+          state: 'staged',
+        }])
+      if (url.pathname.startsWith('/storage/v1/object/')) {
+        storageDeleteRequested = init?.method === 'DELETE'
+        return reply({})
+      }
+      if (url.pathname === '/rest/v1/rpc/finish_cloud_project_restore_abandon') {
+        finishRequested = true
+        return reply(true)
+      }
+      throw new Error(`Unexpected restore cleanup request: ${url.pathname}`)
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(request())
+      await expect(api.execute({ action: 'abandon-restore', stageId }))
+        .rejects.toMatchObject({ status: 503, code: 'STORAGE_RESPONSE_INVALID' })
+      expect(storageDeleteRequested).toBe(false)
+      expect(finishRequested).toBe(false)
+    } finally {
+      restore()
     }
   })
 })

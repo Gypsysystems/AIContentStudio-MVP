@@ -18,6 +18,8 @@ import {
   buildGroundedTopicSnapshot,
   GroundedTopicGroundingError,
   GroundedTopicPacketError,
+  sanitizedGroundedBrandNames,
+  sanitizedGroundedVariables,
   type GroundedTopicSnapshot,
 } from './groundedTopicPacket'
 import {
@@ -330,13 +332,13 @@ function makeDraft(
     ].join(':'),
     contentType: context.writingGuidance.contentType,
     language: context.writingGuidance.language,
-    variableSnapshot: { ...context.writingGuidance.variables },
+    variableSnapshot: sanitizedGroundedVariables(context.writingGuidance.variables),
     styleProvenance: {
       styleProfileId: context.writingGuidance.styleProfileId,
       styleProfileName: context.writingGuidance.styleProfileName,
       styleProfileScope: context.writingGuidance.styleProfileScope,
       styleFingerprint: context.provenance.styleFingerprint,
-      brandNames: [...context.writingGuidance.brandNames],
+      brandNames: sanitizedGroundedBrandNames(context.writingGuidance.brandNames),
     },
     evidenceIdsUsed,
     requiredEvidenceIdsUsed: evidenceIdsUsed.filter(id => snapshot.requiredEvidenceIds.includes(id)),

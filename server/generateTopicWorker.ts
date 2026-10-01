@@ -20,6 +20,12 @@ import {
   isLikelySecret,
   isSensitiveVariableName,
 } from './groundedTopicPacket'
+import {
+  safeWorkerLog,
+  type WorkerLogCode,
+  type WorkerLogLevel,
+  type WorkerLogger,
+} from './workerSafeLogging'
 
 type Json = Record<string, unknown>
 type WorkerJob = {
@@ -103,6 +109,23 @@ function claimedJob(value: unknown): ClaimedJob | null {
     job: jobValue as unknown as WorkerJob,
     leaseToken,
   }
+}
+
+function finishedJob(value: unknown, expectedJobId: string): {
+  status: 'succeeded' | 'failed'
+  errorCode?: string
+} | null {
+  const data = unwrap(value)
+  const job = object(data) && object(data.job) ? data.job : null
+  if (!job || job.jobId !== expectedJobId) return null
+  if (job.status === 'succeeded') return { status: 'succeeded' }
+  if (job.status === 'failed') {
+    return {
+      status: 'failed',
+      errorCode: typeof job.errorCode === 'string' ? job.errorCode : undefined,
+    }
+  }
+  return null
 }
 
 function jobContext(value: unknown): WorkerContext {
@@ -244,6 +267,7 @@ export type GenerateTopicWorkerOptions = {
   generateText?: typeof generateGroundedTocText
   key?: Buffer
   sleep?: (milliseconds: number) => Promise<void>
+  logger?: WorkerLogger
 }
 
 export class GenerateTopicWorker {
@@ -257,6 +281,7 @@ export class GenerateTopicWorker {
   private readonly generateText: typeof generateGroundedTocText
   private readonly key: Buffer
   private readonly sleep: (milliseconds: number) => Promise<void>
+  private readonly logger?: WorkerLogger
   private stopping = false
 
   constructor(options: GenerateTopicWorkerOptions = {}) {
@@ -276,6 +301,31 @@ export class GenerateTopicWorker {
     this.generateText = options.generateText ?? generateGroundedTocText
     this.key = options.key ?? encryptionKey()
     this.sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
+    this.logger = options.logger
+  }
+
+  private log(level: WorkerLogLevel, event: string, context: {
+    jobId?: unknown
+    projectId?: unknown
+    topicId?: unknown
+    workflowId?: unknown
+    workflowVersion?: unknown
+    inputRevision?: unknown
+    errorCode?: WorkerLogCode
+    retryable?: boolean
+  } = {}): void {
+    safeWorkerLog(level, event, context, this.logger)
+  }
+
+  private jobLogContext(job: WorkerJob) {
+    return {
+      jobId: job.jobId,
+      projectId: job.projectId,
+      topicId: job.topicId,
+      workflowId: job.workflowId,
+      workflowVersion: job.workflowVersion,
+      inputRevision: job.inputRevision,
+    }
   }
 
   stop(): void {
@@ -299,6 +349,7 @@ export class GenerateTopicWorker {
   async processClaim(claim: ClaimedJob): Promise<void> {
     const { job, leaseToken } = claim
     let leaseHeartbeatInFlight = false
+    let leaseHeartbeatFailureLogged = false
     const leaseTimer = setInterval(() => {
       if (leaseHeartbeatInFlight) return
       leaseHeartbeatInFlight = true
@@ -308,6 +359,10 @@ export class GenerateTopicWorker {
         p_lease_seconds: this.leaseSeconds,
       }).catch(() => {
         // Finish/fail RPCs still enforce ownership if a lease extension fails.
+        if (!leaseHeartbeatFailureLogged) {
+          leaseHeartbeatFailureLogged = true
+          this.log('warn', 'worker.lease.heartbeat_failed', this.jobLogContext(job))
+        }
       }).finally(() => { leaseHeartbeatInFlight = false })
     }, this.leaseHeartbeatIntervalMs)
     try {
@@ -384,25 +439,57 @@ export class GenerateTopicWorker {
         workflowVersion: job.workflowVersion,
       }, project, bundle, projectStore, { generateText: this.generateText })
       const draft = workerSafeDraft(result.draft, credential)
-      await this.call('gt_job_finish', {
+      const finishResult = await this.call('gt_job_finish', {
         p_job_id: job.jobId,
         p_lease_token: leaseToken,
         p_draft: draft,
       })
+      const finished = finishedJob(finishResult, job.jobId)
+      if (finished?.status === 'succeeded') {
+        this.log('info', 'worker.job.succeeded', this.jobLogContext(job))
+      } else if (finished?.status === 'failed') {
+        const errorCode = finished.errorCode === 'STALE_PROJECT' ? 'STALE_PROJECT'
+          : finished.errorCode === 'PERMISSION_REVOKED' ? 'PERMISSION_REVOKED'
+            : 'GENERATION_FAILED'
+        this.log('warn', 'worker.job.finish_failed', {
+          ...this.jobLogContext(job),
+          errorCode,
+          retryable: false,
+        })
+      } else {
+        this.log('error', 'worker.job.finish_outcome_unknown', {
+          ...this.jobLogContext(job),
+          errorCode: 'WORKER_OPERATION_FAILED',
+        })
+      }
     } catch (error) {
       const safe = safeFailure(error)
+      const retryable = transient(error)
+      this.log('warn', 'worker.job.failed', {
+        ...this.jobLogContext(job),
+        errorCode: safe.code as WorkerLogCode,
+        retryable,
+      })
       try {
         await this.call('gt_job_fail', {
           p_job_id: job.jobId,
           p_lease_token: leaseToken,
           p_error_code: safe.code,
           p_error_message: safe.message,
-          p_retryable: transient(error),
+          p_retryable: retryable,
         })
       } catch (failError) {
         // A stale/expired fencing token means this worker must not mutate the
         // job; another claim or the lease reaper owns its next transition.
-        if (!object(failError) || failError.code !== '40001') throw failError
+        if (object(failError) && failError.code === '40001') {
+          this.log('warn', 'worker.job.failure_fenced', this.jobLogContext(job))
+        } else {
+          this.log('error', 'worker.job.failure_transition_failed', {
+            ...this.jobLogContext(job),
+            errorCode: 'WORKER_OPERATION_FAILED',
+          })
+          throw failError
+        }
       }
     } finally {
       clearInterval(leaseTimer)
@@ -419,28 +506,51 @@ export class GenerateTopicWorker {
   }
 
   async run(): Promise<void> {
-    await this.client.connect()
-    await this.heartbeat()
+    let connected = false
+    try {
+      await this.client.connect()
+      connected = true
+      await this.heartbeat()
+    } catch (error) {
+      this.log('error', 'worker.startup_failed', {
+        errorCode: 'DATABASE_UNAVAILABLE',
+      })
+      if (connected) await this.client.end().catch(() => {})
+      throw error
+    }
+    this.log('info', 'worker.started')
     let heartbeatInFlight = false
     const timer = setInterval(() => {
       if (heartbeatInFlight || this.stopping) return
       heartbeatInFlight = true
       void this.heartbeat().catch(() => {
+        this.log('error', 'worker.liveness_heartbeat_failed', {
+          errorCode: 'DATABASE_UNAVAILABLE',
+        })
         this.stopping = true
       }).finally(() => { heartbeatInFlight = false })
     }, this.heartbeatIntervalMs)
+    let pollFailureLogged = false
     try {
       while (!this.stopping) {
         try {
           const claimed = await this.runOnce()
+          pollFailureLogged = false
           if (!claimed && !this.stopping) await this.sleep(this.idleDelayMs)
         } catch {
+          if (!pollFailureLogged) {
+            pollFailureLogged = true
+            this.log('warn', 'worker.poll_failed', {
+              errorCode: 'WORKER_OPERATION_FAILED',
+            })
+          }
           if (!this.stopping) await this.sleep(this.idleDelayMs)
         }
       }
     } finally {
       clearInterval(timer)
       await this.client.end()
+      this.log('info', 'worker.stopped')
     }
   }
 }

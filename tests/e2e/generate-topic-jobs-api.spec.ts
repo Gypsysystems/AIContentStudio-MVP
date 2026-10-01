@@ -15,6 +15,7 @@ import {
 } from '../../server/generateTopicWorker'
 import { GroundedTopicApiError } from '../../server/groundedTopicApi'
 import { GroundedTocProviderError } from '../../server/groundedTocProvider'
+import { createWorkerLogEntry, safeWorkerLog } from '../../server/workerSafeLogging'
 
 const JOB_ID = '6f97e277-4549-4c9a-9da7-10194cc6551c'
 const PROJECT_ID = 'job-project'
@@ -122,6 +123,7 @@ function mockWorkerClient(options: {
   context?: unknown
   contextError?: Error
   finishError?: Error
+  finishResult?: unknown
   claim?: unknown
   failError?: Error
 } = {}) {
@@ -137,6 +139,15 @@ function mockWorkerClient(options: {
       if (name === 'gt_job_context' && options.contextError) throw options.contextError
       if (name === 'gt_job_context') return { rows: [{ result: options.context }] }
       if (name === 'gt_job_finish' && options.finishError) throw options.finishError
+      if (name === 'gt_job_finish') {
+        return {
+          rows: [{
+            result: options.finishResult ?? {
+              job: { jobId: JOB_ID, status: 'succeeded' },
+            },
+          }],
+        }
+      }
       if (name === 'gt_job_fail' && options.failError) throw options.failError
       return { rows: [{ result: null }] }
     },
@@ -307,6 +318,106 @@ test('worker uses system trust with certificate verification when both CAs are a
   })
 })
 
+test('worker structured logs contain only allowlisted safe IDs and operational facts', () => {
+  const entry = createWorkerLogEntry('warn', 'worker.job.failed', {
+    jobId: JOB_ID,
+    projectId: PROJECT_ID,
+    topicId: TOPIC_ID,
+    workflowId: WORKFLOW_ID,
+    workflowVersion: 2,
+    inputRevision: 15,
+    errorCode: 'RATE_LIMITED',
+    retryable: true,
+    message: 'provider content password=do-not-log',
+  } as never, '2026-01-02T03:04:05.000Z')
+  expect(entry).toEqual({
+    timestamp: '2026-01-02T03:04:05.000Z',
+    level: 'warn',
+    event: 'worker.job.failed',
+    jobId: JOB_ID,
+    projectId: PROJECT_ID,
+    topicId: TOPIC_ID,
+    workflowId: WORKFLOW_ID,
+    workflowVersion: 2,
+    inputRevision: 15,
+    errorCode: 'RATE_LIMITED',
+    retryable: true,
+  })
+
+  const unsafe = createWorkerLogEntry('error', 'worker.poll_failed', {
+    jobId: 'password=secret-value',
+    projectId: 'sk-12345678901234567890',
+    errorCode: 'provider response password=private-value',
+  }, '2026-01-02T03:04:05.000Z')
+  expect(unsafe).toEqual({
+    timestamp: '2026-01-02T03:04:05.000Z',
+    level: 'error',
+    event: 'worker.poll_failed',
+  })
+  expect(JSON.stringify([entry, unsafe])).not.toMatch(/do-not-log|secret-value|private-value/u)
+
+  expect(() => createWorkerLogEntry('info', 'worker.unrecognized', {}, 'fixed'))
+    .toThrow('Worker log event is not allowlisted')
+  expect(() => safeWorkerLog('info', 'worker.started', {}, () => {
+    throw new Error('unavailable test sink')
+  })).not.toThrow()
+})
+
+test('worker startup logging classifies database failures without logging driver messages', async () => {
+  const logs: unknown[] = []
+  const driverMessage = 'db.example connection password=private and credential=secret-value'
+  const worker = new GenerateTopicWorker({
+    client: {
+      async connect() { throw new Error(driverMessage) },
+      async end() {},
+    } as never,
+    key: Buffer.alloc(32, 1),
+    logger: entry => logs.push(entry),
+  })
+
+  await expect(worker.run()).rejects.toThrow(driverMessage)
+  expect(logs).toEqual([{
+    timestamp: expect.any(String),
+    level: 'error',
+    event: 'worker.startup_failed',
+    errorCode: 'DATABASE_UNAVAILABLE',
+  }])
+  expect(JSON.stringify(logs)).not.toContain('db.example')
+  expect(JSON.stringify(logs)).not.toContain('private')
+  expect(JSON.stringify(logs)).not.toContain('secret-value')
+})
+
+test('worker poll failures are logged safely while the existing retry delay and shutdown remain intact', async () => {
+  const logs: unknown[] = []
+  const privateDriverDetail = 'database password=must-not-appear'
+  let queryCount = 0
+  let worker!: GenerateTopicWorker
+  worker = new GenerateTopicWorker({
+    client: {
+      async connect() {},
+      async end() {},
+      async query() {
+        queryCount++
+        if (queryCount === 3) throw new Error(privateDriverDetail)
+        return { rows: [{ result: null }] }
+      },
+    } as never,
+    key: Buffer.alloc(32, 1),
+    logger: entry => logs.push(entry),
+    sleep: async () => worker.stop(),
+  })
+
+  await expect(worker.run()).resolves.toBeUndefined()
+  expect(logs).toContainEqual({
+    timestamp: expect.any(String),
+    level: 'warn',
+    event: 'worker.poll_failed',
+    errorCode: 'WORKER_OPERATION_FAILED',
+  })
+  expect(JSON.stringify(logs)).not.toContain('must-not-appear')
+  expect(queryCount).toBe(3)
+})
+
 test('worker refreshes the SQL liveness heartbeat when the queue is idle', async () => {
   const queries: string[] = []
   const client = {
@@ -411,6 +522,66 @@ test('worker claims trusted project/catalog/connection context and completes wit
   }])
   expect(rpc.calls.some(call => call.name === 'gt_job_fail')).toBe(false)
   expect(JSON.stringify(rpc.calls)).not.toContain('worker-secret')
+})
+
+test('worker finish logs the persisted job outcome instead of assuming RPC success means generation success', async () => {
+  async function runFinish(finishResult: unknown) {
+    const fixtures = workerFixtures()
+    const rpc = mockWorkerClient({
+      context: fixtures.context,
+      claim: claimFor(fixtures.job),
+      finishResult,
+    })
+    const logs: unknown[] = []
+    const worker = new GenerateTopicWorker({
+      client: rpc.client as never,
+      key: fixtures.key,
+      readEncrypted: async () => fixtures.encrypted,
+      execute: async () => ({
+        draft: {
+          variableSnapshot: {},
+          styleProvenance: { brandNames: [] },
+          blocks: [],
+        },
+        recordRevision: 15,
+      }) as never,
+      logger: entry => logs.push(entry),
+    })
+
+    await expect(worker.runOnce()).resolves.toBe(true)
+    expect(rpc.calls.some(call => call.name === 'gt_job_fail')).toBe(false)
+    return logs
+  }
+
+  const succeeded = await runFinish({
+    job: { jobId: JOB_ID, status: 'succeeded' },
+  })
+  expect(succeeded).toContainEqual(expect.objectContaining({
+    event: 'worker.job.succeeded',
+    jobId: JOB_ID,
+  }))
+  expect(succeeded.some(entry => (entry as { event?: string }).event === 'worker.job.finish_failed')).toBe(false)
+
+  for (const errorCode of ['STALE_PROJECT', 'PERMISSION_REVOKED'] as const) {
+    const persistedFailure = await runFinish({
+      job: {
+        jobId: JOB_ID,
+        status: 'failed',
+        errorCode,
+        errorMessage: 'private project details must not be logged',
+      },
+    })
+    expect(persistedFailure).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      event: 'worker.job.finish_failed',
+      jobId: JOB_ID,
+      projectId: PROJECT_ID,
+      errorCode,
+      retryable: false,
+    }))
+    expect(persistedFailure.some(entry => (entry as { event?: string }).event === 'worker.job.succeeded')).toBe(false)
+    expect(JSON.stringify(persistedFailure)).not.toContain('private project details')
+  }
 })
 
 test('worker filters packet-detected secrets from draft variables and brand names before public retrieval', async () => {
@@ -591,6 +762,49 @@ test('provider rate limiting is retryable while invalid model output is permanen
   expect(JSON.stringify([transient.args, permanent.args])).not.toContain('worker-secret')
 })
 
+test('worker failure logs traceable IDs and safe categories without provider details', async () => {
+  const fixtures = workerFixtures()
+  const rpc = mockWorkerClient({
+    context: fixtures.context,
+    claim: claimFor(fixtures.job),
+  })
+  const logs: unknown[] = []
+  const unsafeProviderMessage = 'worker-secret provider response password=do-not-log'
+  const worker = new GenerateTopicWorker({
+    client: rpc.client as never,
+    key: fixtures.key,
+    readEncrypted: async () => fixtures.encrypted,
+    execute: async () => {
+      throw new GroundedTocProviderError('RATE_LIMITED', unsafeProviderMessage)
+    },
+    logger: entry => logs.push(entry),
+  })
+
+  await expect(worker.runOnce()).resolves.toBe(true)
+  expect(logs).toContainEqual({
+    timestamp: expect.any(String),
+    level: 'warn',
+    event: 'worker.job.failed',
+    jobId: JOB_ID,
+    projectId: PROJECT_ID,
+    topicId: TOPIC_ID,
+    workflowId: WORKFLOW_ID,
+    workflowVersion: 2,
+    inputRevision: 15,
+    errorCode: 'RATE_LIMITED',
+    retryable: true,
+  })
+  expect(JSON.stringify(logs)).not.toContain('worker-secret')
+  expect(JSON.stringify(logs)).not.toContain('do-not-log')
+  expect(rpc.calls.find(call => call.name === 'gt_job_fail')?.args).toEqual([
+    JOB_ID,
+    LEASE_TOKEN,
+    'RATE_LIMITED',
+    'The configured AI provider could not complete this Generate Topic job.',
+    true,
+  ])
+})
+
 test('worker rejects forged or stale connection test proofs before reading credentials or calling provider', async () => {
   const fixtures = workerFixtures()
   const cases = [
@@ -658,10 +872,12 @@ test('expired lease and stale project context never reach execution or completio
     contextError: Object.assign(new Error('job lease is stale or expired'), { code: '40001' }),
     failError: Object.assign(new Error('job lease is stale or expired'), { code: '40001' }),
   })
+  const expiredLogs: unknown[] = []
   let expiredExecution = false
   const expiredWorker = new GenerateTopicWorker({
     client: expiredRpc.client as never,
     key: expired.key,
+    logger: entry => expiredLogs.push(entry),
     execute: async () => {
       expiredExecution = true
       return { draft: {}, recordRevision: 15 } as never
@@ -671,6 +887,11 @@ test('expired lease and stale project context never reach execution or completio
   expect(expiredExecution).toBe(false)
   expect(expiredRpc.calls.some(call => call.name === 'gt_job_finish')).toBe(false)
   expect(expiredRpc.calls.some(call => call.name === 'gt_job_fail')).toBe(true)
+  expect(expiredLogs).toContainEqual(expect.objectContaining({
+    event: 'worker.job.failure_fenced',
+    jobId: JOB_ID,
+    projectId: PROJECT_ID,
+  }))
 
   const stale = workerFixtures()
   const staleContext = {

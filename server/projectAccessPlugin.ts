@@ -393,8 +393,12 @@ function installCloudEndpoints(server: ViteDevServer | PreviewServer, localDev =
 
 /**
  * Dev uses a fixed local identity with no authentication and must not be
- * exposed as a public service. Production preview deliberately fails closed
- * because no real verifier provider is configured.
+ * exposed as a public service. The legacy /api/project-access bridge is
+ * deliberately unavailable outside explicit local development because no
+ * trusted verifier is wired into that bridge. Preview still installs the
+ * separate Supabase auth and cloud API handlers; those routes use their own
+ * server-side configuration, authenticated session, workspace checks, and
+ * database/storage RLS gates.
  */
 export function projectAccessPlugin(): Plugin {
   return {

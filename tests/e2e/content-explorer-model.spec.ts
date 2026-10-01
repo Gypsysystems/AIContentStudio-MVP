@@ -31,6 +31,9 @@ test('legacy hydration creates deterministic root placements and fixed system ca
   expect(result.roots.map((root: { name: string }) => root.name))
     .toEqual(['Topics', 'Snippets', 'Media', 'Variables', 'Conditions', 'References'])
   expect(result.first).toEqual(result.repeated)
+  expect(result.tree.find((root: { id: string }) => root.id === 'media').children
+    .map((category: { id: string }) => category.id))
+    .toEqual(['media-images', 'media-videos', 'media-gifs', 'media-audio'])
   expect(result.first).toMatchObject({
     version: 1,
     folders: [],

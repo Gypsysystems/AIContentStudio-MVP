@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import { safeWorkerLog } from './workerSafeLogging.ts'
 
 // Node's native TypeScript support requires explicit extensions. Resolve the
 // existing extensionless server imports without adding a TS runtime package.
@@ -19,13 +20,17 @@ registerHooks({
   },
 })
 
-const { GenerateTopicWorker } = await import('./generateTopicWorker.ts')
-const worker = new GenerateTopicWorker()
-const shutdown = () => worker.stop()
-
-process.once('SIGINT', shutdown)
-process.once('SIGTERM', shutdown)
-
-void worker.run().catch(() => {
+let worker
+try {
+  const { GenerateTopicWorker } = await import('./generateTopicWorker.ts')
+  worker = new GenerateTopicWorker()
+  const shutdown = () => worker.stop()
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
+  await worker.run()
+} catch {
+  safeWorkerLog('error', 'worker.fatal_exit', {
+    errorCode: 'WORKER_STARTUP_FAILED',
+  })
   process.exitCode = 1
-})
+}

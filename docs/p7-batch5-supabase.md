@@ -1,5 +1,7 @@
 # P7 Batch 5 — Supabase identity foundation
 
+Historical identity-foundation notes, not the current cloud/private-beta setup procedure. Later batches added cloud project/file persistence. Use [Final private-beta readiness](final-private-beta-readiness.md) for current prerequisites; do not infer the remote schema or apply migrations from this historical checklist.
+
 This batch adds Supabase Auth and PostgreSQL workspace membership but **does
 not move projects, source files, generated outputs, or backups from browser
 IndexedDB**. Shared cloud project access remains disabled. Do not enable it

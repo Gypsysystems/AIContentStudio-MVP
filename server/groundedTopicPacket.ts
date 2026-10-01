@@ -50,6 +50,20 @@ export function isSensitiveVariableName(name: string): boolean {
   return /password|passwd|secret|credential|token|api[_ -]?key/iu.test(name)
 }
 
+export function sanitizedGroundedVariables(variables: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(variables)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .filter(([name, value]) => !isSensitiveVariableName(name)
+      && !isLikelySecret(name) && !isLikelySecret(value))
+    .slice(0, MAX_WRITING_VARIABLES))
+}
+
+export function sanitizedGroundedBrandNames(brandNames: string[]): string[] {
+  return [...new Set(brandNames)]
+    .filter(name => !isLikelySecret(name))
+    .slice(0, MAX_BRAND_NAMES)
+}
+
 function normalizedTokens(value: string): Set<string> {
   return new Set(value.normalize('NFKC').toLocaleLowerCase('en-US')
     .split(/[^a-z0-9]+/u).filter(token => token.length >= 3))
@@ -474,19 +488,12 @@ export function buildGroundedTopicPacket(
     ],
   }
   const writingGuidance = context.writingGuidance
-  const variables = Object.fromEntries(Object.entries(writingGuidance.variables)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .filter(([name, value]) => !isSensitiveVariableName(name)
-      && !isLikelySecret(name) && !isLikelySecret(value))
-    .slice(0, MAX_WRITING_VARIABLES)
-    .map(([name, value]) => {
-      requireText(name, 100)
-      requireText(value, 300)
-      return [name, value]
-    }))
-  const brandNames = [...new Set(writingGuidance.brandNames)]
-    .filter(name => !isLikelySecret(name))
-    .slice(0, MAX_BRAND_NAMES)
+  const variables = sanitizedGroundedVariables(writingGuidance.variables)
+  Object.entries(variables).forEach(([name, value]) => {
+    requireText(name, 100)
+    requireText(value, 300)
+  })
+  const brandNames = sanitizedGroundedBrandNames(writingGuidance.brandNames)
   brandNames.forEach(name => requireText(name, 120))
   const guidanceInstructions = writingGuidance.instructions.slice(0, MAX_WRITING_INSTRUCTIONS)
   guidanceInstructions.forEach(instruction => requireText(instruction, 240))

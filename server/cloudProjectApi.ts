@@ -95,6 +95,48 @@ function validateFileIdList(value: unknown, field: string): string[] {
   return ids
 }
 
+function isSafeStorageSegment(segment: string): boolean {
+  return segment.length > 0 && segment !== '.' && segment !== '..'
+    && !/[\\\u0000-\u001f\u007f]/.test(segment)
+}
+
+function storageSegmentsAreSafe(path: string): boolean {
+  const segments = path.split('/')
+  return segments.length >= 2 && segments.every(isSafeStorageSegment)
+}
+
+function assertStoragePath(path: unknown, expected: string, label = 'file'): string {
+  if (typeof path !== 'string' || path !== expected || !storageSegmentsAreSafe(path))
+    throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', `Cloud storage returned an invalid ${label} path`)
+  return path
+}
+
+function projectFileStoragePath(workspaceId: string, projectId: string, fileId: string): string {
+  return `project-files/${workspaceId}/${projectId}/${fileId}`
+}
+
+function stagedFileStoragePath(workspaceId: string, stageId: string, fileId: string): string {
+  return `project-files/${workspaceId}/_staging/${stageId}/${fileId}`
+}
+
+function checkpointFileStoragePath(workspaceId: string, projectId: string, checkpointId: string, fileId: string): string {
+  return `project-checkpoints/${workspaceId}/${projectId}/${checkpointId}/${fileId}`
+}
+
+function validateFileRows(value: unknown, projectId: string, workspaceId: string): FileRow[] {
+  if (!Array.isArray(value))
+    throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid file list')
+  return value.map(row => {
+    if (!isObject(row) || typeof row.file_id !== 'string' || typeof row.project_id !== 'string'
+      || row.project_id !== projectId) {
+      throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid file metadata')
+    }
+    validateId(row.file_id, 'file_id')
+    assertStoragePath(row.storage_path, projectFileStoragePath(workspaceId, projectId, row.file_id))
+    return row as FileRow
+  })
+}
+
 function safeRecord(value: unknown): Json {
   if (!isObject(value)) throw new CloudApiError(400, 'INVALID_RECORD', 'record must be a JSON object')
   const encoded = JSON.stringify(value)
@@ -145,11 +187,12 @@ class SupabaseCloudClient {
         throw new CloudApiError(409, 'PROJECT_NAME_CONFLICT', 'A project with this name already exists in the workspace')
       }
       if (response.status === 404 || databaseCode === 'P0002')
-        throw new CloudApiError(404, 'RESOURCE_NOT_FOUND', message)
+        throw new CloudApiError(404, 'RESOURCE_NOT_FOUND', 'The requested cloud resource was not found')
       if (databaseCode === '40001')
-        throw new CloudApiError(409, 'RESTORE_CONFLICT', message)
-      if (response.status === 409) throw new CloudApiError(409, 'RESOURCE_CONFLICT', message)
-      throw new CloudApiError(503, 'CLOUD_STORAGE_ERROR', message)
+        throw new CloudApiError(409, 'RESTORE_CONFLICT', 'Cloud storage changed during this operation; reload and retry')
+      if (response.status === 409)
+        throw new CloudApiError(409, 'RESOURCE_CONFLICT', 'The cloud resource conflicts with its current state')
+      throw new CloudApiError(503, 'CLOUD_STORAGE_ERROR', 'Cloud project storage is unavailable')
     }
     return body
   }
@@ -171,7 +214,8 @@ class SupabaseCloudClient {
     if (!Array.isArray(memberships) || !memberships.length)
       throw new CloudApiError(403, 'MEMBERSHIP_INACTIVE', 'An active workspace membership is required')
     const membership = memberships[0] as Membership
-    if (!membership || typeof membership.workspace_id !== 'string' || !(membership.role in PERMISSIONS))
+    if (!membership || typeof membership.workspace_id !== 'string'
+      || !isSafeStorageSegment(membership.workspace_id) || !(membership.role in PERMISSIONS))
       throw new CloudApiError(503, 'MEMBERSHIP_LOOKUP_FAILED', 'Could not verify current workspace membership')
     return { user: { id: user.id }, membership }
   }
@@ -294,8 +338,7 @@ class SupabaseCloudClient {
   async fileRows(projectId: string, workspaceId: string): Promise<FileRow[]> {
     const query = new URLSearchParams({ select: 'file_id,project_id,name,type,size,uploaded_at,storage_path,state', project_id: `eq.${projectId}`, workspace_id: `eq.${workspaceId}`, state: 'eq.ready', order: 'uploaded_at.asc' })
     const rows = await this.json(`/rest/v1/cloud_project_files?${query}`)
-    if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid file list')
-    return rows as FileRow[]
+    return validateFileRows(rows, projectId, workspaceId)
   }
 
   async checkpoints(projectId: string, workspaceId: string): Promise<Json[]> {
@@ -317,24 +360,26 @@ class SupabaseCloudClient {
   async cleanupRows(projectId: string, workspaceId: string): Promise<FileRow[]> {
     const query = new URLSearchParams({ select: 'file_id,project_id,name,type,size,uploaded_at,storage_path,state', project_id: `eq.${projectId}`, workspace_id: `eq.${workspaceId}`, state: 'eq.cleanup', order: 'uploaded_at.asc' })
     const rows = await this.json(`/rest/v1/cloud_project_files?${query}`)
-    if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid cleanup file set')
-    return rows as FileRow[]
+    return validateFileRows(rows, projectId, workspaceId)
   }
 
   async uploadingRows(projectId: string, workspaceId: string): Promise<FileRow[]> {
     const query = new URLSearchParams({ select: 'file_id,project_id,name,type,size,uploaded_at,storage_path,state', project_id: `eq.${projectId}`, workspace_id: `eq.${workspaceId}`, state: 'eq.uploading', order: 'uploaded_at.asc' })
     const rows = await this.json(`/rest/v1/cloud_project_files?${query}`)
-    if (!Array.isArray(rows)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid in-progress file set')
-    return rows as FileRow[]
+    return validateFileRows(rows, projectId, workspaceId)
   }
 
-  async removeStoredFile(file: FileRow): Promise<void> {
-    const removed = await this.call(`/storage/v1/object/${file.storage_path}`, { method: 'DELETE' })
+  async removeStoredFile(file: FileRow, workspaceId: string): Promise<void> {
+    const storagePath = assertStoragePath(
+      file.storage_path,
+      projectFileStoragePath(workspaceId, file.project_id, file.file_id),
+    )
+    const removed = await this.call(storageObjectUrl(storagePath), { method: 'DELETE' })
     if (!removed.ok && removed.status !== 404)
       throw new CloudApiError(503, 'FILE_DELETE_FAILED', `Could not remove stored file "${file.file_id}"`)
     await this.json('/rest/v1/rpc/delete_cloud_project_file_metadata', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ p_storage_path: file.storage_path }),
+      body: JSON.stringify({ p_storage_path: storagePath }),
     })
   }
 
@@ -388,6 +433,10 @@ function sha256(bytes: Buffer | string): string {
 }
 
 function storageObjectUrl(path: string): string {
+  if (!storageSegmentsAreSafe(path)
+    || !['project-files', 'project-checkpoints'].includes(path.split('/')[0])) {
+    throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid object path')
+  }
   return `/storage/v1/object/${path.split('/').map(segment => encodeURIComponent(segment)).join('/')}`
 }
 
@@ -735,7 +784,14 @@ export class CloudProjectApi {
             copiedPaths.push(`project-files/${path}`)
             const copied = await this.client.call('/storage/v1/object/copy', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ bucketId: 'project-files', sourceKey: file.storage_path.replace(/^project-files\//, ''), destinationKey: path }),
+              body: JSON.stringify({
+                bucketId: 'project-files',
+                sourceKey: assertStoragePath(
+                  file.storage_path,
+                  projectFileStoragePath(this.workspaceId, sourceId, file.file_id),
+                ).slice('project-files/'.length),
+                destinationKey: path,
+              }),
             })
             if (!copied.ok) throw new CloudApiError(503, 'FILE_COPY_FAILED', 'Could not copy every project file')
             await this.client.json('/rest/v1/rpc/finish_cloud_project_file_upload', {
@@ -745,7 +801,7 @@ export class CloudProjectApi {
           }
         } catch (error) {
           for (const path of copiedPaths) {
-            const removed = await this.client.call(`/storage/v1/object/${path}`, { method: 'DELETE' }).catch(() => null)
+            const removed = await this.client.call(storageObjectUrl(path), { method: 'DELETE' }).catch(() => null)
             if (removed && (removed.ok || removed.status === 404)) {
               await this.client.json('/rest/v1/rpc/delete_cloud_project_file_metadata', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -833,8 +889,15 @@ export class CloudProjectApi {
         if (!Array.isArray(stagedFiles) || stagedFiles.length !== fileIds.length)
           throw new CloudApiError(409, 'FILE_SET_INCOMPLETE', 'Upload every file in the staged manifest before finalizing restore')
         for (const file of stagedFiles) {
-          if (!isObject(file)) throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid staged file metadata')
-          const exists = await this.client.call(`/storage/v1/object/info/${String(file.storage_path)}`)
+          if (!isObject(file) || typeof file.file_id !== 'string')
+            throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid staged file metadata')
+          validateId(file.file_id, 'file_id')
+          const storagePath = assertStoragePath(
+            file.storage_path,
+            stagedFileStoragePath(this.workspaceId, stageId, file.file_id),
+            'staged file',
+          )
+          const exists = await this.client.call(`/storage/v1/object/info/${storagePath.split('/').map(encodeURIComponent).join('/')}`)
           if (!exists.ok) throw new CloudApiError(409, 'STAGED_FILE_MISSING', 'A staged file is missing; the project was not restored')
         }
         const stagedRecord = isObject(stage.staged_record) ? stage.staged_record : null
@@ -875,6 +938,10 @@ export class CloudProjectApi {
         const query = new URLSearchParams({ select: 'file_id,project_id,name,type,size,uploaded_at,storage_path,state', file_id: `eq.${fileId}`, workspace_id: `eq.${this.workspaceId}`, state: 'eq.ready', limit: '1' })
         const rows = await this.client.json(`/rest/v1/cloud_project_files?${query}`)
         if (!Array.isArray(rows) || !isObject(rows[0])) throw new CloudApiError(404, 'FILE_NOT_FOUND', 'File was not found in the active workspace')
+        if (rows[0].file_id !== fileId || typeof rows[0].project_id !== 'string')
+          throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid file metadata')
+        validateId(rows[0].project_id, 'projectId')
+        assertStoragePath(rows[0].storage_path, projectFileStoragePath(this.workspaceId, rows[0].project_id, fileId))
         const { storage_path: _path, state: _state, ...file } = rows[0] as FileRow
         return { files: [file] }
       }
@@ -886,7 +953,11 @@ export class CloudProjectApi {
         const rows = await this.client.json(`/rest/v1/cloud_project_files?${query}`)
         if (!Array.isArray(rows) || !isObject(rows[0])) return { files: [] }
         const file = rows[0]
-        await this.client.removeStoredFile(file as FileRow)
+        if (file.file_id !== fileId || typeof file.project_id !== 'string')
+          throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid file metadata')
+        validateId(file.project_id, 'projectId')
+        assertStoragePath(file.storage_path, projectFileStoragePath(this.workspaceId, file.project_id, file.file_id))
+        await this.client.removeStoredFile(file as FileRow, this.workspaceId)
         return { files: [] }
       }
       default:
@@ -899,7 +970,7 @@ export class CloudProjectApi {
     const pending: string[] = []
     for (const file of rows) {
       try {
-        await this.client.removeStoredFile(file)
+        await this.client.removeStoredFile(file, this.workspaceId)
       } catch {
         pending.push(file.file_id)
       }
@@ -939,9 +1010,15 @@ export class CloudProjectApi {
     if (!Array.isArray(files))
       throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid staged file metadata')
     for (const value of files) {
-      if (!isObject(value) || typeof value.storage_path !== 'string')
+      if (!isObject(value) || typeof value.file_id !== 'string' || value.project_id !== stage.project_id)
         throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid staged file metadata')
-      const removed = await this.client.call(`/storage/v1/object/${value.storage_path}`, { method: 'DELETE' })
+      validateId(value.file_id, 'file_id')
+      const storagePath = assertStoragePath(
+        value.storage_path,
+        stagedFileStoragePath(this.workspaceId, stageId, value.file_id),
+        'staged file',
+      )
+      const removed = await this.client.call(storageObjectUrl(storagePath), { method: 'DELETE' })
       if (!removed.ok && removed.status !== 404)
         throw new CloudApiError(503, 'STAGE_ABANDON_CLEANUP_PENDING', 'A staged Storage object could not be removed; retry abandon after resolving the Storage error')
     }
@@ -975,9 +1052,11 @@ export class CloudProjectApi {
       const item = manifest.find(value => isObject(value) && value.fileId === fileId)
       if (!isObject(item) || typeof item.storageRef !== 'string')
         throw new CloudApiError(404, 'CHECKPOINT_FILE_NOT_FOUND', 'Checkpoint file was not found')
-      const storagePath = item.storageRef
-      if (!storagePath.startsWith(`project-checkpoints/${this.workspaceId}/${projectId}/${checkpointId}/`))
-        throw new CloudApiError(503, 'CHECKPOINT_STORAGE_PATH_INVALID', 'Stored checkpoint path is invalid')
+      const storagePath = assertStoragePath(
+        item.storageRef,
+        checkpointFileStoragePath(this.workspaceId, projectId, checkpointId, fileId),
+        'checkpoint file',
+      )
       const download = await this.client.call(storageObjectUrl(storagePath))
       if (!download.ok) throw new CloudApiError(503, 'CHECKPOINT_FILE_DOWNLOAD_FAILED', 'Could not download the checkpoint file')
       response.statusCode = 200
@@ -990,11 +1069,18 @@ export class CloudProjectApi {
     const fileId = validateId(url.searchParams.get('fileId'), 'fileId')
     if (request.method === 'GET') {
       this.client.assertPermission(this.role, 'read')
-      const query = new URLSearchParams({ select: 'storage_path,name,type', file_id: `eq.${fileId}`, workspace_id: `eq.${this.workspaceId}`, state: 'eq.ready', limit: '1' })
+      const query = new URLSearchParams({ select: 'file_id,project_id,storage_path,name,type', file_id: `eq.${fileId}`, workspace_id: `eq.${this.workspaceId}`, state: 'eq.ready', limit: '1' })
       const rows = await this.client.json(`/rest/v1/cloud_project_files?${query}`)
       if (!Array.isArray(rows) || !isObject(rows[0])) throw new CloudApiError(404, 'FILE_NOT_FOUND', 'File was not found in the active workspace')
       const file = rows[0]
-      const download = await this.client.call(`/storage/v1/object/${String(file.storage_path)}`)
+      if (file.file_id !== fileId || typeof file.project_id !== 'string')
+        throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid file metadata')
+      validateId(file.project_id, 'projectId')
+      const storagePath = assertStoragePath(
+        file.storage_path,
+        projectFileStoragePath(this.workspaceId, file.project_id, fileId),
+      )
+      const download = await this.client.call(storageObjectUrl(storagePath))
       if (!download.ok) throw new CloudApiError(503, 'FILE_DOWNLOAD_FAILED', 'Could not download the stored file')
       response.statusCode = 200
       response.setHeader('Content-Type', typeof file.type === 'string' ? file.type : 'application/octet-stream')
@@ -1043,8 +1129,8 @@ export class CloudProjectApi {
       throw new CloudApiError(400, 'INVALID_FILE_NAME', 'X-File-Name must be a non-empty filename without control characters')
     const type = (request.headers['content-type'] ?? 'application/octet-stream').toString().slice(0, 255)
     const storagePath = stageId
-      ? `${this.workspaceId}/_staging/${stageId}/${fileId}`
-      : `${this.workspaceId}/${projectId}/${fileId}`
+      ? stagedFileStoragePath(this.workspaceId, stageId, fileId).slice('project-files/'.length)
+      : projectFileStoragePath(this.workspaceId, projectId, fileId).slice('project-files/'.length)
     const uploadedAt = Date.now()
     let metadataCreated = false
     let storageCreated = false
@@ -1059,7 +1145,7 @@ export class CloudProjectApi {
         }),
       })
       metadataCreated = true
-      const uploaded = await this.client.call(`/storage/v1/object/project-files/${storagePath}`, {
+      const uploaded = await this.client.call(storageObjectUrl(`project-files/${storagePath}`), {
         method: 'POST', headers: { 'Content-Type': type, 'x-upsert': 'false' }, body: bytes,
       })
       if (!uploaded.ok) throw new CloudApiError(uploaded.status === 409 ? 409 : 503, 'FILE_UPLOAD_FAILED', 'Could not store the uploaded file')
@@ -1074,7 +1160,7 @@ export class CloudProjectApi {
       if (metadataCreated) {
         let objectGone = !storageCreated
         if (storageCreated) {
-          const removed = await this.client.call(`/storage/v1/object/project-files/${storagePath}`, { method: 'DELETE' }).catch(() => null)
+          const removed = await this.client.call(storageObjectUrl(`project-files/${storagePath}`), { method: 'DELETE' }).catch(() => null)
           objectGone = Boolean(removed && (removed.ok || removed.status === 404))
         }
         if (objectGone) {
@@ -1205,15 +1291,36 @@ export class CloudProjectApi {
     })}`)
     if (Array.isArray(committed) && committed.length)
       throw new CloudApiError(409, 'CHECKPOINT_ALREADY_COMMITTED', 'A committed checkpoint archive is immutable and cannot be cleaned up')
+    const stage = await this.client.json(`/rest/v1/cloud_project_checkpoint_stages?${new URLSearchParams({
+      select: 'checkpoint_id,workspace_id,project_id',
+      checkpoint_id: `eq.${checkpointId}`,
+      workspace_id: `eq.${this.workspaceId}`,
+      limit: '1',
+    })}`)
+    if (!Array.isArray(stage) || !isObject(stage[0])
+      || stage[0].checkpoint_id !== checkpointId || stage[0].workspace_id !== this.workspaceId
+      || typeof stage[0].project_id !== 'string') {
+      throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid checkpoint stage metadata')
+    }
+    const projectId = validateId(stage[0].project_id, 'projectId')
     const stages = await this.client.json(`/rest/v1/cloud_project_checkpoint_file_stages?${new URLSearchParams({
-      select: 'storage_path', checkpoint_id: `eq.${checkpointId}`, workspace_id: `eq.${this.workspaceId}`,
+      select: 'workspace_id,project_id,file_id,storage_path',
+      checkpoint_id: `eq.${checkpointId}`,
+      workspace_id: `eq.${this.workspaceId}`,
     })}`)
     if (!Array.isArray(stages))
       throw new CloudApiError(503, 'CHECKPOINT_CLEANUP_PENDING', 'Could not enumerate staged checkpoint objects')
     for (const value of stages) {
-      if (!isObject(value) || typeof value.storage_path !== 'string')
+      if (!isObject(value) || value.workspace_id !== this.workspaceId || value.project_id !== projectId
+        || typeof value.file_id !== 'string')
         throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned invalid checkpoint stage metadata')
-      const removed = await this.client.call(storageObjectUrl(value.storage_path), { method: 'DELETE' })
+      validateId(value.file_id, 'file_id')
+      const storagePath = assertStoragePath(
+        value.storage_path,
+        checkpointFileStoragePath(this.workspaceId, projectId, checkpointId, value.file_id),
+        'checkpoint stage',
+      )
+      const removed = await this.client.call(storageObjectUrl(storagePath), { method: 'DELETE' })
       if (!removed.ok && removed.status !== 404)
         throw new CloudApiError(503, 'CHECKPOINT_CLEANUP_PENDING', 'A staged checkpoint object could not be removed')
     }
@@ -1260,10 +1367,32 @@ export class CloudProjectApi {
       if (!Array.isArray(entries))
         throw new CloudApiError(503, 'PROJECT_DELETE_CLEANUP_PENDING', 'Could not enumerate project deletion objects')
       for (const entry of entries) {
-        if (!isObject(entry) || typeof entry.object_ref !== 'string'
-          || !/^(project-files|project-checkpoints)\/.+$/.test(entry.object_ref))
+        if (!isObject(entry) || typeof entry.object_ref !== 'string')
           throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid project deletion object')
-        const removed = await this.client.call(storageObjectUrl(entry.object_ref), { method: 'DELETE' })
+        const objectRef = entry.object_ref
+        const segments = objectRef.split('/')
+        const isProjectFile = segments.length === 4
+          && segments[0] === 'project-files'
+          && segments[1] === this.workspaceId
+          && segments[2] === projectId
+          && segments[3] !== ''
+        const isStagedProjectFile = segments.length === 5
+          && segments[0] === 'project-files'
+          && segments[1] === this.workspaceId
+          && segments[2] === '_staging'
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(segments[3])
+          && segments[4] !== ''
+        const isCheckpointFile = segments.length === 5
+          && segments[0] === 'project-checkpoints'
+          && segments[1] === this.workspaceId
+          && segments[2] === projectId
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(segments[3])
+          && segments[4] !== ''
+        if ((!isProjectFile && !isStagedProjectFile && !isCheckpointFile)
+          || !storageSegmentsAreSafe(objectRef)) {
+          throw new CloudApiError(503, 'STORAGE_RESPONSE_INVALID', 'Cloud storage returned an invalid project deletion object')
+        }
+        const removed = await this.client.call(storageObjectUrl(objectRef), { method: 'DELETE' })
         if (!removed.ok && removed.status !== 404)
           throw new CloudApiError(503, 'PROJECT_DELETE_CLEANUP_PENDING', 'A project archive object could not be removed')
       }

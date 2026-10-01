@@ -23,19 +23,16 @@ test('topic generation job RPCs enforce authorization, idempotency, leases, and 
       exists(select 1 from pg_roles where rolname = 'generate_topic_worker')`,
   ], { encoding: 'utf8', timeout: 10_000 })
   if (preflight.error || preflight.status !== 0) {
-    test.skip(true, `Local PostgreSQL preflight unavailable: ${preflight.error?.message ?? preflight.stderr.trim()}`)
-    return
+    throw new Error(`Opted-in local PostgreSQL preflight failed: ${preflight.error?.message ?? preflight.stderr.trim()}`)
   }
 
   const [database, address, isSuperuser, hadAnon, hadAuthenticated, hadWorker] =
     preflight.stdout.trim().split('|')
   if (database !== 'postgres' || address !== 'local-socket' || isSuperuser !== 't') {
-    test.skip(true, 'Requires a local Unix-socket PostgreSQL superuser; remote/database URLs are intentionally refused.')
-    return
+    throw new Error('Opted-in SQL tests require a local Unix-socket PostgreSQL superuser; remote/database URLs are intentionally refused.')
   }
   if (hadWorker === 't') {
-    test.skip(true, 'The disposable test refuses to alter a pre-existing generate_topic_worker role.')
-    return
+    throw new Error('Opted-in SQL test refuses to alter a pre-existing generate_topic_worker role.')
   }
 
   const testDatabase = `generate_topic_jobs_test_${randomUUID().replaceAll('-', '')}`
@@ -52,8 +49,7 @@ test('topic generation job RPCs enforce authorization, idempotency, leases, and 
 
   const create = runPsql(['-d', 'postgres', '-c', `CREATE DATABASE ${testDatabase}`])
   if (create.error || create.status !== 0) {
-    test.skip(true, `Could not create isolated disposable database: ${create.error?.message ?? create.stderr.trim()}`)
-    return
+    throw new Error(`Could not create isolated disposable database: ${create.error?.message ?? create.stderr.trim()}`)
   }
 
   let failure: Error | null = null

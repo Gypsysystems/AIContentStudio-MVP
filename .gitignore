@@ -12,6 +12,7 @@ logs/
 .claude-replay.*
 .tmp-*
 /test-results/
+/.playwright/
 /.figma/design-context/
 /attached_assets/
 

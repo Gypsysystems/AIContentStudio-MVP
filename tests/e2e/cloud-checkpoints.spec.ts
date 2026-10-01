@@ -214,7 +214,8 @@ test.describe('cloud project checkpoint protocol', () => {
         if (url.pathname === '/rest/v1/cloud_project_files')
           return reply([{
             file_id: FILE_ID, project_id: PROJECT_ID, name: 'source.txt', type: 'text/plain',
-            size: FILE_BYTES.length, uploaded_at: 1, storage_path: 'project-files/ws/p/f', state: 'ready',
+            size: FILE_BYTES.length, uploaded_at: 1,
+            storage_path: `project-files/${WORKSPACE_ID}/${PROJECT_ID}/${FILE_ID}`, state: 'ready',
           }])
         if (url.pathname === '/rest/v1/cloud_project_checkpoints') return reply([])
         if (url.pathname === '/rest/v1/cloud_project_checkpoint_stages' && init?.method === 'POST') {
@@ -377,7 +378,8 @@ test.describe('cloud project checkpoint protocol', () => {
   test('failed archive upload or finalization cleans only staged objects and abandons staged metadata', async () => {
     for (const failure of ['upload', 'finalize'] as const) {
       const calls: Array<{ path: string; method: string }> = []
-      const stagedPaths: string[] = []
+      const stagedFiles: Array<{ project_id: string; file_id: string; storage_path: string }> = []
+      let checkpointStage: { checkpoint_id: string; workspace_id: string; project_id: string } | null = null
       const restore = configureProvider('editor', async (url, init) => {
         const method = init?.method ?? 'GET'
         calls.push({ path: url.pathname, method })
@@ -385,19 +387,30 @@ test.describe('cloud project checkpoint protocol', () => {
         if (url.pathname === '/rest/v1/cloud_project_files')
           return reply([{
             file_id: FILE_ID, project_id: PROJECT_ID, name: 'source.txt', type: 'text/plain',
-            size: FILE_BYTES.length, uploaded_at: 5, storage_path: 'project-files/ws/p/f', state: 'ready',
+            size: FILE_BYTES.length, uploaded_at: 5,
+            storage_path: `project-files/${WORKSPACE_ID}/${PROJECT_ID}/${FILE_ID}`, state: 'ready',
           }])
         if (url.pathname === '/rest/v1/cloud_project_checkpoints') return reply([])
         if (url.pathname === '/rest/v1/cloud_project_checkpoint_file_stages') {
           if (method === 'POST') {
-            const fileStage = JSON.parse(String(init?.body)) as { storage_path: string }
-            stagedPaths.push(fileStage.storage_path)
+            const fileStage = JSON.parse(String(init?.body)) as {
+              project_id: string; file_id: string; storage_path: string
+            }
+            stagedFiles.push(fileStage)
             return reply([])
           }
-          return reply(stagedPaths.map(storage_path => ({ storage_path })))
+          return reply(stagedFiles)
         }
-        if (url.pathname.startsWith('/rest/v1/cloud_project_checkpoint_stages')) return reply([])
-        if (url.pathname === '/storage/v1/object/project-files/ws/p/f') return new Response(FILE_BYTES)
+        if (url.pathname === '/rest/v1/cloud_project_checkpoint_stages') {
+          if (method === 'POST') {
+            const stage = JSON.parse(String(init?.body)) as typeof checkpointStage
+            checkpointStage = stage
+            return reply([])
+          }
+          return reply(checkpointStage ? [checkpointStage] : [])
+        }
+        if (url.pathname === `/storage/v1/object/project-files/${WORKSPACE_ID}/${PROJECT_ID}/${FILE_ID}`)
+          return new Response(FILE_BYTES)
         if (url.pathname.startsWith('/storage/v1/object/project-checkpoints/')) {
           if (failure === 'upload' && method === 'POST') return reply({ message: 'upload denied' }, 403)
           if (method === 'POST' || method === 'DELETE') return reply({})
@@ -432,10 +445,142 @@ test.describe('cloud project checkpoint protocol', () => {
     }
   })
 
+  test('checkpoint stage cleanup refuses file metadata bound to another project', async () => {
+    const checkpointId = '11111111-2222-4333-8444-555555555555'
+    const otherProjectId = 'another-checkpoint-project'
+    let storageDeleteRequested = false
+    let abandonRequested = false
+    const restore = configureProvider('owner', (url, init) => {
+      if (url.pathname === '/rest/v1/cloud_project_checkpoints') return reply([])
+      if (url.pathname === '/rest/v1/cloud_project_checkpoint_stages')
+        return reply([{
+          checkpoint_id: checkpointId,
+          workspace_id: WORKSPACE_ID,
+          project_id: PROJECT_ID,
+        }])
+      if (url.pathname === '/rest/v1/cloud_project_checkpoint_file_stages')
+        return reply([{
+          workspace_id: WORKSPACE_ID,
+          project_id: otherProjectId,
+          file_id: FILE_ID,
+          storage_path: `project-checkpoints/${WORKSPACE_ID}/${otherProjectId}/${checkpointId}/${FILE_ID}`,
+        }])
+      if (url.pathname.startsWith('/storage/v1/object/')) {
+        storageDeleteRequested = init?.method === 'DELETE'
+        return reply({})
+      }
+      if (url.pathname === '/rest/v1/rpc/abandon_cloud_project_checkpoint') {
+        abandonRequested = true
+        return reply(true)
+      }
+      throw new Error(`Unexpected checkpoint cleanup request: ${url.pathname}`)
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(apiRequest())
+      await expect(api.execute({ action: 'cleanup-checkpoint-stage', checkpointId }))
+        .rejects.toMatchObject({ status: 503, code: 'STORAGE_RESPONSE_INVALID' })
+      expect(storageDeleteRequested).toBe(false)
+      expect(abandonRequested).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
+  test('checkpoint download rejects an archive path bound to a different checkpoint', async () => {
+    const checkpointId = '11111111-2222-4333-8444-555555555555'
+    const otherCheckpointId = '22222222-3333-4444-8555-666666666666'
+    let archiveReadRequested = false
+    const restore = configureProvider('viewer', url => {
+      if (url.pathname === '/rest/v1/cloud_projects') return reply([{ record: PROJECT_RECORD }])
+      if (url.pathname === '/rest/v1/cloud_project_checkpoints')
+        return reply([{
+          checkpoint_id: checkpointId,
+          workspace_id: WORKSPACE_ID,
+          project_id: PROJECT_ID,
+          file_manifest: [{
+            fileId: FILE_ID,
+            storageRef: `project-checkpoints/${WORKSPACE_ID}/${PROJECT_ID}/${otherCheckpointId}/${FILE_ID}`,
+          }],
+        }])
+      if (url.pathname.startsWith('/storage/v1/object/')) {
+        archiveReadRequested = true
+        return new Response(FILE_BYTES)
+      }
+      throw new Error(`Unexpected checkpoint read request: ${url.pathname}`)
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(apiRequest())
+      const request = {
+        method: 'GET',
+        url: `/api/cloud-files?checkpointId=${checkpointId}&fileId=${FILE_ID}`,
+        headers: {},
+      } as IncomingMessage
+      const response = {
+        statusCode: 0,
+        setHeader() {},
+        end() {},
+      } as unknown as import('node:http').ServerResponse
+      await expect(api.binary(request, response))
+        .rejects.toMatchObject({ status: 503, code: 'STORAGE_RESPONSE_INVALID' })
+      expect(archiveReadRequested).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
+  test('checkpoint download encodes reserved characters in object path segments', async () => {
+    const checkpointId = '11111111-2222-4333-8444-555555555555'
+    const reservedProjectId = 'checkpoint project?#%&'
+    const reservedFileId = 'checkpoint file?#%&'
+    const record = { ...PROJECT_RECORD, projectId: reservedProjectId }
+    const storageRef = `project-checkpoints/${WORKSPACE_ID}/${reservedProjectId}/${checkpointId}/${reservedFileId}`
+    const storagePaths: string[] = []
+    const restore = configureProvider('viewer', url => {
+      if (url.pathname === '/rest/v1/cloud_projects') return reply([{ record }])
+      if (url.pathname === '/rest/v1/cloud_project_checkpoints')
+        return reply([{
+          checkpoint_id: checkpointId,
+          workspace_id: WORKSPACE_ID,
+          project_id: reservedProjectId,
+          file_manifest: [{
+            fileId: reservedFileId,
+            storageRef,
+            name: 'reserved.txt',
+            type: 'text/plain',
+          }],
+        }])
+      if (url.pathname.startsWith('/storage/v1/object/')) {
+        storagePaths.push(url.pathname)
+        return new Response(FILE_BYTES)
+      }
+      throw new Error(`Unexpected checkpoint download request: ${url.pathname}`)
+    })
+    try {
+      const api = await CloudProjectApi.fromRequest(apiRequest())
+      const request = {
+        method: 'GET',
+        url: `/api/cloud-files?checkpointId=${checkpointId}&fileId=${encodeURIComponent(reservedFileId)}`,
+        headers: {},
+      } as IncomingMessage
+      const response = {
+        statusCode: 0,
+        setHeader() {},
+        end() {},
+      } as unknown as import('node:http').ServerResponse
+      await api.binary(request, response)
+      expect(storagePaths).toEqual([
+        `/storage/v1/object/project-checkpoints/${WORKSPACE_ID}/checkpoint%20project%3F%23%25%26/${checkpointId}/checkpoint%20file%3F%23%25%26`,
+      ])
+      expect(response.statusCode).toBe(200)
+    } finally {
+      restore()
+    }
+  })
+
   test('deleting a cloud project removes archive and live objects before finalizing metadata deletion', async () => {
     const calls: Array<{ path: string; method: string; body?: Record<string, unknown> }> = []
     const deletionId = '11111111-2222-4333-8444-555555555555'
-    const checkpointId = 'checkpoint-retained-before-delete'
+    const checkpointId = '33333333-4444-4333-8444-555555555555'
     const archivePath = `project-checkpoints/${WORKSPACE_ID}/${PROJECT_ID}/${checkpointId}/${FILE_ID}`
     const livePath = `project-files/${WORKSPACE_ID}/${PROJECT_ID}/${FILE_ID}`
     const remainingObjects = new Set([archivePath, livePath])

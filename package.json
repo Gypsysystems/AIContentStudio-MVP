@@ -10,6 +10,11 @@
     "worker:generate-topic": "node --experimental-transform-types server/generateTopicWorkerEntrypoint.mjs",
     "test:server": "playwright test --config=playwright.server.config.ts",
     "test:e2e": "playwright test",
+    "test:infra": "node --test tests/infrastructure/*.test.mjs",
+    "test:sql": "bash scripts/test-postgres.sh all",
+    "test:sql:ai-catalog": "bash scripts/test-postgres.sh ai-catalog",
+    "test:sql:topic-jobs": "bash scripts/test-postgres.sh topic-jobs",
+    "test:consolidated": "bash scripts/test-postgres.sh full",
     "format": "oxfmt"
   },
   "dependencies": {
@@ -33,6 +38,11 @@
     "oxfmt": "^0.2.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
-    "vite": "^8.0.5"
+    "vite": "^8.0.16"
+  },
+  "pnpm": {
+    "overrides": {
+      "jspdf>dompurify": "3.4.16"
+    }
   }
 }

@@ -48,35 +48,71 @@ interface SupabaseTokenResponse {
   expires_in: number
 }
 
-function supabaseConfig(): SupabaseConfig | null {
-  const rawUrl = process.env.SUPABASE_URL?.trim()
-  const anonKey = process.env.SUPABASE_ANON_KEY?.trim()
-  if (!rawUrl || !anonKey || !isPublicAnonKey(anonKey)) return null
+const JWT_ALGORITHMS = new Set([
+  'HS256', 'HS384', 'HS512',
+  'RS256', 'RS384', 'RS512',
+  'ES256', 'ES384', 'ES512',
+  'PS256', 'PS384', 'PS512',
+  'EdDSA',
+])
+const BASE64URL_SEGMENT = /^[A-Za-z0-9_-]+$/
+
+function decodeJwtJsonObject(segment: string): Record<string, unknown> | null {
+  if (!BASE64URL_SEGMENT.test(segment)) return null
+  const bytes = Buffer.from(segment, 'base64url')
+  if (bytes.toString('base64url') !== segment) return null
   try {
-    const parsed = new URL(rawUrl)
-    if (!['https:', 'http:'].includes(parsed.protocol)
-      || (process.env.NODE_ENV === 'production' && parsed.protocol !== 'https:')
-      || parsed.username
-      || parsed.password
-      || (parsed.pathname !== '/' && parsed.pathname !== '')
-      || parsed.search
-      || parsed.hash) return null
-    return { url: parsed.origin, anonKey }
+    const decoded = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown
+    return isRecord(decoded) ? decoded : null
   } catch {
     return null
   }
 }
 
-function isPublicAnonKey(key: string): boolean {
-  if (/^sb_secret_/i.test(key)) return false
-  const jwtParts = key.split('.')
-  if (jwtParts.length !== 3) return true
+export function validateSupabaseConfig(
+  rawUrl: string,
+  anonKey: string,
+  nodeEnv?: string,
+): SupabaseConfig | null {
+  const url = rawUrl.trim()
+  const publicKey = anonKey.trim()
+  if (!url || !publicKey || !isPublicAnonKey(publicKey)) return null
   try {
-    const payload = JSON.parse(Buffer.from(jwtParts[1], 'base64url').toString('utf8')) as unknown
-    return !isRecord(payload) || payload.role !== 'service_role'
+    const parsed = new URL(url)
+    if (!['https:', 'http:'].includes(parsed.protocol)
+      || (nodeEnv === 'production' && parsed.protocol !== 'https:')
+      || parsed.username
+      || parsed.password
+      || (parsed.pathname !== '/' && parsed.pathname !== '')
+      || parsed.search
+      || parsed.hash) return null
+    return { url: parsed.origin, anonKey: publicKey }
   } catch {
-    return true
+    return null
   }
+}
+
+function supabaseConfig(): SupabaseConfig | null {
+  const rawUrl = process.env.SUPABASE_URL?.trim() ?? ''
+  const anonKey = process.env.SUPABASE_ANON_KEY?.trim() ?? ''
+  return validateSupabaseConfig(rawUrl, anonKey, process.env.NODE_ENV)
+}
+
+export function isPublicAnonKey(key: string): boolean {
+  if (/^sb_secret_/i.test(key)) return false
+  if (!key.includes('.')) return true
+  const jwtParts = key.split('.')
+  if (jwtParts.length !== 3) return false
+  const [encodedHeader, encodedPayload, encodedSignature] = jwtParts
+  const header = decodeJwtJsonObject(encodedHeader)
+  const payload = decodeJwtJsonObject(encodedPayload)
+  if (!header || !payload || !BASE64URL_SEGMENT.test(encodedSignature)) return false
+  const signature = Buffer.from(encodedSignature, 'base64url')
+  return signature.length > 0
+    && signature.toString('base64url') === encodedSignature
+    && typeof header.alg === 'string'
+    && JWT_ALGORITHMS.has(header.alg)
+    && payload.role === 'anon'
 }
 
 /** True only when a valid URL and public anon key are both configured. */

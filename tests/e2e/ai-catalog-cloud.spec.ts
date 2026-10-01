@@ -189,14 +189,12 @@ test('PostgreSQL integration runs in an isolated disposable local database', asy
       exists(select 1 from pg_roles where rolname = 'ai_connection_reader')`,
   ], { encoding: 'utf8', timeout: 10_000 })
   if (preflight.error || preflight.status !== 0) {
-    test.skip(true, `Local PostgreSQL preflight unavailable: ${preflight.error?.message ?? preflight.stderr.trim()}`)
-    return
+    throw new Error(`Opted-in local PostgreSQL preflight failed: ${preflight.error?.message ?? preflight.stderr.trim()}`)
   }
   const [database, address, isSuperuser, hadAnon, hadAuthenticated, hadReader] =
     preflight.stdout.trim().split('|')
   if (database !== 'postgres' || address !== 'local-socket' || isSuperuser !== 't') {
-    test.skip(true, 'Requires a local Unix-socket PostgreSQL superuser; remote/database URLs are intentionally refused.')
-    return
+    throw new Error('Opted-in SQL tests require a local Unix-socket PostgreSQL superuser; remote/database URLs are intentionally refused.')
   }
 
   const testDatabase = `ai_catalog_test_${randomUUID().replaceAll('-', '')}`
@@ -212,8 +210,7 @@ test('PostgreSQL integration runs in an isolated disposable local database', asy
   )
   const create = runPsql(['-d', 'postgres', '-c', `CREATE DATABASE ${testDatabase}`])
   if (create.error || create.status !== 0) {
-    test.skip(true, `Could not create isolated disposable database: ${create.error?.message ?? create.stderr.trim()}`)
-    return
+    throw new Error(`Could not create isolated disposable database: ${create.error?.message ?? create.stderr.trim()}`)
   }
 
   let integrationFailure: Error | null = null

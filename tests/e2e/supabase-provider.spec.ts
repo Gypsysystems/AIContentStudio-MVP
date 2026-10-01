@@ -1,12 +1,54 @@
 import { EventEmitter } from 'node:events'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { expect, test } from '@playwright/test'
-import { createSupabaseProjectAccessService, handleSupabaseAuthRequest } from '../../server/supabaseProjectAccess'
+import {
+  createSupabaseProjectAccessService,
+  handleSupabaseAuthRequest,
+  isPublicAnonKey,
+  validateSupabaseConfig,
+} from '../../server/supabaseProjectAccess'
 
 const SUPABASE_URL = 'https://supabase.test'
 const ANON_KEY = 'test-public-anon-key'
 const USER_ID = 'provider-test-user'
 const WORKSPACE_ID = 'provider-test-workspace'
+
+test('Supabase public-key validation rejects malformed JWT-shaped values and preserves public formats', () => {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const jwt = (header: unknown, payload: unknown, signature = 'c2lnbmF0dXJl') =>
+    `${encode(header)}.${encode(payload)}.${signature}`
+  const anonJwt = jwt({ alg: 'HS256', typ: 'JWT' }, { role: 'anon' })
+  expect(isPublicAnonKey(anonJwt)).toBe(true)
+  expect(isPublicAnonKey('test-public-anon-key')).toBe(true)
+  expect(isPublicAnonKey('sb_publishable_test-public-key')).toBe(true)
+  expect(isPublicAnonKey('sb_secret_test-secret')).toBe(false)
+  expect(isPublicAnonKey('header.bm90LWpzb24.signature')).toBe(false)
+  expect(isPublicAnonKey('%%%%.eyJyb2xlIjoiYW5vbiJ9.c2ln')).toBe(false)
+  expect(isPublicAnonKey(`${encode({ alg: 'HS256' })}.%%%%.c2ln`)).toBe(false)
+  expect(isPublicAnonKey(`${encode({ alg: 'HS256' })}.${encode({ role: 'anon' })}.%%%%`)).toBe(false)
+  expect(isPublicAnonKey(jwt({ alg: 'none' }, { role: 'anon' }))).toBe(false)
+  expect(isPublicAnonKey(jwt({ alg: 'not-a-jwa-algorithm' }, { role: 'anon' }))).toBe(false)
+  expect(isPublicAnonKey(jwt({ alg: 'HS256' }, { sub: 'anon' }))).toBe(false)
+  expect(isPublicAnonKey(jwt({ alg: 'HS256' }, { role: 'service_role' }))).toBe(false)
+  expect(isPublicAnonKey(jwt([], { role: 'anon' }))).toBe(false)
+  expect(isPublicAnonKey(jwt({ alg: 'HS256' }, null))).toBe(false)
+  expect(isPublicAnonKey('header.payload')).toBe(false)
+})
+
+test('Supabase configuration rejects invalid JWT keys without rejecting opaque public key formats', () => {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const validJwt = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ role: 'anon' })}.c2lnbmF0dXJl`
+  expect(validateSupabaseConfig('https://supabase.test', validJwt, 'production'))
+    .toEqual({ url: 'https://supabase.test', anonKey: validJwt })
+  expect(validateSupabaseConfig('https://supabase.test', 'test-public-anon-key', 'production'))
+    .toEqual({ url: 'https://supabase.test', anonKey: 'test-public-anon-key' })
+  expect(validateSupabaseConfig('https://supabase.test', 'sb_publishable_test-public-key', 'production'))
+    .toEqual({ url: 'https://supabase.test', anonKey: 'sb_publishable_test-public-key' })
+  expect(validateSupabaseConfig('https://supabase.test', 'header.payload.signature', 'production')).toBeNull()
+  expect(validateSupabaseConfig('https://supabase.test', 'sb_secret_test-secret', 'production')).toBeNull()
+  expect(validateSupabaseConfig('http://supabase.test', validJwt, 'production')).toBeNull()
+  expect(validateSupabaseConfig('https://user@supabase.test', validJwt, 'production')).toBeNull()
+})
 
 test.describe('Supabase project-access provider integration', () => {
   test.describe.configure({ mode: 'serial' })

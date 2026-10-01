@@ -404,6 +404,9 @@ test('sends bounded non-factual writing guidance, including the authoritative no
     },
   })
   expect(result.response.statusCode, result.response.body).toBe(200)
+  const body = JSON.parse(result.response.body)
+  expect(body.draft.variableSnapshot).toEqual({ tone: 'Concise and reassuring' })
+  expect(JSON.stringify(body)).not.toContain(SECRET)
 })
 
 test('rejects all extra browser claims and denies Viewer before workflow execution', async () => {

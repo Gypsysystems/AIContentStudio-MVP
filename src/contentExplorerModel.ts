@@ -556,7 +556,7 @@ export function deriveContentExplorerTree(
   for (const folder of hydrated.folders) orderById.set(folder.id, folder.order)
   for (const placement of hydrated.placements)
     orderById.set(`${placement.assetType}:${placement.assetId}`, placement.order)
-  const mediaCategoryOrder = new Map(
+  const mediaCategoryOrder = new Map<string, number>(
     CONTENT_EXPLORER_MEDIA_CATEGORIES.map((category, index) => [category.id, index]),
   )
   const sortChildren = (node: ContentExplorerTreeNode) => {
