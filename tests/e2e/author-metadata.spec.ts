@@ -59,6 +59,7 @@ type AuthorTopicMetadata = {
 type StoredProject = {
   projectId: string
   projectName: string
+  recordRevision: number
   isDemoMode: boolean
   projectMeta: { contentType: string }
   appToc: StoredTopic[]
@@ -165,8 +166,9 @@ async function patchProject(
     })
     await new Promise<void>((resolve, reject) => {
       const request = store.put({ ...project, ...values })
-      request.onsuccess = () => resolve()
       request.onerror = () => reject(request.error)
+      transaction.oncomplete = () => resolve()
+      transaction.onabort = () => reject(transaction.error ?? new Error("Project patch was not committed"))
     })
   }, { name: projectName, values: patch })
 }
@@ -209,7 +211,7 @@ test("hydrates legacy topic content as manual and does not infer demo or synthet
   const projectName = `Author legacy hydration ${Date.now()}`
   await createProject(page, projectName)
   const topicContent = {
-    "1": [{ id: "legacy-h1", type: "h1", content: "Customer-authored legacy content" }],
+    "1": [{ id: "legacy-p1", type: "para", content: "Customer-authored legacy content" }],
   }
   await patchProject(page, projectName, {
     appToc: [{ id: 1, topicId: "topic-legacy", title: "Legacy", level: 1, words: 100 }],
@@ -218,9 +220,36 @@ test("hydrates legacy topic content as manual and does not infer demo or synthet
   })
 
   await page.reload()
-  await expect.poll(async () =>
-    (await readProject(page, projectName)).authorTopicMetadata?.["topic-legacy"],
-  ).toBeTruthy()
+  await expect(page.getByText(projectName, { exact: true }).first()).toBeVisible()
+  // Legacy metadata is hydrated in memory; opening a project alone is read-only.
+  const reloadedProject = await readProject(page, projectName)
+  expect(reloadedProject.authorTopicMetadata).toBeNull()
+
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Author", exact: true }).click()
+  const legacyTopic = page.getByTestId("author-outline").locator('[data-topic-id="topic-legacy"]')
+  await legacyTopic.getByText("Legacy", { exact: true }).click()
+  // Edit legacy body content; editing an h1 instead changes the TOC title.
+  const editable = page.locator('[data-author-block-id="legacy-p1"] [contenteditable="true"]')
+  await expect(editable).toHaveText("Customer-authored legacy content")
+  expect((await readProject(page, projectName)).authorTopicMetadata).toBeNull()
+  // App autosave is debounced by 800 ms; allow it to settle before checking
+  // that Author hydration and inspection preserved the complete stored record.
+  await page.waitForTimeout(1_000)
+  const persistedAfterHydration = await readProject(page, projectName)
+  expect(persistedAfterHydration.recordRevision).toBe(reloadedProject.recordRevision)
+  expect(persistedAfterHydration).toEqual(reloadedProject)
+
+  const editedLegacyContent = "Customer-authored legacy content with an intentional edit."
+  await editable.fill(editedLegacyContent)
+  await editable.press("Tab")
+  await expect.poll(async () => {
+    const blocks = (await readProject(page, projectName)).topicContent["topic-legacy"] as
+      Array<{ content?: unknown }> | undefined
+    return blocks?.[0]?.content
+  }).toBe(editedLegacyContent)
+  await expect(page.locator("header").getByText("All changes saved", { exact: true })).toBeVisible()
+
   const project = await readProject(page, projectName)
   const legacy = project.authorTopicMetadata!["topic-legacy"]
   expect(legacy.generationStatus).toBe("not-generated")
@@ -232,7 +261,10 @@ test("hydrates legacy topic content as manual and does not infer demo or synthet
   expect(legacy.sourceFileIds).toEqual([])
   expect(legacy.generatedAt).toBeNull()
   expect(legacy.generatedFreshness).toBe("not-applicable")
-  expect(project.topicContent).toEqual(topicContent)
+  expect(project.topicContent["topic-legacy"]).toEqual([{
+    ...topicContent["1"][0],
+    content: editedLegacyContent,
+  }])
   expect(JSON.stringify(legacy)).not.toMatch(/Nexus|Technical Spec|UX_Research/)
 })
 
@@ -263,7 +295,8 @@ test("keeps metadata linked through rename and reorder, then removes only delete
 
   const alpha = page.getByTestId("author-outline").locator('[data-topic-id="topic-alpha"]')
   await alpha.hover()
-  await alpha.getByTitle("Rename").click()
+  await alpha.locator('summary[aria-label="Actions for Alpha"]').click()
+  await alpha.getByRole('button', { name: 'Rename', exact: true }).click()
   await alpha.locator("input").fill("Alpha renamed")
   await alpha.locator("input").press("Enter")
   await expect(alpha).toContainText("Alpha renamed")
@@ -277,7 +310,8 @@ test("keeps metadata linked through rename and reorder, then removes only delete
 
   const beta = page.getByTestId("author-outline").locator('[data-topic-id="topic-beta"]')
   await beta.hover()
-  await beta.getByTitle("Delete").click()
+  await beta.locator('summary[aria-label="Actions for Beta"]').click()
+  await beta.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(beta).toHaveCount(0)
   await expect.poll(async () =>
     Object.keys((await readProject(page, projectName)).authorTopicMetadata!).sort(),
@@ -412,6 +446,7 @@ test("duplicates Author metadata and remaps copied source provenance consistentl
   const originalWithMetadata = await readProject(page, projectName)
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
+  await page.locator(`summary[aria-label="Project actions for ${projectName}"]`).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
   await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
   await page.getByLabel("Name for copy").fill(duplicateName)

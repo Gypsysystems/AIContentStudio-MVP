@@ -466,7 +466,7 @@ test('cloud AI TOC UI gates roles, confirms replacement, restores failures, and 
   await page.getByTestId('retry-ai-toc-recovery').click()
   await expect.poll(() => recoveryPrompt).toMatch(/revision \d+/)
   const consentedRevision = Number(recoveryPrompt.match(/revision (\d+)/)?.[1])
-  expect(projectRecord?.recordRevision).toBe(consentedRevision + 1)
+  await expect.poll(() => projectRecord?.recordRevision).toBe(consentedRevision + 1)
   await expect(page.getByTestId('ai-toc-recovery')).toHaveCount(0)
   await expect(page.getByTestId('toc-proposal-topic')).toContainText('AI proposed topic')
   expect(projectRecord?.tocProposal).toMatchObject({ items: [{ title: 'AI proposed topic' }] })

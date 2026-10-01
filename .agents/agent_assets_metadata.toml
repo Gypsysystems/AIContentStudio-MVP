@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "xLs0aiy6o3-9CYQ6ocltE"
+uri = "file://docs/acceptance-quality-report.md"
+type = "text"
+title = "Acceptance & Quality report"
+description = "Exact test counts, nine acceptance statuses, remaining automation blockers, and a signed-in manual cloud acceptance script."
+logical_id = "24fd3702-075d-4a51-a672-8ff1f15849eb"
+content_hash = "sha256:e257e819067895944b5a51f5f64903efa8bd4699586a18b3bab0a5af248f49ef"
+size = 12644
+mtime_ms = 1790816194063
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:989cc092-04bb-4a54-8421-a85e6cc0863f/24fd3702-075d-4a51-a672-8ff1f15849eb/9f72ab1d-6f32-4898-9314-36d2eb926099"
+storage_version_token = "1790816241826333"
+content_type = "text/markdown"

@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { buildFileHistory, listedFileIds, loadProjectFileHistory } from '../../src/fileHistory'
+import { SCHEMA_VERSION } from '../../src/projectRepository'
 import {
   canonicalCheckpointJson, checkpointIntegrityDigest, checkpointSha256,
   type ProjectCheckpoint, type ProjectCheckpointSummary,
@@ -7,7 +8,7 @@ import {
 
 const hash = (value: string) => value.repeat(64)
 
-function snapshot(id: string, parentId: string | null, files: unknown[], schemaVersion = 4): ProjectCheckpoint {
+function snapshot(id: string, parentId: string | null, files: unknown[], schemaVersion = SCHEMA_VERSION): ProjectCheckpoint {
   return {
     checkpointId: id, parentCheckpointId: parentId, projectId: 'project', workspaceId: 'workspace',
     createdAt: 100, reason: `Saved ${id}`, actorUserId: 'actor',
@@ -20,6 +21,10 @@ function snapshot(id: string, parentId: string | null, files: unknown[], schemaV
       sourceFileIds: [], appToc: [], docBlocks: [], snippets: [], docComments: [],
       masterAssignments: {}, sourceExtractions: {}, topicContent: {},
       authorTopicMetadata: {}, findingStatuses: {},
+      ...(schemaVersion === SCHEMA_VERSION ? {
+        contentExplorer: { version: 1, folders: [], placements: [] },
+        contentOrigins: { topic: {}, snippet: {}, variable: {}, condition: {} },
+      } : {}),
     } as unknown as ProjectCheckpoint['record'],
   }
 }
@@ -166,9 +171,11 @@ test('a digest-valid legacy or malformed ancestor cannot certify a descendant fi
   expect(legacy[1].ancestryIssue).toContain('unsupported or ambiguous')
   expect(legacy[1].sha256).toBeUndefined()
 
-  root.record.schemaVersion = 4
-  root.recordSchemaVersion = 4
   root.files[0].storageRef = '' // valid digest, unusable manifest
+  root.record.schemaVersion = SCHEMA_VERSION
+  root.recordSchemaVersion = SCHEMA_VERSION
+  root.record.contentExplorer = { version: 1, folders: [], placements: [] }
+  root.record.contentOrigins = { topic: {}, snippet: {}, variable: {}, condition: {} }
   await sign(root)
   const malformed = await load()
   expect(malformed.map(row => row.status)).toEqual(['unknown', 'unknown'])

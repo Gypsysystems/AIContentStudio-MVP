@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { buildCheckpointChangeSummary } from '../../src/checkpointChanges'
+import { SCHEMA_VERSION } from '../../src/projectRepository'
 import type { CheckpointFileManifest, ProjectCheckpoint } from '../../src/projectCheckpoint'
 
 const hash = (character: string) => character.repeat(64)
@@ -13,9 +14,9 @@ function saved(id: string, toc: unknown[], files: CheckpointFileManifest[] = [])
     checkpointId: id, projectId: 'project', workspaceId: 'workspace',
     parentCheckpointId: id === 'first' ? null : 'first',
     reason: id, actorUserId: 'actor', createdAt: 1,
-    originatingRecordRevision: 1, recordSchemaVersion: 4,
+    originatingRecordRevision: 1, recordSchemaVersion: SCHEMA_VERSION,
     recordDigest: '', integrityDigest: '', files,
-    record: { projectId: 'project', workspaceId: 'workspace', schemaVersion: 4, appToc: toc } as unknown as ProjectCheckpoint['record'],
+    record: { projectId: 'project', workspaceId: 'workspace', schemaVersion: SCHEMA_VERSION, appToc: toc } as unknown as ProjectCheckpoint['record'],
   }
 }
 

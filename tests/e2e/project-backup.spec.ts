@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
+import { SCHEMA_VERSION } from '../../src/projectRepository'
 
 const v1Fixture = JSON.parse(await readFile(
   new URL('../fixtures/project-record-v1.json', import.meta.url),
@@ -15,7 +16,7 @@ async function openApp(page: Page) {
 }
 
 async function makeCurrentBackup(page: Page, projectId: string) {
-  return page.evaluate(async ({ projectId, fixture }) => {
+  return page.evaluate(async ({ projectId, fixture, schemaVersion }) => {
     const { projectRepository } = await import('/src/projectService.ts' as string)
     const { createProjectBackup, inspectProjectBackup, restoreProjectBackup } =
       await import('/src/projectBackup.ts' as string)
@@ -44,8 +45,12 @@ async function makeCurrentBackup(page: Page, projectId: string) {
     const mediaDataUrl = 'data:image/png;base64,aGVsbG8tZGlhZ3JhbQ=='
     record.projectId = projectId
     record.projectName = 'Complete backup project'
-    record.schemaVersion = 3
+    record.schemaVersion = schemaVersion
     record.recordRevision = project.recordRevision
+    record.ownerUserId = project.ownerUserId
+    record.workspaceId = project.workspaceId
+    record.contentExplorer = project.contentExplorer
+    record.contentOrigins = project.contentOrigins
     record.themes = [
       ...record.themes,
       { id: 'theme-backup-brand', name: 'Backup Brand', logoDataUrl: mediaDataUrl },
@@ -86,7 +91,7 @@ async function makeCurrentBackup(page: Page, projectId: string) {
       restoredBlobText: await restoredFiles[0]?.blob.text(),
       mediaDataUrl,
     }
-  }, { projectId, fixture: v2Fixture })
+  }, { projectId, fixture: v2Fixture, schemaVersion: SCHEMA_VERSION })
 }
 
 test('backup round-trip preserves complete project state, assets, provenance, and IDs after reload', async ({ page }) => {
@@ -97,7 +102,7 @@ test('backup round-trip preserves complete project state, assets, provenance, an
   expect(result.summary).toMatchObject({
     projectId,
     projectName: 'Complete backup project',
-    projectSchemaVersion: 4,
+    projectSchemaVersion: SCHEMA_VERSION,
     fileCount: 1,
   })
   expect(result.restoredId).not.toBe(projectId)
@@ -106,7 +111,7 @@ test('backup round-trip preserves complete project state, assets, provenance, an
   expect(result.restoredBlobText).toBe('source bytes for a complete backup')
   expect(result.restored).toMatchObject({
     projectName: 'Complete backup project (Restored)',
-    schemaVersion: 4,
+    schemaVersion: SCHEMA_VERSION,
     recordRevision: 0,
     themes: v2Fixture.themes.concat([{
       id: 'theme-backup-brand',
@@ -197,7 +202,7 @@ test('backup round-trip preserves complete project state, assets, provenance, an
   expect(reloaded.record).toMatchObject({
     projectId: result.restoredId,
     projectName: 'Complete backup project (Restored)',
-    schemaVersion: 4,
+    schemaVersion: SCHEMA_VERSION,
     topicContent: result.restored.topicContent,
     reviewModel: result.restored.reviewModel,
   })
@@ -250,7 +255,7 @@ test('v1 and v2 project records inside backups migrate safely before restore', a
   }, { v1: v1Fixture, v2: v2Fixture })
 
   expect(restored.v1Restored).toMatchObject({
-    schemaVersion: 4,
+    schemaVersion: SCHEMA_VERSION,
     recordRevision: 0,
     projectName: `${v1Fixture.projectName} (Restored)`,
     appToc: v1Fixture.appToc,
@@ -258,7 +263,7 @@ test('v1 and v2 project records inside backups migrate safely before restore', a
   })
   expect(restored.v1Restored.sourceFileIds).toHaveLength(1)
   expect(restored.v2Restored).toMatchObject({
-    schemaVersion: 4,
+    schemaVersion: SCHEMA_VERSION,
     recordRevision: 0,
     projectName: `${v2Fixture.projectName} (Restored)`,
     appToc: v2Fixture.appToc,

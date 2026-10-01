@@ -228,6 +228,7 @@ test("marks evidence stale after source changes, rebuilds it, and removes delete
   if (!rebuilt) throw new Error("Expected rebuilt evidence project")
   const secondFileId = rebuilt.sourceFileIds.find(fileId => fileId !== firstFileId)!
 
+  await secondRow.getByLabel("More actions for second-source.txt").click()
   await secondRow.getByRole("button", { name: "Remove second-source.txt" }).click()
   await expect(secondRow).toHaveCount(0)
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Stale")
@@ -265,7 +266,9 @@ test("duplicates persisted evidence onto copied file IDs without changing the or
   const originalFileId = originalBefore.sourceFileIds[0]
   const originalEvidenceIds = originalBefore.evidenceIndex!.items.map(item => item.id)
 
-  await page.getByRole("button", { name: /Content Studio/ }).click()
+  await page.locator("header").getByRole("button", { name: "Content Studio home" }).click()
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
+  await page.getByLabel(`Project actions for ${projectName}`).click()
   await page.getByRole("button", { name: "Duplicate", exact: true }).click()
   await expect(page.getByRole("dialog", { name: "Duplicate project" })).toBeVisible()
   await page.getByLabel("Name for copy").fill(duplicateName)
@@ -288,7 +291,7 @@ test("duplicates persisted evidence onto copied file IDs without changing the or
   expect(originalAfter.sourceExtractions).toEqual(originalBefore.sourceExtractions)
   expect(originalAfter.evidenceIndex).toEqual(originalBefore.evidenceIndex)
 
-  await page.getByText(duplicateName, { exact: true }).click()
+  await page.getByRole("button", { name: `Open project ${duplicateName}`, exact: true }).click()
   await expect.poll(() => page.evaluate(() => localStorage.getItem('docflow-active-project'))).toBe(duplicate.projectId)
   await page.reload()
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current")

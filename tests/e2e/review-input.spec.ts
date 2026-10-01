@@ -25,6 +25,7 @@ test.describe.configure({ mode: 'serial' })
 type StoredProject = {
   projectId: string
   projectName: string
+  recordRevision: number
   isDemoMode: boolean
   appToc: unknown[]
   topicContent: Record<string, unknown[]>
@@ -360,7 +361,7 @@ test('reports deterministic missing and stale Review inputs without creating fin
   ])
 })
 
-test('persists and reloads real Review inputs and exposes stable topic and block references', async ({ page }) => {
+test('derives real Review inputs without passive writes and exposes stable topic and block references', async ({ page }) => {
   const projectName = `Review input persistence ${Date.now()}`
   await createProject(page, projectName)
   const project = await readProject(page, projectName)
@@ -391,25 +392,30 @@ test('persists and reloads real Review inputs and exposes stable topic and block
   await expect(page.getByTestId('review-input-topics')).toContainText('topic-persisted')
   await expect(page.getByTestId('review-input-topics')).toContainText('block-persisted')
 
-  await expect.poll(async () =>
-    (await readProject(page, projectName)).reviewModel.inputSnapshot?.snapshotId,
-  ).toMatch(/^review-input-/)
-  await page.waitForTimeout(3_000)
-  const persistedBeforeReload = (await readProject(page, projectName)).reviewModel.inputSnapshot!
-  expect((await readProject(page, projectName)).reviewModel.findings).toEqual([])
+  const displayedSnapshot = page.getByTestId('review-input-diagnostics')
+    .getByText(/^Read-only · review-input-/)
+  await expect(displayedSnapshot).toBeVisible()
+  const displayedSnapshotText = await displayedSnapshot.textContent()
+  expect(displayedSnapshotText).toMatch(/^Read-only · review-input-[\w-]+ · user-guide · en-US$/)
+  await page.waitForTimeout(1_500)
+  const persistedBeforeReload = await readProject(page, projectName)
+  expect(persistedBeforeReload.reviewModel.inputSnapshot).toBeNull()
+  expect(persistedBeforeReload.recordRevision).toBe(project.recordRevision)
+  expect(persistedBeforeReload.reviewModel.findings).toEqual([])
 
   await page.reload()
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Review', exact: true }).click()
   await page.getByRole('button', { name: 'Input details' }).click()
-  await page.waitForTimeout(1_500)
-  await expect.poll(async () =>
-    (await readProject(page, projectName)).reviewModel.inputSnapshot?.provenance.contentFingerprint,
-  ).toBe(persistedBeforeReload.provenance.contentFingerprint)
-  const persistedAfterReload = (await readProject(page, projectName)).reviewModel.inputSnapshot!
-  expect(persistedAfterReload.topics).toEqual(persistedBeforeReload.topics)
-  expect(persistedAfterReload.projectId).toBe(project.projectId)
+  await expect(page.getByTestId('review-input-diagnostics')
+    .getByText(/^Read-only · review-input-/)).toHaveText(displayedSnapshotText!)
   await expect(page.getByTestId('review-input-topics')).toContainText('topic-persisted')
+  await expect(page.getByTestId('review-input-topics')).toContainText('block-persisted')
+  await page.waitForTimeout(1_500)
+  const persistedAfterReload = await readProject(page, projectName)
+  expect(persistedAfterReload.reviewModel.inputSnapshot).toBeNull()
+  expect(persistedAfterReload.recordRevision).toBe(project.recordRevision)
+  expect(persistedAfterReload.reviewModel.findings).toEqual([])
 })
 
 test('remaps a persisted Review input snapshot when its project and source are duplicated', async ({ page }) => {
@@ -436,6 +442,8 @@ test('remaps a persisted Review input snapshot when its project and source are d
   })
   await page.reload()
   await page.getByRole('button', { name: /Content Studio/ }).click()
+  await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
+  await page.getByLabel(`Project actions for ${projectName}`).click()
   await page.getByRole('button', { name: 'Duplicate', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Duplicate project' })).toBeVisible()
   await page.getByLabel('Name for copy').fill(duplicateName)
@@ -463,7 +471,7 @@ test('remaps a persisted Review input snapshot when its project and source are d
 test('keeps real Review diagnostics and persisted inputs isolated from explicit demo Review data', async ({ page }) => {
   const projectName = `Review input demo isolation ${Date.now()}`
   await createProject(page, projectName)
-  await page.getByRole('button', { name: 'Use demo project', exact: true }).click()
+  await page.getByRole('button', { name: 'Use demo project instead →', exact: true }).click()
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Review', exact: true }).click()
 

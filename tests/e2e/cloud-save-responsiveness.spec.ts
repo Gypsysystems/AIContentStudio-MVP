@@ -111,6 +111,8 @@ async function createProject(page: Page, name: string) {
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill(name)
   await page.getByRole('button', { name: 'Continue — Theme & Styles' }).click()
   await expect(page.getByRole('heading', { name: 'Theme & Style Profiles' })).toBeVisible()
+  await page.getByRole('button', { name: 'Continue — Sources' }).click()
+  await expect(page.getByRole('heading', { name: 'Add Source Material' })).toBeVisible()
 }
 
 async function openMasterPageSettings(page: Page) {
@@ -139,8 +141,11 @@ test('ordinary section navigation stays responsive and quick edits coalesce duri
   await saveStarted
 
   // A cloud request is still outstanding, but changing workflow sections is local and immediate.
+  await page.getByRole('button', { name: 'Return to project', exact: true }).click()
   await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('button', { name: 'Sources' }).click()
-  await expect(page.getByRole('button', { name: 'Analyze Sources' })).toBeVisible()
+  const analyzeSources = page.getByRole('button', { name: 'Analyze Sources' })
+  await expect(analyzeSources).toBeVisible()
+  await expect(analyzeSources).toBeDisabled()
 
   expect(cloud.saves).toHaveLength(0)
   releaseSave()
@@ -190,7 +195,6 @@ test('opening a cloud project uses the latest revision without saving hydrated d
   const cloud = await mockSignedInCloud(page)
   const name = `Concurrent open ${Date.now()}`
   await createProject(page, name)
-  await page.getByRole('button', { name: 'Continue — Sources' }).click()
   await expect(page.locator('header').getByText('All changes saved', { exact: true })).toBeVisible()
   await page.locator('header').getByRole('button', { name: 'Content Studio home' }).click()
   await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
@@ -225,8 +229,7 @@ test('opening a cloud project uses the latest revision without saving hydrated d
     return route.fulfill({ json: { record: stale } })
   })
 
-  const row = page.locator('main div.group').filter({ has: page.getByText(name, { exact: true }) })
-  await row.getByRole('button', { name: 'Open', exact: true }).click()
+  await page.getByRole('button', { name: `Open project ${name}` }).click()
   await expect(page.getByTestId('project-home')).toContainText(latestName)
   await expect(page.getByTestId('project-open-error')).toHaveCount(0)
   expect(reads).toBe(2)
@@ -259,10 +262,9 @@ test('opening a cloud project uses the latest revision without saving hydrated d
       json: { code: 'PROJECT_NOT_FOUND', error: 'Not found.' },
     })
   })
-  const updatedRow = page.locator('main div.group')
-    .filter({ has: page.getByText(`${latestName} edited`, { exact: true }) })
-  await updatedRow.getByRole('button', { name: 'Open', exact: true }).click()
+  const updatedProject = page.getByRole('button', { name: `Open project ${latestName} edited` })
+  await updatedProject.click()
   await expect(page.getByTestId('project-open-error'))
     .toContainText('Project no longer exists or is not accessible.')
-  await expect(updatedRow.getByRole('button', { name: 'Open', exact: true })).toBeEnabled()
+  await expect(updatedProject).toBeEnabled()
 })

@@ -671,9 +671,14 @@ test("persists a reviewable draft without overwriting manual content and applies
     projectMeta: { ...persisted.projectMeta, contentType: "api-reference" },
   })
   await page.reload()
-  await expect.poll(async () =>
-    (await readProject(page, projectName)).authorTopicMetadata?.["topic-access"]?.generatedFreshness,
-  ).toBe("stale")
+  const reloadedProject = await readProject(page, projectName)
+  // Startup hydration derives staleness for the Author UI but must not persist
+  // that passive reconciliation over the saved project snapshot.
+  expect(reloadedProject.authorTopicMetadata["topic-access"]).toMatchObject({
+    generatedFreshness: "current",
+    generatedFreshnessReason: null,
+  })
+  expect(reloadedProject.topicContent).toEqual(changedTopicContent)
   await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
     .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="topic-access"]')
@@ -682,20 +687,29 @@ test("persists a reviewable draft without overwriting manual content and applies
   await page.getByTestId("author-draft-toggle").click()
   await expect(page.getByTestId("author-draft-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("apply-author-draft")).toBeDisabled()
-  await expect(page.getByTestId("author-generated-freshness")).toContainText("Grounding stale")
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Generated stale")
   await expect(page.getByTestId("author-generated-freshness-reason")).toContainText("content type changed")
   expect((await readProject(page, projectName)).topicContent).toEqual(changedTopicContent)
+  // App autosave is debounced by 800 ms; allow it to settle before verifying
+  // hydration and stale-UI inspection left the complete persisted record alone.
+  await page.waitForTimeout(1_000)
+  const persistedAfterHydration = await readProject(page, projectName)
+  expect(persistedAfterHydration.recordRevision).toBe(reloadedProject.recordRevision)
+  expect(persistedAfterHydration).toEqual(reloadedProject)
 
   await page.getByTestId("author-draft-inspector").getByRole("button", { name: "Close draft inspector" }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-grounding-toggle").click()
   await page.getByTestId("refresh-author-grounding").click()
   await expect(page.getByTestId("author-grounding-freshness")).toHaveText("Current")
   await page.getByTestId("author-grounding-inspector").getByRole("button", { name: "Close grounding inspector" }).click()
+  await page.getByTestId("author-ai-assist").click()
   await page.getByTestId("author-draft-toggle").click()
   await page.getByTestId("regenerate-author-draft").click()
 
   await expect(page.getByTestId("author-regeneration-diff")).toBeVisible()
-  await expect(page.getByTestId("author-generated-freshness")).toContainText("Needs attention")
+  // Refreshing context and reviewing regeneration does not refresh applied content.
+  await expect(page.getByTestId("author-generated-freshness")).toContainText("Generated stale")
   await expect(page.locator('[data-diff-status="manually-edited"]').filter({ hasText: manuallyEditedText }))
     .toBeVisible()
   await expect(page.locator('[data-diff-status="protected"]').filter({ hasText: "Reference details" }))

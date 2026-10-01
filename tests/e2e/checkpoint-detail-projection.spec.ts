@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { buildCheckpointDetail } from '../../src/checkpointDetail'
+import { SCHEMA_VERSION } from '../../src/projectRepository'
 import {
   canonicalCheckpointJson, checkpointIntegrityDigest, checkpointSha256,
   type ProjectCheckpoint,
@@ -10,16 +11,18 @@ function fixture(): ProjectCheckpoint {
   return {
     checkpointId: 'saved', projectId: 'project', workspaceId: 'workspace',
     parentCheckpointId: null, reason: 'Saved baseline', actorUserId: 'actor',
-    createdAt: 11, originatingRecordRevision: 2, recordSchemaVersion: 4,
+    createdAt: 11, originatingRecordRevision: 2, recordSchemaVersion: SCHEMA_VERSION,
     recordDigest: '', integrityDigest: '', files: [],
     record: {
-      projectId: 'project', workspaceId: 'workspace', schemaVersion: 4,
+      projectId: 'project', workspaceId: 'workspace', schemaVersion: SCHEMA_VERSION,
       recordRevision: 2, projectName: 'Saved name',
       appToc: [
         { id: 1, topicId: 'stable', title: 'Saved title', level: 1 },
         { id: 2, topicId: 'second', title: 'Nested title', level: 2 },
       ],
       sourceFileIds: [],
+      contentExplorer: { version: 1, folders: [], placements: [] },
+      contentOrigins: { topic: {}, snippet: {}, variable: {}, condition: {} },
     } as unknown as ProjectCheckpoint['record'],
   }
 }

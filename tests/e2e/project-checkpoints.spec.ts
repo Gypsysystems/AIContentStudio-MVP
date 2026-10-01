@@ -331,7 +331,10 @@ test('History panel accepts a reason, refreshes the checkpoint list, and verifie
   await page.getByRole('button', { name: 'Create checkpoint' }).click()
   await expect(page.getByText('Approved before publication', { exact: true })).toBeVisible()
   await expect(page.getByText('local-user')).toBeVisible()
-  await expect(page.getByText('None (first checkpoint)')).toBeVisible()
+  const checkpointRow = page.locator('section[aria-labelledby="history-list-title"] > ol > li')
+    .filter({ hasText: 'Approved before publication' })
+  await checkpointRow.getByText('More checkpoint metadata', { exact: true }).click()
+  await expect(checkpointRow.getByText('None (first checkpoint)', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Verify integrity' }).click()
   await expect(page.getByText('Integrity verified')).toBeVisible()
 

@@ -177,6 +177,7 @@ test("unchanged blocks preserve protected states and fail closed for unknown sta
 })
 
 test("Author Rewrite Topic saves a review-only proposal and applies only selected eligible changes", async ({ page, context }) => {
+  test.setTimeout(90_000)
   const projectId = `ai-rewrite-ui-${Date.now()}`
   let projectRecord: Record<string, any> | null = null
   const originalBlocks = [

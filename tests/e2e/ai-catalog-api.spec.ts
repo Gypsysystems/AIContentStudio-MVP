@@ -213,7 +213,7 @@ test('cookie session is mandatory and secret or service-role keys fail closed', 
   }), 'sb_secret_not-a-public-key')
 })
 
-test('readiness is same-workspace, owner/admin-only, read-only, and omits workflow source content', async () => {
+test('readiness is same-workspace, write-role-only, read-only, and omits workflow source content', async () => {
   const workflowV1 = asset({
     id: 'api-workflow',
     kind: 'workflow',
@@ -246,7 +246,7 @@ test('readiness is same-workspace, owner/admin-only, read-only, and omits workfl
       steps: [],
     },
   })
-  for (const role of ['owner', 'admin'] as const) {
+  for (const role of ['owner', 'admin', 'editor'] as const) {
     const actions: string[] = []
     const response = await withSupabaseConfig(() => withMockFetch(async (url, init) => {
       if (url.endsWith('/auth/v1/user')) return Response.json({ id: userId })
@@ -287,7 +287,7 @@ test('readiness is same-workspace, owner/admin-only, read-only, and omits workfl
   await withSupabaseConfig(() => withMockFetch(async url => {
     if (url.endsWith('/auth/v1/user')) return Response.json({ id: userId })
     if (url.includes('/rest/v1/workspace_memberships?'))
-      return Response.json([{ workspace_id: workspaceId, role: 'editor' }])
+      return Response.json([{ workspace_id: workspaceId, role: 'viewer' }])
     throw new Error(`Unexpected API request: ${url}`)
   }, async () => {
     const denied = await invokeApiError({

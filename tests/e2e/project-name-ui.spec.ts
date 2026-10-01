@@ -36,8 +36,9 @@ test("duplicate flow asks the user to confirm its suggested unique copy name", a
   }, { projectId, projectName })
   await page.reload()
 
-  const sourceCard = page.getByText(projectName, { exact: true }).locator("xpath=../../..")
-  await sourceCard.hover()
+  const sourceCard = page.getByRole("button", { name: `Open project ${projectName}`, exact: true })
+    .locator("xpath=..")
+  await sourceCard.getByLabel(`Project actions for ${projectName}`).click()
   await sourceCard.getByRole("button", { name: "Duplicate", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: "Duplicate project" })
   await expect(dialog).toBeVisible()

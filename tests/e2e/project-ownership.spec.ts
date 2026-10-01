@@ -47,7 +47,7 @@ test('local session owns migrated v3 records in the default workspace', async ({
     membership: { userId: 'local-user', workspaceId: 'local-workspace', role: 'owner' },
   })
   expect(result.loaded).toMatchObject({
-    schemaVersion: 4,
+    schemaVersion: 5,
     ownerUserId: 'local-user',
     workspaceId: 'local-workspace',
   })

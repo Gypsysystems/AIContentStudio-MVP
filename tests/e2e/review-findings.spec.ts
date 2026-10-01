@@ -1257,7 +1257,7 @@ test('previews, rejects, dismisses, and applies only the exact real spelling rep
 test('never exposes or persists grounded real-project findings from explicit demo Review data', async ({ page }) => {
   const projectName = `Grounded Review demo isolation ${Date.now()}`
   await createProject(page, projectName)
-  await page.getByRole('button', { name: 'Use demo project', exact: true }).click()
+  await page.getByRole('button', { name: 'Use demo project instead →', exact: true }).click()
   await page.getByText('Review', { exact: true }).last().click()
   await expect(page.getByTestId('real-review-findings')).toHaveCount(0)
   await expect(page.getByTestId('review-open-in-author')).toHaveCount(0)

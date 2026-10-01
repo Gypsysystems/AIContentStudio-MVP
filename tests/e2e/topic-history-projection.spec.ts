@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { buildTopicHistory } from '../../src/topicHistory'
+import { SCHEMA_VERSION } from '../../src/projectRepository'
 import type { ProjectCheckpoint } from '../../src/projectCheckpoint'
 
 type Snapshot = {
@@ -20,11 +21,11 @@ function checkpoint(checkpointId: string, createdAt: number, snapshot: Snapshot)
     actorUserId: 'actor',
     createdAt,
     originatingRecordRevision: snapshot.recordRevision ?? createdAt,
-    recordSchemaVersion: snapshot.schemaVersion ?? 4,
+    recordSchemaVersion: snapshot.schemaVersion ?? SCHEMA_VERSION,
     recordDigest: '',
     integrityDigest: '',
     record: {
-      schemaVersion: snapshot.schemaVersion ?? 4,
+      schemaVersion: snapshot.schemaVersion ?? SCHEMA_VERSION,
       recordRevision: snapshot.recordRevision ?? createdAt,
       appToc: snapshot.appToc,
       topicContent: snapshot.topicContent,

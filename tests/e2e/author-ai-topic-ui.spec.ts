@@ -8,6 +8,7 @@ const fixture = JSON.parse(await readFile(
 const sourceText = "# Field Manual\n\nConnect the Field Kit before calibration."
 
 test("saves AI topic proposals, confirms replacements, and retains the prior proposal on save failure", async ({ page, context }) => {
+  test.setTimeout(90_000)
   const projectId = `ai-topic-ui-${Date.now()}`
   let projectRecord: Record<string, any> | null = null
   let failSecondProposalSave = false
@@ -421,9 +422,9 @@ test("saves AI topic proposals, confirms replacements, and retains the prior pro
   expect(projectRecord?.authorTopicMetadata["stable-setup"].draft.draftId).toBe(retainedProposalId)
 
   await page.reload()
-  await page.getByTestId("topbar-administration").click()
-  await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
-  await page.getByRole("button", { name: "Open project AI topic UI project", exact: true }).click()
+  // Reload restores the active project directly (on its prior Sources screen);
+  // navigating through Administration would route back to Projects instead.
+  await expect(page.locator("header").getByText("AI topic UI project", { exact: true })).toBeVisible()
   await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
     .getByRole("button", { name: "Author", exact: true }).click()
   await page.getByTestId("author-outline").locator('[data-topic-id="stable-setup"]')

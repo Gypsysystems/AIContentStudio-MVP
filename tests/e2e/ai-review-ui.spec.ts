@@ -34,10 +34,24 @@ async function prepareCloudProject(page: Page, context: BrowserContext, role: "o
   const workflow = publishedWorkflow()
   let projectRecord: Record<string, any> | null = null
   let aiReviewRequests: Record<string, unknown>[] = []
+  let activeRole: "owner" | "viewer" = "owner"
 
+  const session = () => ({
+    authenticated: true,
+    mode: "supabase",
+    userId: "ai-review-ui-user",
+    activeWorkspaceId: "ai-review-workspace",
+    activeRole,
+    activeOrganizationName: "AI Review UI",
+    activeWorkspaceName: "AI Review UI workspace",
+  })
+  await context.route("**/api/auth/session", route => route.fulfill({ status: 200, json: session() }))
+  await context.route("**/api/auth/refresh", route => route.fulfill({ status: 200, json: session() }))
   await context.route("**/api/cloud-projects", async route => {
     const command = route.request().postDataJSON()
-    if (command.action === "list") {
+    if (command.action === "ready") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ready: true }) })
+    } else if (command.action === "list") {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -220,10 +234,9 @@ async function prepareCloudProject(page: Page, context: BrowserContext, role: "o
   })
 
   await page.goto("/")
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
   await page.evaluate(async ({ id, initialRecord, membershipRole }) => {
-    const [auth, mode, repository, evidenceModule, analysisModule, unsupportedModule, reviewInputModule, reviewModule, appModule, authorModule] = await Promise.all([
-      import("/src/authSession.ts" as string),
-      import("/src/authorizedProjectService.ts" as string),
+    const [repository, evidenceModule, analysisModule, unsupportedModule, reviewInputModule, reviewModule, appModule, authorModule] = await Promise.all([
       import("/src/authorizedProjectService.ts" as string),
       import("/src/evidenceIndex.ts" as string),
       import("/src/conceptAnalysis.ts" as string),
@@ -233,14 +246,6 @@ async function prepareCloudProject(page: Page, context: BrowserContext, role: "o
       import("/src/App.tsx" as string),
       import("/src/authorMetadata.ts" as string),
     ])
-    const setSession = (role: string) => auth.setCloudAuthSession({
-      user: { id: "ai-review-ui-user" },
-      workspace: { id: "ai-review-workspace", name: "AI Review UI workspace" },
-      membership: { userId: "ai-review-ui-user", workspaceId: "ai-review-workspace", role },
-    })
-    setSession("owner")
-    mode.setCloudProjectMode(true)
-
     const record = {
       ...initialRecord,
       projectId: id,
@@ -387,26 +392,16 @@ async function prepareCloudProject(page: Page, context: BrowserContext, role: "o
       updatedAt: snapshot.capturedAt,
     }
     const created = await repository.authorizedProjectRepository.createProject(record)
-    setSession(membershipRole)
     await repository.authorizedProjectRepository.setActiveProjectId(created.projectId)
   }, { id: projectId, initialRecord: fixture, membershipRole: role })
 
+  activeRole = role
   await page.reload()
-  await page.evaluate(async membershipRole => {
-    const [auth, mode] = await Promise.all([
-      import("/src/authSession.ts" as string),
-      import("/src/authorizedProjectService.ts" as string),
-    ])
-    auth.setCloudAuthSession({
-      user: { id: "ai-review-ui-user" },
-      workspace: { id: "ai-review-workspace", name: "AI Review UI workspace" },
-      membership: { userId: "ai-review-ui-user", workspaceId: "ai-review-workspace", role: membershipRole },
-    })
-    mode.setCloudProjectMode(true)
-  }, role)
-  await page.getByTestId("topbar-administration").click()
   await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
-  await page.getByRole("button", { name: `Open project AI Review UI ${role}` }).click()
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
+  const openProject = page.getByRole("button", { name: `Open project AI Review UI ${role}` })
+  await expect(openProject).toBeVisible()
+  await openProject.click()
   await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
     .getByRole("button", { name: 'Review', exact: true }).click()
   if (role === "owner") await page.getByTestId("ai-review-controls").locator("summary").click()

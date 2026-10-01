@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
+import { SCHEMA_VERSION } from '../../src/projectRepository'
 
 const v1Fixture = JSON.parse(await readFile(
   new URL('../fixtures/project-record-v1.json', import.meta.url),
@@ -178,7 +179,7 @@ test('v1 and v2 migration is deterministic, idempotent, and rejects future schem
 
   expect(result.migratedV1).toMatchObject({ changed: true, fromVersion: 1 })
   expect(result.migratedV1.record).toMatchObject({
-    schemaVersion: 5,
+    schemaVersion: SCHEMA_VERSION,
     recordRevision: 0,
     projectId: 'fixture-v1-project',
     sourceExtractions: {},
@@ -199,12 +200,12 @@ test('v1 and v2 migration is deterministic, idempotent, and rejects future schem
   expect(result.repeatedV1).toEqual({
     record: result.migratedV1.record,
     changed: false,
-    fromVersion: 5,
+    fromVersion: SCHEMA_VERSION,
   })
   expect(result.migratedV2).toMatchObject({
     changed: true,
     fromVersion: 2,
-    record: { schemaVersion: 5, recordRevision: 0 },
+    record: { schemaVersion: SCHEMA_VERSION, recordRevision: 0 },
   })
   expect(result.migratedV2.record.sourceExtractions).toEqual(v2Fixture.sourceExtractions)
   expect(result.migratedV2.record.appToc).toEqual(v2Fixture.appToc)
@@ -213,7 +214,7 @@ test('v1 and v2 migration is deterministic, idempotent, and rejects future schem
   expect(result.repeatedV2).toEqual({
     record: result.migratedV2.record,
     changed: false,
-    fromVersion: 5,
+    fromVersion: SCHEMA_VERSION,
   })
   expect(result.futureVersionError).toMatch(/unsupported|future|version/i)
 })
@@ -247,8 +248,8 @@ test('loading old persisted records upgrades the IndexedDB records in place', as
 
   expect(persisted).toHaveLength(2)
   for (const item of persisted) {
-    expect(item.loaded).toMatchObject({ schemaVersion: 5, recordRevision: 0 })
-    expect(item.stored).toMatchObject({ schemaVersion: 5, recordRevision: 0 })
+    expect(item.loaded).toMatchObject({ schemaVersion: SCHEMA_VERSION, recordRevision: 0 })
+    expect(item.stored).toMatchObject({ schemaVersion: SCHEMA_VERSION, recordRevision: 0 })
   }
   expect(persisted[1].stored?.sourceExtractions).toEqual(v2Fixture.sourceExtractions)
   expect(persisted[1].loaded?.authorTopicMetadata).toEqual(v2Fixture.authorTopicMetadata)
@@ -294,10 +295,12 @@ test('v1 App hydration restores default styles, layouts, and conditions after re
     await expect(page.getByText('{{Version}}', { exact: true })).toBeVisible()
 
     await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('button', { name: 'Author' }).click()
-    await page.getByRole('button', { name: 'Conditions', exact: true }).click()
+    const authorEditor = page.getByTestId('author-editor')
+    await authorEditor.locator('details > summary').click()
+    await authorEditor.getByRole('button', { name: 'Conditions', exact: true }).click()
     await expect(page.getByText('Audience', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Beginner', exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Manage…', exact: true }).click()
+    await authorEditor.getByRole('button', { name: 'Manage…', exact: true }).click()
     await expect(page.getByText('Manage Conditions', { exact: true })).toBeVisible()
     await expect(page.getByText('Platform', { exact: true })).toBeVisible()
     await expect(page.getByText('Enterprise', { exact: true })).toBeVisible()
@@ -308,7 +311,7 @@ test('v1 App hydration restores default styles, layouts, and conditions after re
     const { projectRepository } = await import('/src/projectService.ts' as string)
     return projectRepository.loadProject(projectId)
   }, legacy.projectId as string)
-  expect(storedBeforeReload).toMatchObject({ schemaVersion: 5, projectId: legacy.projectId })
+  expect(storedBeforeReload).toMatchObject({ schemaVersion: SCHEMA_VERSION, projectId: legacy.projectId })
 
   await page.reload()
   await expectDefaultsInApp()
@@ -464,7 +467,7 @@ test('reload and duplicate preserve stable project content IDs while remapping f
   expect(duplicateFileId).not.toBe(sourceFileId)
   expect(state.duplicate).toMatchObject({
     projectName: 'Field Operations Guide Copy',
-    schemaVersion: 4,
+    schemaVersion: SCHEMA_VERSION,
     recordRevision: 0,
     appToc: v2Fixture.appToc,
     topicContent: v2Fixture.topicContent,

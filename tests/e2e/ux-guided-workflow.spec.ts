@@ -5,7 +5,8 @@ async function createProject(page: Page) {
   await page.getByRole('button', { name: /New Project/ }).first().click()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill(`Guided workflow ${Date.now()}`)
   await page.getByRole('button', { name: 'Continue — Theme & Styles' }).click()
-  await page.getByRole('button', { name: 'Continue — Sources' }).click()
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+    .getByRole('button', { name: 'Sources', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Add Source Material' })).toBeVisible()
 }
 
@@ -19,6 +20,8 @@ async function addSource(page: Page) {
       + '### Attach Evidence\n\nSelect Add evidence to attach a file to the case.\n',
     ),
   })
+  const sourceRow = page.getByTestId('source-file-row').filter({ hasText: 'case-workflows.md' })
+  await expect(sourceRow.getByTestId('extraction-status')).toContainText('Extracted', { timeout: 15_000 })
   await expect(page.getByTestId('evidence-freshness')).toHaveText('Current', { timeout: 15_000 })
 }
 
@@ -71,7 +74,7 @@ test('TOC acceptance advances into Author, focuses the workspace and keeps the s
   await expect(page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Author', exact: true })).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId('author-stage-heading')).toBeFocused()
-  await page.getByRole('navigation', { name: 'Project modules' })
+  await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: /^Structure/ }).click()
   await expect(page.getByTestId('committed-toc-panel')).toContainText('Work with cases and evidence')
   await expect(page.getByTestId('committed-toc-panel')).toContainText(/Open cases/i)

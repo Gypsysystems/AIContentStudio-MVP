@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test"
 type StoredProject = {
   projectId: string
   projectName: string
+  recordRevision: number
   activeStyleProfileId?: string
   projectMeta?: Record<string, unknown>
   themes: Array<{
@@ -75,6 +76,42 @@ async function updateOnlyProject(
   }, updated)
 }
 
+async function expectPassiveHydrationToPreserve(
+  page: Page,
+  patchedRecord: StoredProject,
+) {
+  await page.waitForTimeout(900)
+  const hydratedRecord = await readOnlyProject(page)
+  expect(hydratedRecord).toEqual(patchedRecord)
+  expect(hydratedRecord.recordRevision).toBe(patchedRecord.recordRevision)
+}
+
+async function editAppliedProfileLogoLabel(
+  page: Page,
+  profileName: string,
+  profileId: string,
+  logoLabel: string,
+) {
+  await page.getByRole("button", { name: "Brand", exact: true }).click()
+  await page.getByPlaceholder("e.g. Acme Corporation, GOV").fill(logoLabel)
+  await page.getByRole("button", { name: "Save Brand Settings" }).click()
+  await expect(page.getByText("✓ Saved", { exact: true })).toBeVisible()
+  await expect.poll(async () => {
+    const stored = await readOnlyProject(page)
+    const profile = stored.themes.flatMap(theme => theme.styleProfiles)
+      .find(candidate => candidate.name === profileName)
+    return {
+      activeStyleProfileId: stored.activeStyleProfileId,
+      projectStyleProfileId: stored.projectMeta?.styleProfileId,
+      logoLabel: profile?.logoLabel,
+    }
+  }).toEqual({
+    activeStyleProfileId: profileId,
+    projectStyleProfileId: profileId,
+    logoLabel,
+  })
+}
+
 async function chooseFont(page: Page, sectionName: string, font: string) {
   const section = page
     .getByText(sectionName, { exact: true })
@@ -129,7 +166,7 @@ test("persists an applied style profile and output template edits", async ({
 
   await page.getByRole("button", { name: /Content Studio/ }).click()
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
-  await page.getByText(projectName, { exact: true }).click()
+  await page.getByRole("button", { name: `Open project ${projectName}` }).click()
   await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
   await page.reload()
   await expect(page.getByText(projectName, { exact: true }).first()).toBeVisible()
@@ -480,6 +517,10 @@ test(`falls back safely when the persisted style profile ID is ${persistedId ===
       activeStyleProfileId: persistedId,
       projectMeta: { ...project.projectMeta, styleProfileId: persistedId },
     }))
+    const patchedRecord = await readOnlyProject(page)
+    const fallbackProfileId = String(patchedRecord.themes
+      .flatMap(theme => theme.styleProfiles)
+      .find(profile => profile.name === profileName)?.id)
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
     await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: /^Brand & Output/ }).click()
@@ -492,19 +533,24 @@ test(`falls back safely when the persisted style profile ID is ${persistedId ===
     await expect(
       page.getByRole("button", { name: "✓ Applied to Project" }),
     ).toBeVisible()
-    await expect.poll(async () => {
-      const stored = await readOnlyProject(page)
-      const profile = stored.themes.flatMap(theme => theme.styleProfiles)
-        .find(profile => profile.name === profileName)
-      return !!profile && stored.activeStyleProfileId === profile.id
-        && stored.projectMeta?.styleProfileId === profile.id
-    }).toBe(true)
+    await expect(page.getByText("Current project profile:").locator(".."))
+      .toContainText(profileName)
+    await expectPassiveHydrationToPreserve(page, patchedRecord)
+    await editAppliedProfileLogoLabel(
+      page,
+      profileName,
+      fallbackProfileId,
+      `Explicit save ${Date.now()}`,
+    )
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
     await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: /^Brand & Output/ }).click()
     await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(profileName)
     await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
-  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Sources" }).click()
+    await expect(page.getByText("Current project profile:").locator(".."))
+      .toContainText(profileName)
+    await page.getByRole("navigation", { name: "Project navigation" })
+      .getByRole("button", { name: "Sources" }).click()
 })
 }
 
@@ -536,7 +582,11 @@ test("resolves rich profiles by project, active, then active-theme priority acro
   const themePriority = profiles.find(profile => profile.name === "Theme Priority Profile")!
   const projectPriority = profiles.find(profile => profile.name === "Project Priority Profile")!
 
-  const expectSelectedAfterReload = async (name: string, expectedId: string) => {
+  const expectSelectedAfterReload = async (
+    name: string,
+    expectedId: string,
+    patchedRecord: StoredProject,
+  ) => {
     await page.reload()
     await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
     await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: /^Brand & Output/ }).click()
@@ -546,16 +596,12 @@ test("resolves rich profiles by project, active, then active-theme priority acro
     await expect(
       page.getByRole("button", { name: "✓ Applied to Project" }),
     ).toBeVisible()
-    await expect.poll(async () => {
-      const reloaded = await readOnlyProject(page)
-      return {
-        projectProfileId: reloaded.projectMeta?.styleProfileId,
-        legacyProfileId: reloaded.activeStyleProfileId,
-      }
-    }).toEqual({
-      projectProfileId: expectedId,
-      legacyProfileId: expectedId,
-    })
+    await expect(page.getByText("Current project profile:").locator(".."))
+      .toContainText(name)
+    const selectedProfile = patchedRecord.themes.flatMap(theme => theme.styleProfiles)
+      .find(profile => profile.name === name)
+    expect(selectedProfile?.id).toBe(expectedId)
+    await expectPassiveHydrationToPreserve(page, patchedRecord)
     await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Sources" }).click()
   }
 
@@ -567,7 +613,12 @@ test("resolves rich profiles by project, active, then active-theme priority acro
       styleProfileId: String(projectPriority.id),
     },
   }))
-  await expectSelectedAfterReload("Project Priority Profile", String(projectPriority.id))
+  const projectPriorityRecord = await readOnlyProject(page)
+  await expectSelectedAfterReload(
+    "Project Priority Profile",
+    String(projectPriority.id),
+    projectPriorityRecord,
+  )
 
   await updateOnlyProject(page, project => ({
     ...project,
@@ -577,7 +628,12 @@ test("resolves rich profiles by project, active, then active-theme priority acro
       styleProfileId: "invalid-project-profile",
     },
   }))
-  await expectSelectedAfterReload("Theme Priority Profile", String(themePriority.id))
+  const invalidProjectProfileRecord = await readOnlyProject(page)
+  await expectSelectedAfterReload(
+    "Theme Priority Profile",
+    String(themePriority.id),
+    invalidProjectProfileRecord,
+  )
 
   await updateOnlyProject(page, project => ({
     ...project,
@@ -587,8 +643,23 @@ test("resolves rich profiles by project, active, then active-theme priority acro
       styleProfileId: "",
     },
   }))
-  await expectSelectedAfterReload("Theme Priority Profile", String(themePriority.id))
+  const invalidBothProfilesRecord = await readOnlyProject(page)
+  await expectSelectedAfterReload(
+    "Theme Priority Profile",
+    String(themePriority.id),
+    invalidBothProfilesRecord,
+  )
 
+  await page.getByRole("navigation", { name: "Project navigation" })
+    .getByRole("button", { name: /^Brand & Output/ }).click()
+  await expect(page.getByRole("textbox", { name: "Search profiles…" }))
+    .toHaveValue("Theme Priority Profile")
+  await editAppliedProfileLogoLabel(
+    page,
+    "Theme Priority Profile",
+    String(themePriority.id),
+    `Explicit save ${Date.now()}`,
+  )
   const reloaded = await readOnlyProject(page)
   expect(reloaded.pageLayouts).toEqual(stored.pageLayouts)
   expect(reloaded.htmlMasterPages).toEqual(stored.htmlMasterPages)

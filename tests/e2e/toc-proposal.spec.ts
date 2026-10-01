@@ -75,7 +75,8 @@ async function createGroundedProject(page: Page, projectName: string) {
   await page.getByRole("button", { name: /New Project/ }).first().click()
   await page.locator('input[placeholder^="e.g. Nexus Platform"]').fill(projectName)
   await page.getByRole("button", { name: "Continue — Theme & Styles" }).click()
-  await page.getByRole("button", { name: "Continue — Sources" }).click()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Sources", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   await page.locator('input[type="file"]').setInputFiles({
     name: "flight-operations.md",
@@ -94,9 +95,9 @@ async function createGroundedProject(page: Page, projectName: string) {
       "Token Rotation is reviewed by the Flight Security Team.",
     ].join("\n")),
   })
-  await expect(
-    page.getByTestId("source-file-row").getByText("flight-operations.md", { exact: true }),
-  ).toBeVisible({ timeout: 15_000 })
+  const sourceRow = page.getByTestId("source-file-row").filter({ hasText: "flight-operations.md" })
+  await expect(sourceRow.getByText("flight-operations.md", { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(sourceRow.getByTestId("extraction-status")).toContainText("Extracted", { timeout: 15_000 })
   await expect(page.getByTestId("evidence-freshness")).toHaveText("Current", { timeout: 15_000 })
   await page.getByRole("button", { name: "Analyze Sources" }).click()
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
@@ -254,7 +255,7 @@ test("generates a grounded, reviewable TOC and persists review edits before comm
   await expect(page.getByTestId("toc-proposal-topic").filter({ hasText: "Operator checklist" })).toBeVisible()
 
   await page.getByTestId("commit-toc-proposal").click()
-  await expect(page.getByRole("navigation", { name: "Project modules" }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
+  await expect(page.getByRole("navigation", { name: /Project (?:navigation|modules)/ }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
   await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toContainText("Open the Flight Operations workspace")
 
@@ -290,7 +291,7 @@ test("requires confirmation and preserves committed topics when merging a later 
   await expect(page.getByTestId("committed-toc-panel")).toHaveCount(0)
   await page.getByTestId("confirm-toc-merge").click()
 
-  await expect(page.getByRole("navigation", { name: "Project modules" }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
+  await expect(page.getByRole("navigation", { name: /Project (?:navigation|modules)/ }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
   await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toContainText("Release validation")
   await expect.poll(async () => (await readProject(page, projectName)).appToc.some(item => item.title === "Release validation")).toBe(true)
@@ -429,7 +430,7 @@ test("marks a committed TOC stale after the project content type changes without
   await createGroundedProject(page, projectName)
   await page.getByTestId("generate-grounded-toc").click()
   await page.getByTestId("commit-toc-proposal").click()
-  await expect(page.getByRole("navigation", { name: "Project modules" }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
+  await expect(page.getByRole("navigation", { name: /Project (?:navigation|modules)/ }).getByRole("button", { name: "Author" })).toHaveAttribute("aria-current", "page")
   await openTableOfContents(page)
   await expect(page.getByTestId("committed-toc-panel")).toBeVisible()
   await expect.poll(async () => (await readProject(page, projectName)).tocGeneratedFromContentType).toBe("user-guide")

@@ -56,5 +56,7 @@ test('a member sees the resolved workspace, not browser-local projects', async (
   // A signed-in member remains behind the readiness gate; local creation stays unavailable.
   await expect(page.getByRole('button', { name: /New Project/ })).toHaveCount(0)
   await page.getByRole('button', { name: 'Sign out' }).click()
-  await expect(page.getByText('Signed out.')).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Email' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /New Project/ })).toHaveCount(0)
 })

@@ -290,7 +290,8 @@ test('retires only the affected persisted finding when its topic is deleted', as
 
   const beta = page.getByTestId("author-outline").locator('[data-topic-id="topic-beta"]')
   await beta.hover()
-  await beta.getByTitle('Delete').click()
+  await beta.locator('summary[aria-label="Actions for Beta"]').click()
+  await beta.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(beta).toHaveCount(0)
   await expect.poll(async () => {
     const stored = (await readProject(page, projectName)).reviewModel!
@@ -336,6 +337,7 @@ test('duplicates Review history while remapping copied project and source refere
   })
   await page.reload()
   await page.getByRole('button', { name: /Content Studio/ }).click()
+  await page.locator(`summary[aria-label="Project actions for ${projectName}"]`).click()
   await page.getByRole('button', { name: 'Duplicate', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Duplicate project' })).toBeVisible()
   await page.getByLabel('Name for copy').fill(duplicateName)
