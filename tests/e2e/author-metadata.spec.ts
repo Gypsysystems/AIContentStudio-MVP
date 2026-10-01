@@ -487,7 +487,9 @@ test("does not create Author grounding metadata from demo-only document content"
   const projectName = `Author demo isolation ${Date.now()}`
   await createProject(page, projectName)
   await page.getByRole("button", { name: "Use demo project instead →" }).click()
-  await expect(page.getByText(/Demo mode active/)).toBeVisible()
+  await expect(page.getByRole("status").filter({ hasText: "Sample files are read-only" }))
+    .toHaveText("Demo mode · Sample files are read-only and are not source-verified evidence.")
+  await expect(page.getByRole("button", { name: "Switch to my files", exact: true })).toBeVisible()
   await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
     .getByRole("button", { name: "Author", exact: true }).click()
   await expect(page.getByText("User Guide", { exact: true })).toBeVisible()

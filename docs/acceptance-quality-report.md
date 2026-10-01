@@ -2,7 +2,9 @@
 
 ## Scope and evidence boundary
 
-Starting synchronized commit: `c96118c1f1109934bfeec584eee0e292215a4db3`.
+Original acceptance batch starting commit: `c96118c1f1109934bfeec584eee0e292215a4db3`.
+
+Focused cleanup starting synchronized commit: `e1b6b9d1e8751207cfc84547456fa8720f3ae706`.
 
 This batch exercises Sources → Structure → Author → Review → Publish, grounded TOC/Topic/Rewrite, background Topic jobs, cross-project reuse, reload/recovery, provenance/revision/staleness, and browser/startup readiness.
 
@@ -18,33 +20,46 @@ No authentication bypass, production test credential, security-model change, or 
 - Strengthened passive-hydration tests: compare the complete stored record and revision after the autosave debounce, then verify that a deliberate edit persists.
 - Fixed one product status-display defect: an unsupported initial topic now says **Needs Grounding**, and stale applied generated content says **Generated stale**, even when its separate grounding context has been refreshed. Generation, apply, worker, authentication, and persistence behavior are unchanged.
 
+### Focused cleanup
+
+Both remaining original blockers were **test-fixture/navigation updates**, not product fixes. No product, backend, authentication, cloud-security, or context-aware navigation code changed in this cleanup.
+
+- Demo isolation now checks the existing accessible status disclosure, “Demo mode · Sample files are read-only and are not source-verified evidence,” and the “Switch to my files” control. Empty persisted Author grounding metadata, empty topic content, and persisted demo mode assertions remain intact. The following real-source/stable-file-ID selection and reload test fully executed and passed.
+- Management return intentionally waits for persistence and the save queue. The delayed-save fixture now verifies that barrier while retaining zero completed saves before release, width 1500, and at most two width saves. It then holds a separate ordinary-project save, navigates Author → Sources using the current accessible sidebar labels, waits for the actual Sources heading, and checks visible/disabled Analyze Sources, unchanged project identity, and no completed save before release. After release it verifies bounded coalescing, retained width, final non-demo state, and sequential record revisions. Conflict/reload assertions remain unchanged.
+
 ## Final validation results
 
-**Overall result: PARTIAL / NOT APPROVED FOR FULL ROLLOUT.**
+**Overall result: AUTOMATED ACCEPTANCE GREEN — FULL ROLLOUT STILL REQUIRES AUTHENTICATED CLOUD/PROVIDER/WORKER VALIDATION.**
 
 | Check | Result |
 | --- | --- |
-| Complete sweep, 546 tests / 89 files | 530 passed, 11 failed, 5 dependent tests not run |
-| First affected-spec rerun, 34 tests | 26 passed, 4 failed, 4 dependent tests not run |
-| Corrected-spec rerun, 21 tests | 16 passed, 2 failed, 3 dependent tests not run |
-| Final navigation rerun, 9 tests | 6 passed, 2 failed, 1 dependent test not run |
-| Latest deduplicated coverage across those runs | **543 passed, 2 failed, 1 not run / 546 unique tests** |
+| Final consolidated sweep, 546 unique tests / 89 files | **546 passed, 0 failed, 0 skipped, 0 retries — one clean invocation, one worker** |
+| Full Author metadata spec | **6/6 passed**, including the formerly dependent stable-file-ID source-selection/reload test |
+| Full cloud-save responsiveness spec | **3/3 passed**, including delayed save/coalescing/revisions, conflict reload, and read-only open |
+| Related management/project-context and UX navigation checks | **14/14 passed** in the focused run; also all passed in the final consolidated sweep |
 | Production build | Passed |
-| TypeScript | Exactly two unchanged known baseline diagnostics; no additional diagnostics |
+| TypeScript | Exactly two unchanged known baseline diagnostics; **delta: 0 additional diagnostics**; separate from automated acceptance |
 | Isolated PostgreSQL integration | Both actual catalog and Topic-job integration tests passed, including authorization/idempotency/lease/fencing checks |
 | Instrumented new end-to-end journeys | Both passed; no unexpected page/console errors; only the explicitly asserted mock-copy 409 is allowed |
 | Development startup | HTTP 200; app and existing development Topic-worker workflows running |
 | Main preview | Normal signed-out screen renders; anonymous session/refresh 401s are expected, not evidence of authenticated cloud readiness |
-| Commit / GitHub sync | **Withheld**: acceptance is incomplete; local HEAD and GitHub main remain at the starting SHA |
 
-These are latest-per-test results, not a claim that one clean full-suite invocation passed. Temporary output directories/report files are isolated; successful unchanged coverage is retained while affected specs are rerun.
+The final result is a clean full-suite invocation, not deduplicated success assembled from reruns. The recorded final invocation used one worker and no retries, with both SQL opt-ins enabled against a private socket-only disposable PostgreSQL cluster.
+
+### Earlier run evidence
+
+Before cleanup, the previous batch's latest-per-test result was 543 passed, 2 failed, and 1 dependent test not run. Its original full sweep was 530 passed, 11 failed, and 5 not run.
+
+The first cleanup consolidated sweep used two workers: **544 passed, 2 failed, 0 skipped**. Both original blockers passed, but two different cases failed:
+
+1. `ai-control-center.spec.ts`: the mocked-cloud catalog test expected “Saving catalog changes.” but saw “Reference set definition saved as v1.” The fixture simulates a short-lived saving state.
+2. `management-navigation.spec.ts`: the project-switch/Back test could not locate the History searchbox “Search notes, actors, or IDs” when checking its cleared value.
+
+Both cases passed unchanged in a single-worker isolated rerun (**2/2**), and then both passed in the final single-worker consolidated sweep (**546/546**). Neither unrelated spec nor any product code was modified to obtain those passes. The clean serial result does not claim that parallel-run timing is reliable.
 
 ### Remaining automation blockers
 
-1. `tests/e2e/author-metadata.spec.ts`: “does not create Author grounding metadata from demo-only document content” cannot locate the expected `Demo mode active` indicator. Its following serial test, “uses only persisted project sources and evidence in Author and reloads source selection by stable file ID,” did not run.
-2. `tests/e2e/cloud-save-responsiveness.spec.ts`: “ordinary section navigation stays responsive and quick edits coalesce during a delayed cloud save” cannot locate `Analyze Sources` after returning from management and selecting Sources. The test therefore does not reach its complete coalescing/revision assertions.
-
-Both are automation blockers, not confirmed product defects. Multiple isolated attempts reached different obsolete fixture/navigation assumptions; further iteration was stopped rather than weakening checks, increasing suite-wide timeouts, or asserting success without evidence.
+**None in the final consolidated sweep.** The two known TypeScript baseline diagnostics remain separately reported and were intentionally not repaired. Full rollout remains gated only by the legitimate authenticated cloud/provider/live-worker and published-browser acceptance steps below.
 
 ### Nine acceptance statuses
 
@@ -56,9 +71,9 @@ Both are automation blockers, not confirmed product defects. Multiple isolated a
 | Grounded Rewrite | **VERIFIED AUTOMATED — mocked provider/API/browser**, including eligible selected diffs and protected/manual content preservation |
 | Async Topic worker | **VERIFIED AUTOMATED — disposable SQL contract + mocked browser lifecycle**; live provider completion and heartbeat freshness remain unverified |
 | Cross-project copy/reuse | **VERIFIED AUTOMATED — mocked cloud/browser and server-contract coverage**, including exact-version lineage, explicit copy, reload and conflict preservation |
-| Reload/recovery | **PARTIAL AUTOMATED** — exercised journeys and recovery contracts pass; delayed-save/coalescing and the dependent Author source-selection check remain blocked |
-| Provenance/revision/staleness | **PARTIAL AUTOMATED** — core signed-input/revision/freshness/lineage tests pass; the remaining demo-isolation/source-selection coverage is not complete |
-| Full rollout/browser readiness | **NOT APPROVED / REQUIRES AUTHENTICATED CLOUD SESSION** — normal startup/build and instrumented flows pass, but automation blockers and real cloud/provider/worker checks remain |
+| Reload/recovery | **VERIFIED AUTOMATED — local/mock browser and recovery contracts**, including delayed-save/coalescing/revisions and persisted stable-file-ID source selection after reload |
+| Provenance/revision/staleness | **VERIFIED AUTOMATED — local/mock/API/SQL coverage**, including signed inputs, revision guards, freshness, lineage, demo isolation, and real-source selection |
+| Full rollout/browser readiness | **AUTOMATED CHECKS GREEN / FULL ROLLOUT REQUIRES AUTHENTICATED CLOUD SESSION** — the full automated sweep, build, startup, and instrumented journeys pass; real cloud/provider/live-worker and published-browser checks remain |
 
 Every real-cloud assertion above remains **REQUIRES AUTHENTICATED CLOUD SESSION**. Mock sessions and disposable PostgreSQL are explicitly not substitutes for Supabase/RLS/Storage, live provider calls, or production acceptance.
 

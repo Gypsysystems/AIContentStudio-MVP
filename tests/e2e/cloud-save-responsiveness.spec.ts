@@ -133,20 +133,20 @@ test('ordinary section navigation stays responsive and quick edits coalesce duri
     return saveGate
   }
 
-  await createProject(page, `Responsive save ${Date.now()}`)
+  const projectName = `Responsive save ${Date.now()}`
+  await createProject(page, projectName)
   const width = await openMasterPageSettings(page)
   await width.fill('1300')
   await width.fill('1400')
   await width.fill('1500')
   await saveStarted
 
-  // A cloud request is still outstanding, but changing workflow sections is local and immediate.
+  // Management exits intentionally settle project saves before restoring their origin.
+  // Keep the width/coalescing checks on that save; do not mistake the exit barrier
+  // for ordinary project-section navigation.
   await page.getByRole('button', { name: 'Return to project', exact: true }).click()
-  await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('button', { name: 'Sources' }).click()
-  const analyzeSources = page.getByRole('button', { name: 'Analyze Sources' })
-  await expect(analyzeSources).toBeVisible()
-  await expect(analyzeSources).toBeDisabled()
-
+  await expect(page.getByRole('heading', { name: 'Theme & Style Profiles' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Add Source Material' })).toHaveCount(0)
   expect(cloud.saves).toHaveLength(0)
   releaseSave()
   await expect.poll(() => {
@@ -158,6 +158,52 @@ test('ordinary section navigation stays responsive and quick edits coalesce duri
   expect(cloud.saves.at(-1)?.htmlMasterPages).toEqual(
     expect.arrayContaining([expect.objectContaining({ contentWidth: 1500 })]),
   )
+  await expect(page.getByRole('heading', { name: 'Add Source Material' })).toBeVisible()
+  await expect(page.locator('header').getByText(projectName, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Return to project', exact: true })).toHaveCount(0)
+
+  // Exercise actual ordinary project navigation with its own outstanding save.
+  // UI-only mode toggles require no file/Storage mocks and leave the real empty
+  // project in its original non-demo state after the rapid edits coalesce.
+  const managementSaves = cloud.saves.length
+  const managementRevision = cloud.saves.at(-1)!.recordRevision
+  let releaseProjectSave!: () => void
+  let signalProjectSaveStarted!: () => void
+  const projectSaveGate = new Promise<void>(resolve => { releaseProjectSave = resolve })
+  const projectSaveStarted = new Promise<void>(resolve => { signalProjectSaveStarted = resolve })
+  cloud.holdNextSave = () => {
+    signalProjectSaveStarted()
+    return projectSaveGate
+  }
+  for (let edit = 0; edit < 2; edit++) {
+    await page.getByRole('button', { name: 'Use demo project instead →', exact: true }).click()
+    await page.getByRole('button', { name: 'Switch to my files', exact: true }).click()
+  }
+  await projectSaveStarted
+  const navigation = page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
+  await navigation.getByRole('button', { name: 'Author', exact: true }).click()
+  await expect(page.getByTestId('author-ai-assist')).toBeVisible()
+  await navigation.getByRole('button', { name: 'Sources', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Add Source Material' })).toBeVisible()
+  const analyzeSources = page.getByRole('button', { name: 'Analyze Sources', exact: true })
+  await expect(analyzeSources).toBeVisible()
+  await expect(analyzeSources).toBeDisabled()
+  await expect(page.locator('header').getByText(projectName, { exact: true })).toBeVisible()
+  await expect(page.locator('header').getByText('Saving changes', { exact: true })).toBeVisible()
+  expect(cloud.saves).toHaveLength(managementSaves)
+
+  releaseProjectSave()
+  await expect(page.locator('header').getByText('All changes saved', { exact: true })).toBeVisible()
+  const projectSaves = cloud.saves.slice(managementSaves)
+  expect(projectSaves.length).toBeGreaterThanOrEqual(1)
+  expect(projectSaves.length).toBeLessThanOrEqual(2)
+  expect(projectSaves.at(-1)?.isDemoMode).toBe(false)
+  expect(projectSaves.at(-1)?.htmlMasterPages).toEqual(
+    expect.arrayContaining([expect.objectContaining({ contentWidth: 1500 })]),
+  )
+  expect(projectSaves.at(-1)?.recordRevision).toBe(managementRevision + projectSaves.length)
+  expect(cloud.saves.map(record => record.recordRevision))
+    .toEqual(cloud.saves.map((_, index) => index + 1))
 })
 
 test('a stale-write conflict is visible and reload restores the last successful cloud save', async ({ page }) => {
