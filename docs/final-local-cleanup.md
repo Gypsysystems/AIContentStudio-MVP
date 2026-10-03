@@ -147,16 +147,20 @@ Serial JSON is `.playwright/final-independent/gates/async-serial.json`;
 other completed gates use distinct `async-*` logs/reports/exit markers there.
 Pre-mitigation and interrupted logs remain separate and unmodified.
 
-The baseline was verified synchronized before work began. CLI push preflight
-fails authentication (`Invalid username or token`); integration
-inventory exposes GitHub only as an unconnected connector. Git synchronization
-therefore requires authorization recovery before any claim that the subsequent
-cleanup commit matches local HEAD, origin/main and live GitHub main.
+The baseline was verified synchronized before work began. The initial CLI
+preflight and actual push failed authentication (`Invalid username or token`);
+at that stage GitHub was unconnected and the cleanup commit remained local.
+The user subsequently connected GitHub. The connected API confirmed `main`
+still pointed to the expected synchronized parent. Git transport credentials
+and connector authorization are separate: the restored connection permits
+the exact local Git objects to be transferred through the credential-injecting
+API, with tree/commit hash checks and a guarded, non-forced branch update.
 
 The final completion response and `.playwright/final-independent/gates/git-verification.json`
-record the exact local commit, working-tree state, push attempt and whether
-the live remote identity was verifiable. No synchronization equality is claimed
-while authentication is blocked. A commit cannot embed its own SHA without
+record the exact final local commit, working-tree state, historical failed
+CLI attempt, connector transfer and fresh live-remote verification. Those
+completion checks determine synchronization; the earlier CLI failure is not
+proof that an authorized connector transfer failed. A commit cannot embed its own SHA without
 changing that SHA; the final identity belongs in the Git verification evidence
 and completion response.
 
@@ -177,7 +181,6 @@ and completion response.
 - Administrator confirmation of actual schema/RPC/grants/RLS/private Storage,
   narrow identities and operational suitability of the separately observed
   pooler backend transport.
-- GitHub authorization recovery if the CLI/connector remains unavailable.
 
 ### Requires explicit consequential approval
 
