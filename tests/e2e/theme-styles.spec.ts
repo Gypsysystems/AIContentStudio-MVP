@@ -522,7 +522,9 @@ test(`falls back safely when the persisted style profile ID is ${persistedId ===
       .flatMap(theme => theme.styleProfiles)
       .find(profile => profile.name === profileName)?.id)
     await page.reload()
-    await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+    await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+    await page.getByRole("button", { name: `Open project ${projectName}`, exact: true }).click()
+    await expect(page.getByTestId("project-home")).toBeVisible()
     await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: /^Brand & Output/ }).click()
     await expect(
       page.getByRole("heading", { name: "Theme & Style Profiles" }),
@@ -543,8 +545,7 @@ test(`falls back safely when the persisted style profile ID is ${persistedId ===
       `Explicit save ${Date.now()}`,
     )
     await page.reload()
-    await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
-    await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: /^Brand & Output/ }).click()
+    await expect(page.getByRole("heading", { name: "Theme & Style Profiles" })).toBeVisible()
     await expect(page.getByRole("textbox", { name: "Search profiles…" })).toHaveValue(profileName)
     await expect(page.getByRole("button", { name: "✓ Applied to Project" })).toBeVisible()
     await expect(page.getByText("Current project profile:").locator(".."))
@@ -586,9 +587,16 @@ test("resolves rich profiles by project, active, then active-theme priority acro
     name: string,
     expectedId: string,
     patchedRecord: StoredProject,
+    fromProjects = false,
   ) => {
     await page.reload()
-    await expect(page.getByText("Sources", { exact: true }).first()).toBeVisible()
+    if (fromProjects) {
+      await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+      await page.getByRole("button", { name: `Open project ${projectName}`, exact: true }).click()
+      await expect(page.getByTestId("project-home")).toBeVisible()
+    } else {
+      await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+    }
     await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: /^Brand & Output/ }).click()
     await expect(
       page.getByRole("textbox", { name: "Search profiles…" }),
@@ -618,6 +626,7 @@ test("resolves rich profiles by project, active, then active-theme priority acro
     "Project Priority Profile",
     String(projectPriority.id),
     projectPriorityRecord,
+    true,
   )
 
   await updateOnlyProject(page, project => ({

@@ -23,6 +23,7 @@ test('History shows saved file presence and unchanged hashes without reading byt
   }, id)
   expect(saved.unchangedHash).toBe(saved.hash)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project Current unsaved name', exact: true }).click()
   await page.getByTestId('topbar-project-history').click()
   const panel = page.getByTestId('file-history')
   await panel.getByLabel('Saved file ID').selectOption(saved.fileId)
@@ -84,6 +85,7 @@ test('a damaged saved checkpoint is unknown instead of being shown as file absen
     db.close()
   }, saved.checkpointId)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project File fixture', exact: true }).click()
   await page.getByTestId('topbar-project-history').click()
   const panel = page.getByTestId('file-history')
   await panel.getByLabel('Saved file ID').selectOption(saved.fileId)
@@ -114,6 +116,7 @@ test('switching file IDs while metadata is loading cannot show the old file time
     }
   }, id)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project Two files', exact: true }).click()
   await page.getByTestId('topbar-project-history').click()
   await page.evaluate(() => {
     const original = crypto.subtle.digest.bind(crypto.subtle)

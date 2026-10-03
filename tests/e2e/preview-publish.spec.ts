@@ -94,9 +94,13 @@ test('real Preview renders all committed stable-ID topics and structures, select
       h1: role(22, '#1655AA'), h2: role(16, '#1655AA'), h3: role(14, '#1655AA'),
       h4: role(12, '#1655AA'), body: role(11, '#334455'), caption: role(9, '#667788'),
       code: role(10, '#334455'), links: { color: '#1655AA', underline: true },
-      lists: { bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 14 },
-      tables: { headerBgColor: '#123ABC', headerTextColor: '#FFFFFF', bodyTextColor: '#334455',
-        borderColor: '#ABCDEF', borderWidth: 1, cellPadding: 6, alternateRows: false },
+      // Refresh renders Branding, so the fixture needs the full profile shape,
+      // including fields that the read-only export projection did not require.
+      lists: { orderedL1: '1.', orderedL2: 'a.', orderedL3: 'i.',
+        bulletL1: '•', bulletL2: '○', bulletL3: '–', itemSpacing: 4, indentation: 14 },
+      tables: { headerFontWeight: '600', headerBgColor: '#123ABC', headerTextColor: '#FFFFFF', bodyTextColor: '#334455',
+        borderColor: '#ABCDEF', borderWidth: 1, cellPadding: 6, alternateRows: false,
+        alternateRowColor: '#F9FAFB', firstColEmphasis: false },
       callouts: { note: callout, tip: callout, important: callout, warning: callout, example: callout },
     }
     theme.styleProfiles = [style]
@@ -136,6 +140,8 @@ test('real Preview renders all committed stable-ID topics and structures, select
     await saveProject(record)
   }, png)
   await page.reload()
+  await expect(page.getByRole('heading', { name: 'Theme & Style Profiles' })).toBeVisible()
+  await page.getByTestId('topbar-project-home').click()
   await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ })
     .getByRole('button', { name: 'Publish', exact: true }).click()
   await expect(page.getByTestId('publish-conditional-warning')).toContainText('HTML export condition context is required')
@@ -196,7 +202,9 @@ test('real Preview renders all committed stable-ID topics and structures, select
     await saveProject(record)
   })
   await page.reload()
-  await openPreview(page)
+  await expect(page.getByTestId('project-preview')).toBeVisible()
+  await page.getByRole('button', { name: 'Go to Publish' }).click()
+  await page.getByTestId('publish-preview-document').click()
   await expect(page.getByTestId('project-preview').getByRole('navigation', { name: 'Committed table of contents' }).locator('a'))
     .toHaveText(['Renamed Alpha', 'Zeta Atlas', 'Needs Grounding topic'])
   const reordered = page.getByTestId('project-preview').locator('article[data-topic-id]')
@@ -214,7 +222,9 @@ test('real Preview renders all committed stable-ID topics and structures, select
     await saveProject(record)
   })
   await page.reload()
-  await openPreview(page)
+  await expect(page.getByTestId('project-preview')).toBeVisible()
+  await page.getByRole('button', { name: 'Go to Publish' }).click()
+  await page.getByTestId('publish-preview-document').click()
   const hidden = page.getByTestId('project-preview').locator('article[data-topic-id="stable-a"]')
   await expect(hidden).toContainText('HTML export rejects this topic')
   await expect(hidden.getByTestId('preview-authored-content')).toContainText('Stable Alpha content')

@@ -39,6 +39,7 @@ test('an unreadable direct parent leaves selected checkpoint detail visible but 
     db.close()
   }, parentId)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project Change summary fixture', exact: true }).click()
   await page.getByTestId('topbar-project-history').click()
   const selected = page.locator('section[aria-labelledby="history-list-title"] > ol > li').filter({ hasText: 'Selected checkpoint' })
   await selected.getByRole('button', { name: 'Inspect saved checkpoint' }).click()
@@ -92,6 +93,7 @@ test('malformed and ambiguous parent links display unknown, not a first-checkpoi
   }
   await changeLink('')
   await page.reload()
+  await page.getByRole('button', { name: 'Open project Selected snapshot', exact: true }).click()
   await page.getByTestId('topbar-project-history').click()
   const row = page.locator('section[aria-labelledby="history-list-title"] > ol > li').filter({ hasText: 'Selected with bad link' })
   await row.getByRole('button', { name: 'Inspect saved checkpoint' }).click()

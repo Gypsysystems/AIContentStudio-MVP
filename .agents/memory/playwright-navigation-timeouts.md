@@ -20,3 +20,9 @@ Long, multi-stage UI fixtures can spend almost all of a short test budget before
 **Why:** In a complete parallel run, a source appeared in the UI while the header still said "Saving changes"; a separate multi-stage Author test reached reload with only a couple of seconds left. Neither failure demonstrated a broken Author feature.
 
 **How to apply:** Wait for the app's explicit save-complete signal before checking persisted upload state. Give only an inherently long test its own sufficient budget; do not increase the suite-wide timeout or remove assertions.
+
+A `page.reload()` error reporting the whole test timeout is not necessarily a navigation timeout. Check the trace's reload start against the overall test deadline before attributing it to routing.
+
+**Why:** A long acceptance journey reached reload with roughly two seconds remaining; the app modules had not loaded before the test deadline. The same complete journey passed unchanged in isolation.
+
+**How to apply:** Distinguish exhausted whole-test budgets from failed restoration after hydration. Preserve the trace, reproduce with unchanged deadlines and retries, and keep app-readiness and persistence assertions; do not raise timeouts just to obtain a pass.

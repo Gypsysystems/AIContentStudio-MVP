@@ -20,6 +20,7 @@ test('keeps AI Generate TOC unavailable in local project mode', async ({ page })
     await projectRepository.setActiveProjectId(id)
   }, projectId)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project Local TOC gate project', exact: true }).click()
 
   await openTableOfContents(page)
   await expect(page.getByTestId('real-toc-screen')).toBeVisible()

@@ -33,5 +33,5 @@ test("creates a project and reopens it after a reload", async ({ page }) => {
   await expect(
     page.getByText(projectName, { exact: true }).first(),
   ).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  await expect(page.getByTestId("project-home")).toBeVisible()
 })

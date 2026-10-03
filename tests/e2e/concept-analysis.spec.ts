@@ -157,6 +157,14 @@ async function openRealAnalysis(page: Page) {
   await expect(page.getByRole("heading", { name: "Source-backed Analysis" })).toBeVisible()
 }
 
+async function reloadAnalysisAndOpenEvidence(page: Page) {
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Source-backed Analysis" })).toBeVisible()
+  await page.getByRole("navigation", { name: /Project (?:navigation|modules)/ })
+    .getByRole("button", { name: "Sources", exact: true }).click()
+  await waitForCurrentEvidence(page)
+}
+
 async function seedAnalyzableContent(
   page: Page,
   projectName: string,
@@ -264,8 +272,7 @@ test("derives persisted concepts and terminology only from evidence with inspect
   await expect(page.getByTestId("analysis-evidence-dialog")).toContainText(exactSentence)
   await page.getByTestId("analysis-evidence-dialog").getByRole("button").click()
 
-  await page.reload()
-  await waitForCurrentEvidence(page)
+  await reloadAnalysisAndOpenEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("concept-analysis-freshness")).toHaveText("Current")
   const reloaded = (await readProjects(page)).find(candidate => candidate.projectName === projectName)!
@@ -301,8 +308,7 @@ test("supports evidence-backed paraphrases and reports only genuinely unsupporte
     { id: "claim-supported", type: "para", content: supportedParaphrase },
     { id: "claim-unsupported", type: "para", content: unsupportedClaim },
   ])
-  await page.reload()
-  await waitForCurrentEvidence(page)
+  await reloadAnalysisAndOpenEvidence(page)
   await openRealAnalysis(page)
 
   await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
@@ -338,8 +344,7 @@ test("supports evidence-backed paraphrases and reports only genuinely unsupporte
   expect(stored.unsupportedAnalysis.findings[0].nearMatches[0].relationship).toBe("near-match")
 
   const findingId = stored.unsupportedAnalysis.findings[0].id
-  await page.reload()
-  await waitForCurrentEvidence(page)
+  await reloadAnalysisAndOpenEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Current")
   const reloaded = (await readProjects(page)).find(project => project.projectName === projectName)!
@@ -361,8 +366,7 @@ test("marks unsupported analysis stale when analyzed content changes and refresh
   await seedAnalyzableContent(page, projectName, [
     { id: "claim-one", type: "para", content: "Administrators turn on audit logging before launch." },
   ])
-  await page.reload()
-  await waitForCurrentEvidence(page)
+  await reloadAnalysisAndOpenEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("unsupported-count")).toHaveText("0")
 
@@ -378,8 +382,7 @@ test("marks unsupported analysis stale when analyzed content changes and refresh
     { id: "claim-one", type: "para", content: "Administrators turn on audit logging before launch." },
     { id: "claim-two", type: "para", content: "The system supports interplanetary transport." },
   ], false)
-  await page.reload()
-  await waitForCurrentEvidence(page)
+  await reloadAnalysisAndOpenEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("unsupported-analysis-freshness")).toHaveText("Stale")
   await expect(page.getByTestId("unsupported-count")).toHaveText("0")
@@ -482,8 +485,7 @@ test("detects only concrete cross-source conflicts and conservative source-backe
 
   const conflictIds = stored.conceptAnalysis.conflicts.map(conflict => conflict.id)
   const gapIds = stored.conceptAnalysis.gaps.map(gap => gap.id)
-  await page.reload()
-  await waitForCurrentEvidence(page)
+  await reloadAnalysisAndOpenEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("conflict-count")).toHaveText("2")
   const reloaded = (await readProjects(page)).find(project => project.projectName === projectName)!
@@ -611,8 +613,7 @@ test("duplicates grounded analysis with copied source references and stable anal
   await seedAnalyzableContent(page, projectName, [
     { id: "navigation-claim", type: "para", content: "Stellar Navigation Console supports teleportation." },
   ])
-  await page.reload()
-  await waitForCurrentEvidence(page)
+  await reloadAnalysisAndOpenEvidence(page)
   await openRealAnalysis(page)
   await expect(page.getByTestId("unsupported-count")).toHaveText("1")
 

@@ -34,6 +34,8 @@ test('administration is separate from workflow and saved project settings return
     repo.setActiveProjectId(projectId)
   }, id)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project Administration fixture', exact: true }).click()
+  await expect(page.getByTestId('project-home')).toBeVisible()
   await page.getByTestId('topbar-administration').click()
   const workspace = page.getByTestId('administration-workspace')
   await expect(workspace.getByRole('heading', { name: 'Administration' })).toBeVisible()

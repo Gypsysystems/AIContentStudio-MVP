@@ -35,6 +35,7 @@ test('History inspects each immutable saved project and manifest without substit
     return { first, second }
   }, projectId)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project Unsaved current name', exact: true }).click()
   await page.getByTestId('topbar-project-history').click()
   const firstRow = page.locator('section[aria-labelledby="history-list-title"] > ol > li').filter({ hasText: 'First saved snapshot' })
   await firstRow.getByRole('button', { name: 'Inspect saved checkpoint' }).click()
@@ -99,6 +100,7 @@ test('refresh discards stale full verification and refuses a damaged saved recor
     return checkpoint
   }, projectId)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project Verified project', exact: true }).click()
   await page.getByTestId('topbar-project-history').click()
   const row = page.locator('section[aria-labelledby="history-list-title"] > ol > li').filter({ hasText: 'Integrity baseline' })
   await page.evaluate(() => {

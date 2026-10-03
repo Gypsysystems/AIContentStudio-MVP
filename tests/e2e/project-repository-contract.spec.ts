@@ -264,11 +264,11 @@ test('v1 App hydration restores default styles, layouts, and conditions after re
     projectRepository.setActiveProjectId(projectId)
   }, legacy.projectId as string)
   await page.reload()
+  await page.getByRole('button', { name: `Open project ${legacy.projectName}`, exact: true }).click()
+  await expect(page.getByTestId('project-home')).toBeVisible()
 
   const expectDefaultsInApp = async () => {
-    await expect(page.getByRole('heading', { name: 'Add Source Material' })).toBeVisible()
-
-    await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('button', { name: /^Brand & Output/ }).click()
+    await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ }).getByRole('button', { name: /^Brand & Output/ }).click()
     await expect(page.getByRole('heading', { name: 'Theme & Style Profiles' })).toBeVisible()
     await expect(page.getByPlaceholder('Search profiles…')).toHaveValue('Presight Brand')
     await page.getByRole('button', { name: 'Output Templates', exact: true }).click()
@@ -294,7 +294,7 @@ test('v1 App hydration restores default styles, layouts, and conditions after re
     await expect(page.getByText('{{ProductName}}', { exact: true })).toBeVisible()
     await expect(page.getByText('{{Version}}', { exact: true })).toBeVisible()
 
-    await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('button', { name: 'Author' }).click()
+    await page.getByRole('navigation', { name: /Project (?:navigation|modules)/ }).getByRole('button', { name: 'Author' }).click()
     const authorEditor = page.getByTestId('author-editor')
     await authorEditor.locator('details > summary').click()
     await authorEditor.getByRole('button', { name: 'Conditions', exact: true }).click()
@@ -314,6 +314,7 @@ test('v1 App hydration restores default styles, layouts, and conditions after re
   expect(storedBeforeReload).toMatchObject({ schemaVersion: SCHEMA_VERSION, projectId: legacy.projectId })
 
   await page.reload()
+  await expect(page.getByTestId('author-workspace')).toBeVisible()
   await expectDefaultsInApp()
 })
 

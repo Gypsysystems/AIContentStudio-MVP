@@ -536,12 +536,12 @@ test('mock-cloud Author explicitly reuses a source catalog topic into a target w
     .toEqual(recordBeforeConflict.topicContent[copiedTopicId])
   expect(cloud.records.get(sourceProjectId)).toEqual(originalSource)
 
-  // A hard reload starts the saved cloud project on Sources; reopening Author
-  // verifies the copied text and origin survive the app's normal hydration path.
+  // Refresh preserves Author; explicitly reselecting the copied topic verifies
+  // its text and origin survive the app's normal hydration path.
   await page.reload()
   await expect(page.locator('header').getByText('Acceptance Destination Project', { exact: true }))
     .toBeVisible()
-  await openAuthor(page)
+  await expect(page.getByTestId('author-workspace')).toBeVisible()
   await selectTopic(page, copiedTopicId)
   await expect(page.getByTestId('author-editor')).toContainText(reusedText)
   const appLoadedAfterReload = await loadProjectThroughAppRepository(page, destinationProjectId)

@@ -322,6 +322,7 @@ test('History panel accepts a reason, refreshes the checkpoint list, and verifie
     projectRepository.setActiveProjectId(id)
   }, projectId)
   await page.reload()
+  await page.getByRole('button', { name: 'Open project History UI project', exact: true }).click()
 
   await expect(page.getByTestId('topbar-project-history')).toBeVisible()
   await page.getByTestId('topbar-project-history').click()
