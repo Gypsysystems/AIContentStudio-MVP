@@ -12,6 +12,7 @@ type CloudRecord = Record<string, unknown> & {
 type HomeCloud = {
   records: Map<string, CloudRecord>
   holdNextSave: (() => Promise<void>) | null
+  auth: { signedIn: boolean; userId: string; workspaceId: string }
 }
 
 type HomeStoredProject = {
@@ -92,6 +93,11 @@ function projectHomeModelFixture(): ProjectHomeInput {
 }
 
 async function mockCloud(page: Page): Promise<HomeCloud> {
+  const cloud: HomeCloud = {
+    records: new Map(),
+    holdNextSave: null,
+    auth: { signedIn: true, userId: "project-home-user", workspaceId: "project-home-workspace" },
+  }
   const session = {
     authenticated: true,
     mode: "supabase",
@@ -101,17 +107,22 @@ async function mockCloud(page: Page): Promise<HomeCloud> {
     activeOrganizationName: "Project Home Org",
     activeWorkspaceName: "Project Home Workspace",
   }
-  await page.route("**/api/auth/session", route => route.fulfill({
+  await page.route("**/api/auth/session", route => route.fulfill(cloud.auth.signedIn ? {
     status: 200,
-    contentType: "application/json",
-    body: JSON.stringify(session),
-  }))
+    json: { ...session, userId: cloud.auth.userId, activeWorkspaceId: cloud.auth.workspaceId },
+  } : { status: 401, json: { authenticated: false } }))
   await page.route("**/api/auth/refresh", route => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify(session),
+    status: cloud.auth.signedIn ? 200 : 401,
+    json: { authenticated: cloud.auth.signedIn },
   }))
-  const cloud: HomeCloud = { records: new Map(), holdNextSave: null }
+  await page.route("**/api/auth/logout", route => {
+    cloud.auth.signedIn = false
+    return route.fulfill({ json: { authenticated: false } })
+  })
+  await page.route("**/api/auth/login", route => {
+    cloud.auth.signedIn = true
+    return route.fulfill({ json: { authenticated: true } })
+  })
   await page.route("**/api/cloud-projects", async route => {
     const input = route.request().postDataJSON() as Record<string, unknown>
     const action = input.action
@@ -508,6 +519,99 @@ test("project-list reopen lands on Home while active-project reload preserves So
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   await openProjectHome(page, name)
   await expect(homeProjectHeading(page, name)).toBeVisible()
+})
+
+test("Projects refresh retains the active project without entering its workflow", async ({ page }) => {
+  const cloud = await mockCloud(page)
+  const name = `Dashboard refresh ${Date.now()}`
+  await createProject(page, name)
+  await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  const before = JSON.stringify([...cloud.records.values()])
+  const pointer = await page.evaluate(() => localStorage.getItem("docflow-active-project:project-home-workspace"))
+  expect(pointer).toBeTruthy()
+  await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem("docflow-active-project:project-home-workspace"))).toBe(pointer)
+  expect(JSON.stringify([...cloud.records.values()])).toBe(before)
+  await page.getByRole("button", { name: `Open project ${name}`, exact: true }).click()
+  await expect(page.getByTestId("project-home")).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  expect(JSON.stringify([...cloud.records.values()])).toBe(before)
+})
+
+test("explicit logout/login lands on Projects despite a retained active project", async ({ page }) => {
+  await page.clock.install()
+  const cloud = await mockCloud(page)
+  const name = `Fresh login ${Date.now()}`
+  await createProject(page, name)
+  await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  const before = JSON.stringify([...cloud.records.values()])
+  const pointer = await page.evaluate(() => localStorage.getItem("docflow-active-project:project-home-workspace"))
+  await page.locator("header").getByRole("button", { name: "Sign out", exact: true }).click()
+  await expect(page.getByRole("textbox", { name: "Email", exact: true })).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem("docflow-active-project:project-home-workspace"))).toBe(pointer)
+  await page.getByRole("textbox", { name: "Email", exact: true }).fill("navigation@example.test")
+  await page.getByLabel("Password", { exact: true }).fill("synthetic-test-password")
+  await page.getByRole("button", { name: "Sign in", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem("docflow-active-project:project-home-workspace"))).toBe(pointer)
+  expect(JSON.stringify([...cloud.records.values()])).toBe(before)
+  // A later verified workspace switch must not inherit the login marker.
+  await page.evaluate(id => localStorage.setItem("docflow-active-project:login-other-workspace", id!), pointer)
+  cloud.auth.workspaceId = "login-other-workspace"
+  await page.clock.fastForward(60_001)
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  cloud.auth.workspaceId = "project-home-workspace"
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  await page.getByRole("button", { name: `Open project ${name}`, exact: true }).click()
+  await expect(page.getByTestId("project-home")).toBeVisible()
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: "Sources", exact: true }).click()
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+})
+
+test("dashboard intent is scoped to the verified user and workspace", async ({ page }) => {
+  const cloud = await mockCloud(page)
+  await createProject(page, `Scoped navigation ${Date.now()}`)
+  await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  cloud.auth.userId = "another-navigation-user"
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  cloud.auth.userId = "project-home-user"
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  const pointer = await page.evaluate(() => localStorage.getItem("docflow-active-project:project-home-workspace"))
+  cloud.auth.workspaceId = "another-navigation-workspace"
+  await page.evaluate(id => localStorage.setItem("docflow-active-project:another-navigation-workspace", id!), pointer)
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+})
+
+test("stale and inaccessible active projects safely fall back to Projects", async ({ page }) => {
+  await mockCloud(page)
+  await page.goto("/")
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  await page.evaluate(() => {
+    sessionStorage.clear()
+    localStorage.setItem("docflow-active-project:project-home-workspace", "missing-project")
+  })
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  await page.route("**/api/cloud-projects", async (route) => {
+    const input = route.request().postDataJSON()
+    if (input.action === "read") return route.fulfill({ status: 403, json: { code: "PROJECT_FORBIDDEN", error: "Project is not accessible." } })
+    return route.fallback()
+  })
+  await page.evaluate(() => sessionStorage.clear())
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Add Source Material" })).toHaveCount(0)
 })
 
 test("Home shows read-only workflow status while the rail and unique analysis action handle navigation", async ({ page }) => {

@@ -143,7 +143,8 @@ import { ProjectHistoryPanel } from './ProjectHistoryPanel'
 import { AllProjectsHistory } from './AllProjectsHistory'
 import { validateCheckpointReason, type ProjectCheckpointSummary } from './projectCheckpoint'
 import { summarizeProjectHome } from './projectHomeModel'
-import { useCloudAccount } from './AuthGate'
+import { useCloudAccount, useDashboardEntry } from './AuthGate'
+import { readDashboardHint, recordDashboardHint } from './startupNavigation'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Screen = 'dashboard' | 'administration' | 'project-home' | 'history' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
@@ -16769,6 +16770,7 @@ export default function App() {
   // Subscribing to the account provider keeps role-dependent controls current
   // when the verified cloud session refreshes without an App navigation.
   const cloudAccount = useCloudAccount()
+  const dashboardEntry = useDashboardEntry()
   // v2.1 — stable ProjectSource model
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [historyReturnTo, setHistoryReturnTo] = useState<Screen>('project-home')
@@ -19583,12 +19585,13 @@ export default function App() {
     startupInitializedRef.current = true
     const init = async () => {
       try {
+        const stayOnDashboard = dashboardEntry || readDashboardHint()
         const activeId = getActiveProjectId()
         if (activeId) {
           const record = await loadLatestProjectForOpen(activeId)
           if (record) {
             await hydrateFromRecord(record)
-            setScreen('sources') // Preserve the existing active-project reload destination.
+            setScreen(stayOnDashboard ? 'dashboard' : 'sources')
           }
         }
       } catch (e) {
@@ -19601,6 +19604,10 @@ export default function App() {
     }
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!appLoading) recordDashboardHint(screen === 'dashboard')
+  }, [appLoading, screen])
 
   // ── Hydrate App state from a loaded ProjectRecord ─────────────────────────
   // Always sets ALL fields — conditional hydration causes isolation bugs.

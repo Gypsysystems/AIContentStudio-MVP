@@ -20,12 +20,17 @@ type CloudAccount = {
 }
 
 const CloudAccountContext = createContext<CloudAccount | null>(null)
+const DashboardEntryContext = createContext(false)
 const CONNECTION_ERROR = 'Unable to connect. Try again shortly.'
 const CREDENTIAL_ERROR = 'Incorrect email or password.'
 const INACTIVE_ERROR = 'Your account is inactive. Contact an administrator.'
 
 export function useCloudAccount(): CloudAccount | null {
   return useContext(CloudAccountContext)
+}
+
+export function useDashboardEntry(): boolean {
+  return useContext(DashboardEntryContext)
 }
 
 async function authRequest(action: 'session' | 'login' | 'logout' | 'refresh',
@@ -70,12 +75,18 @@ function sessionState(status: number, body: Record<string, unknown>): AuthState 
   return { kind: 'unavailable', message: CONNECTION_ERROR }
 }
 
+function entryScope(state: Extract<AuthState, { kind: 'signed-in' }>): string {
+  return state.mode === 'supabase'
+    ? JSON.stringify([state.userId, state.workspaceId]) : 'local-dev'
+}
+
 export default function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ kind: 'loading' })
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const cloudAppReady = useRef(false)
+  const explicitLoginEntry = useRef<string | null>(null)
 
   const checkSession = useCallback(async () => {
     try {
@@ -112,6 +123,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         setCloudProjectMode(false)
         setCloudAuthSession(null)
       }
+      // Bind an explicit login's landing policy only after session verification.
+      if (next.kind === 'signed-in' && explicitLoginEntry.current === 'pending')
+        explicitLoginEntry.current = entryScope(next)
       setState(next)
     } catch {
       setState({ kind: 'unavailable', message: CONNECTION_ERROR })
@@ -132,6 +146,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       const { status, body } = await authRequest('login', { email, password })
       if (status === 200) {
         setPassword('')
+        explicitLoginEntry.current = 'pending'
         await checkSession()
       } else if (status === 400 || status === 401 || status === 422) {
         setState({ kind: 'signed-out', message: CREDENTIAL_ERROR })
@@ -152,6 +167,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       if (status !== 200) setState(sessionState(status, body))
       else {
         cloudAppReady.current = false
+        explicitLoginEntry.current = null
         setCloudProjectMode(false)
         setCloudAuthSession(null)
         setState({ kind: 'signed-out' })
@@ -165,13 +181,14 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   if (state.kind === 'loading') return <div role="status" className="min-h-screen grid place-items-center text-sm text-gray-600">Checking session…</div>
   if (state.kind === 'signed-in') {
-    if (state.mode === 'local-dev') return <>{children}</>
-    return <CloudAccountContext.Provider key={state.workspaceId} value={{
+    const dashboardEntry = explicitLoginEntry.current === entryScope(state)
+    if (state.mode === 'local-dev') return <DashboardEntryContext.Provider value={dashboardEntry}>{children}</DashboardEntryContext.Provider>
+    return <DashboardEntryContext.Provider value={dashboardEntry}><CloudAccountContext.Provider key={state.workspaceId} value={{
       organizationName: state.organizationName,
       workspaceName: state.workspaceName,
       busy,
       signOut: () => { void logout() },
-    }}>{children}</CloudAccountContext.Provider>
+    }}>{children}</CloudAccountContext.Provider></DashboardEntryContext.Provider>
   }
    if (state.kind === 'cloud-pending') return <main className="min-h-screen bg-[#F7F5F0] flex items-center justify-center p-5">
       <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-7 shadow-sm">

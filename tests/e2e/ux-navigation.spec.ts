@@ -128,7 +128,7 @@ test("keeps the workflow keyboard accessible and usable at a narrow viewport", a
   expect(documentWidth).toBeLessThanOrEqual(376)
 })
 
-test("reopens a persisted existing project without losing its project identity", async ({ page }) => {
+test("Projects refresh stays on the dashboard and explicit reopen preserves project identity", async ({ page }) => {
   const projectName = `UX persisted project ${Date.now()}`
   await createProject(page, projectName)
   await expect(page.getByText(projectName, { exact: true }).first()).toBeVisible()
@@ -137,6 +137,13 @@ test("reopens a persisted existing project without losing its project identity",
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
   await expect(page.getByText(projectName, { exact: true })).toBeVisible()
 
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible()
+  await expect(page.getByText(projectName, { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: `Open project ${projectName}`, exact: true }).click()
+  await expect(page.getByTestId("project-home")).toBeVisible()
+  await expect(page.locator("header").getByText(projectName, { exact: true })).toBeVisible()
+  await workflowStep(page, "Sources").click()
   await page.reload()
   await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
   await expect(page.locator("header").getByText(projectName, { exact: true })).toBeVisible()
