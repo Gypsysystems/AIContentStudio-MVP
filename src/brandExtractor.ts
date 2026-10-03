@@ -201,7 +201,7 @@ async function extractPdfText(file: File): Promise<{
 }> {
   const pdfjsLib = await import('pdfjs-dist')
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.mjs',
+    'pdfjs-dist/build/pdf.worker.min.mjs',
     import.meta.url
   ).href
 

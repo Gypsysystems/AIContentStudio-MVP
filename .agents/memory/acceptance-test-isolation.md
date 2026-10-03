@@ -38,3 +38,27 @@ Use a controlled single-worker full sweep when parallel browser runs fail on tra
 **Why:** A loaded parallel sweep missed transient UI states in otherwise unchanged fixtures; the same cases passed in isolation and in a clean serial full sweep.
 
 **How to apply:** Distinguish run-dependent test failures from confirmed product defects. A clean serial sweep establishes functional acceptance coverage, not parallel-run timing reliability; report that distinction explicitly.
+
+Database isolation is insufficient for concurrent PostgreSQL fixtures that create or drop roles: roles are cluster-global.
+
+**Why:** Separate disposable databases still collide when fixtures reuse role names. A broad parallel gate must not accidentally test against role objects another fixture is changing.
+
+**How to apply:** Give concurrent SQL invocations separate owned clusters, or deliberately execute those fixtures serially. Keep their results separate from the comprehensive browser sweep and report the exclusion precisely.
+
+Raw legacy fixtures must be seeded only after the application's startup list/enrollment has successfully settled, not merely after a heading appears.
+
+**Why:** Headings render while loading; startup and an explicit authorized read can both try enrolling a newly seeded legacy record, producing a correct duplicate-ownership rejection.
+
+**How to apply:** Wait for a successful completed-list state before raw fixture writes. Preserve authorization assertions and server conflicts; do not treat duplicate enrollment as authorization success.
+
+Isolate Playwright's transform cache before its CLI starts, not only browser servers and reports.
+
+**Why:** Separate servers and reports do not separate the default mutable compiler entries. Cache ownership is a reproducibility boundary, not proof that every native loader failure is fixed.
+
+**How to apply:** Set an owned per-invocation `PWTEST_CACHE_DIR` inherited by workers. Disposable helpers can bind it to their private temporary directory; never clear another invocation's cache.
+
+Do not attribute a zero-duration, unassigned-worker native loader failure to an application assertion or a particular imported module without evidence.
+
+**Why:** Such failures persisted after compiler-cache isolation; reports identified no specific module or load hook, while complete serial coverage and focused repeated cases passed.
+
+**How to apply:** Preserve the complete parallel outcomes, distinguish collection/loading from test execution, and stop speculative fixes when there is no reproducible causal evidence.

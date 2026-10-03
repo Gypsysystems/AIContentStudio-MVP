@@ -1,0 +1,81 @@
+rules:
+  - id: local-security.hardcoded-private-credential
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Possible hardcoded private credential; move it to managed secret configuration.
+    metadata:
+      category: security
+      confidence: MEDIUM
+    pattern-regex: '(?i)(?:\b(?:const|let|var)\s+[A-Za-z_$][\w$]*(?:password|passwd|secret|private[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|service[_-]?role|connection[_-]?string|database[_-]?url|dsn)[\w$]*\s*=\s*["''][^"'']{12,}["'']|\b(?:password|passwd|secret|private[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|service[_-]?role|connection[_-]?string|database[_-]?url|dsn)\s*:\s*["''][^"'']{12,}["'']|\b(?:sk_live_|sk_test_|rk_live_|gh[pousr]_|github_pat_|xox[baprs]-|AKIA[0-9A-Z]{16}|AIza)[A-Za-z0-9_+./=-]{12,})'
+
+  - id: local-security.sensitive-logging
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Avoid logging token, cookie, authorization, connection, or raw provider/source error data.
+    metadata:
+      category: security
+      confidence: MEDIUM
+    pattern-regex: '(?i)\b(?:console|logger|log)\s*\.\s*(?:debug|info|warn|error|log|trace)\s*\([^)\n]*(?:\b[A-Za-z_$][\w$]*(?:token|cookie|authorization|connectionstring|connection_string|provider\w*(?:error|body)|source\w*(?:error|body))[\w$]*\b|\b(?:error|response)\.(?:body|data|text)\b)[^)\n]*\)'
+
+  - id: local-security.dynamic-code-execution
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Avoid eval and Function constructors for dynamic code execution.
+    metadata:
+      category: security
+      confidence: HIGH
+    pattern-regex: '\b(?:eval\s*\(|new\s+Function\s*\(|Function\s*\()'
+
+  - id: local-security.tls-validation-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: TLS certificate validation must not be disabled.
+    metadata:
+      category: security
+      confidence: HIGH
+    pattern-regex: '(?i)(?:\brejectUnauthorized\s*:\s*false\b|\b(?:tls|https)\.?\w*\s*\([^;\n]*\b(?:rejectUnauthorized|verify)\s*:\s*false\b|\bverify\s*:\s*false\b|\bNODE_TLS_REJECT_UNAUTHORIZED\s*=\s*["'']0["''])'
+
+  - id: local-security.cleartext-fetch
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Use HTTPS for network fetches unless a narrowly reviewed local-only exception applies.
+    metadata:
+      category: security
+      confidence: MEDIUM
+    pattern-regex: '(?i)\bfetch\s*\(\s*["'']http://'
+
+  - id: local-security.fetch-user-controlled-url
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Validate and constrain user-controlled URLs before passing them to fetch.
+    metadata:
+      category: security
+      confidence: MEDIUM
+    pattern-regex: '(?i)\bfetch\s*\(\s*(?:req(?:uest)?|input|params|query|body)\b'
+
+  - id: local-security.path-from-request
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Validate and constrain request-derived paths before filesystem access.
+    metadata:
+      category: security
+      confidence: MEDIUM
+    pattern-regex: '(?i)\bpath\s*\.\s*(?:join|resolve)\s*\([^)\n]*(?:req(?:uest)?|input|params|query|body|fileName|filename)\b'
+
+  - id: local-security.request-controlled-authorization
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Authorization decisions must use server-verified identity and membership, not request-supplied role or ownership fields.
+    metadata:
+      category: security
+      confidence: MEDIUM
+    pattern-regex: '(?i)\bif\s*\([^)\n]*(?:req(?:uest)?\.(?:body|query|params)\.(?:role|isAdmin|isOwner|userId|workspaceId|ownerId)|(?:body|query|params)\.(?:role|isAdmin|isOwner|userId|workspaceId|ownerId))[^)\n]*\)'
+
+  - id: local-security.url-embedded-credentials
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Do not embed credentials in URLs; use protected request headers or secret configuration.
+    metadata:
+      category: security
+      confidence: HIGH
+    pattern-regex: '(?i)\bhttps?://[^/\s"'']+:[^@\s"'']+@'

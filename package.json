@@ -15,6 +15,7 @@
     "test:sql:ai-catalog": "bash scripts/test-postgres.sh ai-catalog",
     "test:sql:topic-jobs": "bash scripts/test-postgres.sh topic-jobs",
     "test:consolidated": "bash scripts/test-postgres.sh full",
+    "test:parallel": "node scripts/test-parallel.mjs",
     "format": "oxfmt"
   },
   "dependencies": {

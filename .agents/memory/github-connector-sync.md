@@ -9,6 +9,12 @@ An added GitHub integration does not guarantee that the workspace's HTTPS Git re
 
 **How to apply:** If a requested sync hits that mismatch, use the existing connected API without reading or logging credentials. Verify the target branch has not changed and that uploaded Git objects match local hashes before advancing the branch. Confirm local and remote commit IDs afterward.
 
+A generic Git-pane `PUSH_REJECTED` message does not establish that the remote has newer commits.
+
+**Why:** The pane suggested remote divergence while a fresh fetch and connected branch read showed a fast-forward relationship; a push dry-run exposed invalid Git transport authentication.
+
+**How to apply:** Check current ancestry and a non-mutating push preflight before recommending pull/rebase. A healthy connector must not be reauthorized merely because separate Git transport credentials fail.
+
 Recheck the GitHub branch ref after a failed HTTPS push and before writing through the connector.
 
 **Why:** The remote branch can advance to the exact local commit asynchronously even when the command-line push reports an authentication error. Treating an earlier ref read as current would lead to unnecessary or conflicting connector writes.

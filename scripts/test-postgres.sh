@@ -95,6 +95,11 @@ server_log="$work_dir/postgres.log"
 server_pid=""
 mkdir "$socket_dir"
 chmod 700 "$work_dir" "$socket_dir"
+mkdir "$work_dir/playwright-transform-cache"
+chmod 700 "$work_dir/playwright-transform-cache"
+# Playwright's default OS-temp transform cache is shared across invocations.
+# Own this cache with the disposable helper; never clear another runner's cache.
+export PWTEST_CACHE_DIR="$work_dir/playwright-transform-cache"
 
 cleanup() {
   status=$?

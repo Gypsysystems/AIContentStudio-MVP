@@ -2,6 +2,9 @@ import { expect, test } from '@playwright/test'
 
 test('checkpoint metadata reads match full local reads and retain project authorization', async ({ page }) => {
   await page.goto('/')
+  // Finish startup's legacy list/enrollment before seeding this raw legacy fixture.
+  await page.getByRole('heading', { name: 'Projects', exact: true }).waitFor()
+  await expect(page.getByText('No projects yet', { exact: true })).toBeVisible()
   const result = await page.evaluate(async () => {
     const repo = await import('/src/projectRepository.ts' as string)
     const authorized = await import('/src/authorizedProjectService.ts' as string)
