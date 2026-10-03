@@ -245,6 +245,9 @@ export function createPlaywrightRunEnvironment(runId, port, baseEnvironment = pr
     REPLIT_PLAYWRIGHT_E2E_SERVER_PORT: String(port),
     REPLIT_PLAYWRIGHT_SQL_RUN_ID: runId,
     PWTEST_CACHE_DIR: resolve(dirname(createPlaywrightRunPaths("e2e", runId).outputDir), "transform-cache"),
+    // Playwright's supported compatibility path avoids Node 22 synchronous
+    // load-hook source validation. Scope this to owned test invocations only.
+    PLAYWRIGHT_FORCE_ASYNC_LOADER: "1",
   }
 }
 

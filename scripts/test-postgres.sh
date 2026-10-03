@@ -100,6 +100,9 @@ chmod 700 "$work_dir/playwright-transform-cache"
 # Playwright's default OS-temp transform cache is shared across invocations.
 # Own this cache with the disposable helper; never clear another runner's cache.
 export PWTEST_CACHE_DIR="$work_dir/playwright-transform-cache"
+# Match the owned parallel runner's Playwright/Node loader compatibility path.
+# This does not change NODE_OPTIONS or the application's development runtime.
+export PLAYWRIGHT_FORCE_ASYNC_LOADER=1
 
 cleanup() {
   status=$?

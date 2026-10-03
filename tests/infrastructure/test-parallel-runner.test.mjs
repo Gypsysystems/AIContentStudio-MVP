@@ -2,6 +2,8 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { randomUUID } from "node:crypto"
+import { spawnSync } from "node:child_process"
 import test from "node:test"
 import packageJson from "../../package.json" with { type: "json" }
 import {
@@ -66,6 +68,42 @@ test("parallel runner accepts only worker, repeat, and reporter options", () => 
   ]) {
     assert.throws(() => parseParallelArguments(args), undefined, JSON.stringify(args))
   }
+})
+
+test("owned runners pin Playwright's supported asynchronous loader without global Node flags", async () => {
+  const environment = createPlaywrightRunEnvironment(randomUUID(), 32123, {
+    PLAYWRIGHT_FORCE_ASYNC_LOADER: "",
+    NODE_OPTIONS: "--test-only-sentinel",
+  })
+  assert.equal(environment.PLAYWRIGHT_FORCE_ASYNC_LOADER, "1")
+  assert.equal(environment.NODE_OPTIONS, "--test-only-sentinel")
+  const sql = await readFile(new URL("../../scripts/test-postgres.sh", import.meta.url), "utf8")
+  assert.ok(sql.includes("export PLAYWRIGHT_FORCE_ASYNC_LOADER=1"))
+})
+
+test("installed Playwright uses the async loader and still imports actual TypeScript", () => {
+  const script = `
+    import Module, { createRequire } from "node:module";
+    import { dirname, join, resolve } from "node:path";
+    const require = createRequire(import.meta.url);
+    let syncCalls = 0, asyncCalls = 0;
+    const sync = Module.registerHooks, async = Module.register;
+    if (sync) Module.registerHooks = function(...args) { syncCalls++; return sync.apply(this, args); };
+    Module.register = function(...args) { asyncCalls++; return async.apply(this, args); };
+    const pw = require.resolve("playwright", { paths: [require.resolve("@playwright/test")] });
+    const { transform } = require(join(dirname(pw), "lib/common/index.js"));
+    const loaded = await transform.requireOrImport(resolve("src/publishProjection.ts"));
+    console.log(JSON.stringify({ syncCalls, asyncCalls, imported: typeof loaded.buildPublishProjection === "function" }));
+    process.exit(0);
+  `
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8", timeout: 30_000,
+    env: createPlaywrightRunEnvironment(randomUUID(), 32123),
+  })
+  assert.equal(result.status, 0, "Compatibility probe failed; diagnostic contents withheld")
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    syncCalls: 0, asyncCalls: 1, imported: true,
+  })
 })
 
 test("browser grep-invert excludes exactly the two opted-in SQL titles", () => {
@@ -145,6 +183,7 @@ test("runner identity uses the exact prefixes consumed by config and workers", a
     REPLIT_PLAYWRIGHT_E2E_SERVER_PORT: String(plan.port),
     REPLIT_PLAYWRIGHT_SQL_RUN_ID: plan.runId,
     PWTEST_CACHE_DIR: plan.browser.transformCacheDir,
+    PLAYWRIGHT_FORCE_ASYNC_LOADER: "1",
   })
 
   const keys = [
@@ -152,6 +191,7 @@ test("runner identity uses the exact prefixes consumed by config and workers", a
     "REPLIT_PLAYWRIGHT_E2E_SERVER_PORT",
     "REPLIT_PLAYWRIGHT_SQL_RUN_ID",
     "PWTEST_CACHE_DIR",
+    "PLAYWRIGHT_FORCE_ASYNC_LOADER",
     "REPL_PLAYWRIGHT_E2E_RUN_ID",
     "REPL_PLAYWRIGHT_E2E_SERVER_PORT",
     "REPL_PLAYWRIGHT_SQL_RUN_ID",

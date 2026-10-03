@@ -19,3 +19,16 @@ No broad deletion, trace rewriting, or erasure of failed-run history was perform
 - Final gate logs, exit markers, serial JSON and start/end fingerprints are written under ignored `.playwright/independent-batch/`, rather than `/tmp`. Parallel runs additionally keep their existing isolated per-run artifact paths.
 
 At the final inventory check, `.playwright/` retained **38,157 files / 1,547,138,549 bytes**, including owned compiler caches relevant to the unresolved native loader failures. Root `test-results/` still retained **30 files / 11,587,770 bytes**. These caches were not deleted as “redundant” while their diagnostic value remained unresolved. The retained legacy marker hash still matches its original hash. Both final failed parallel runs preserve original evidence, JSON/HTML and any produced artifacts.
+
+## Subsequent local-only cleanup
+
+The subsequent cleanup began at synchronized `6b9201eefe9375b377404ee92a0211c3302077f4`.
+New durable logs, scanner reports, exit markers, startup screenshot and code
+fingerprints are under `.playwright/final-independent/`. Full parallel reports
+continue to use owned per-invocation paths under `.playwright/runs/`.
+The instrumented passing sweep, reproduced default-loader failure and
+deliberately interrupted second default-loader sweep are retained separately
+from the final compatibility-loader gates. Interrupted evidence is not a
+complete gate even if its original status label remains `running`.
+The inventory above is historical, not a count of the enlarged current set.
+No historical failure reports, traces or caches were deleted by this cleanup.

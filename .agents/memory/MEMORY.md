@@ -37,6 +37,7 @@
 - [AI connection integrity](ai-connection-integrity.md) — bind requests to a workspace; canonicalize signed timestamps and reject reader URL TLS overrides.
 - [Async AI result boundary](async-ai-result-boundary.md) — worker execution must recheck signed connection readiness and sanitize persisted drafts separately from provider prompts.
 - [Playwright navigation timeouts](playwright-navigation-timeouts.md) — full UI suites can time out during dev-server page loads before assertions; distinguish this from feature failures.
-- [Acceptance test isolation](acceptance-test-isolation.md) — isolate runner-owned servers/artifacts, inherit worker port/UUID, and fail requested SQL gates instead of skipping.
+- [Acceptance test isolation](acceptance-test-isolation.md) — isolate owned runs/SQL, inherit worker identities, and scope loader compatibility to tests without weakening assertions.
 - [GitHub connector sync](github-connector-sync.md) — an added GitHub connection can write through its proxy even when the HTTPS git remote rejects push authentication.
+- [Security fixture safety](security-fixture-safety.md) — synthetic provider-shaped keys can trigger push protection; sanitization and formatting must preserve actual static-rule coverage.
 - [Management scope and origin](management-scope-origin.md) — selecting a project in management does not redefine where Back returns; explicit Continue can enter the selected project.

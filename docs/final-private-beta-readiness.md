@@ -2,7 +2,7 @@
 
 ## Scope and evidence boundary
 
-This is the single final-open-items readiness report. The original batch started from synchronized commit `e0ba91eb4acd5bf1dbe61ecd096715613adb6ddc` and completed at `597059edee6b446aaa4a6deed1207fcdf8a8d91e`. The independent follow-up batch starts from that clean synchronized revision.
+This is the final-open-items readiness report. The original batch started from synchronized commit `e0ba91eb4acd5bf1dbe61ecd096715613adb6ddc` and completed at `597059edee6b446aaa4a6deed1207fcdf8a8d91e`. The independent follow-up started from that revision and was subsequently synchronized at `6b9201eefe9375b377404ee92a0211c3302077f4`. The final local-only cleanup starts from that synchronized revision; its current evidence and synchronization outcome are recorded in [Final local cleanup](final-local-cleanup.md). Git synchronization is not private-beta approval.
 
 The prior automated baseline is **546 passing tests / 89 files**, a passing production build, and two TypeScript diagnostics at `src/contentExplorerModel.ts:566`. Its clean serial sweep does not prove parallel timing reliability or authenticated cloud readiness.
 
@@ -10,7 +10,7 @@ No secret values are inspected or disclosed. No authentication bypass, productio
 
 **Decision: authenticated private-beta acceptance has not yet passed. Full rollout and private-beta approval remain withheld.**
 
-Automated serial functional/build readiness has passed. Full-inventory parallel reliability has not been cleared: the independent follow-up still observes native test-loader failures before affected cases execute. The app can begin controlled, normally signed-in real-cloud acceptance only in an approved isolated environment subject to Section B's prerequisites. This is not approval to publish, invite beta users, or claim that the remote authorization/storage/provider environment is verified.
+Automated serial functional/build readiness has passed. The current full-inventory two-worker gate is cleared for the validated Node/Playwright compatibility setting by two complete uninstrumented passes. Historical native-loader failures remain preserved, and their original module/race is not identified; this is not universal determinism. See the latest cleanup report for exact current gates and Git status. The app can begin controlled, normally signed-in real-cloud acceptance only in an approved isolated environment subject to Section B's prerequisites. This is not approval to publish, invite beta users, or claim that the remote authorization/storage/provider environment is verified.
 
 ## A. Complete / verified automated
 
@@ -52,9 +52,18 @@ The initial complete serial sweep recorded **558 passed, 3 failed, 0 skipped, 0 
 
 The first isolation-focused run passed all 18 affected product tests but failed a newly introduced infrastructure assumption that disabled HMR meant no WebSocket transport. Vite still opens its native transport. The corrected regression permits transport while strictly rejecting `update`/`full-reload` frames and extra main-frame navigation after an exclusively created/cleaned synthetic Markdown sentinel. Its standalone proof, full-suite invocation, repeated parallel invocation and concurrent second runner all passed. Earlier failed outcomes remain recorded above rather than being counted as clean.
 
-The running normal app renders the expected signed-out sign-in screen. An anonymous proxied-browser check confirmed only expected `401` responses from `/api/auth/session` and `/api/auth/refresh`, zero uncaught page errors and zero failed network requests. This is startup/auth-denial evidence, not authenticated cloud acceptance.
+At the time of the prior batch, the normal app rendered the expected signed-out sign-in screen. Its anonymous proxied-browser check confirmed only expected `401` responses from `/api/auth/session` and `/api/auth/refresh`, zero uncaught page errors and zero failed network requests. This is historical startup/auth-denial evidence, not current process status or authenticated cloud acceptance. Consult the final local cleanup report for the latest startup observation.
 
-### Independent follow-up batch
+### Latest local-only cleanup
+
+- Sanitized security fixtures exercise all **9 expected positive rules / 0 negative findings** with no contiguous common provider-secret shapes.
+- Scoped owned acceptance runners to Playwright's supported asynchronous loader. Application imports/runtime flags, assertions, timeouts and retry policy are unchanged.
+- Final serial: **568 passed / 91 files**. Two full uninstrumented parallel sweeps: **566 browser + 2 SQL passed each**, no failures/skips/flaky results/retries and no input changes.
+- Final infrastructure/security helpers: **31 passed**; repeated publishing suite: **33 passed**. TypeScript/build/audit/local static checks pass; OSV and managed scanner clearance remain unverified.
+- Current startup is anonymous only; the app runs and the development Topic worker remains stopped. Git status and the exact completion evidence are in [Final local cleanup](final-local-cleanup.md).
+- Real-cloud acceptance and consequential actions remain subject to Sections B and C.
+
+### Historical independent follow-up batch
 
 - Added a full-inventory parallel runner with one immutable acceptance server and isolated UUID/port/JSON/HTML artifacts per invocation. It excludes only the two named SQL integration tests from the browser sweep and then executes both separately in an owned disposable PostgreSQL cluster. Cluster-global fixture role names make a shared-cluster concurrent SQL run unsafe; serial SQL execution is deliberate, not a weakened assertion.
 - The existing full serial command, inventory, one-worker execution and zero-retry contract remain unchanged. Both the serial/SQL helper and parallel runner now own their Playwright compiler caches; ports and reports alone did not isolate the default shared OS-temp transform cache. The parallel command disallows arbitrary filtering and records base revision, dirty state, exact commands, start/end code-input fingerprint, worker/repeat settings, and complete JSON outcome counts.
@@ -64,9 +73,9 @@ The running normal app renders the expected signed-out sign-in screen. An anonym
 - `SESSION_SECRET` guidance was stale. Runtime authentication consumes Supabase access/refresh tokens in HttpOnly cookies and verifies sessions through Supabase; no application runtime reference consumes or validates `SESSION_SECRET`. The existing secret was not inspected, changed, or removed.
 - A raw legacy checkpoint fixture now waits for the successful empty Projects list before seeding. A heading alone renders during loading and is not a startup-enrollment fence. All authorization/checkpoint assertions and duplicate-enrollment rejection behavior remain unchanged.
 - The first complete parallel browser sweep recorded **565 passed / 1 failed**; both separately executed SQL cases passed. Its retained trace identified same-page startup enrollment overlapping raw legacy fixture creation. A later complete sweep recorded **564 passed / 2 failed**, with both SQL cases passing: the HTML ZIP case failed in the test loader before execution (duration zero, worker index -1), and a long theme-profile fixture timed out during its final IndexedDB probe. These are not clean runs or proven product assertion failures. The affected cases subsequently passed **9/9** repeated two-worker executions after compiler-cache isolation; full final gates remain separately required.
-- Final gates are complete. Serial functional acceptance is clean; comprehensive parallel reliability is **not cleared**. The final evidence is below; prior results remain historical, not substituted for these gates.
+- At the end of this historical batch, serial functional acceptance was clean and comprehensive parallel reliability was **not cleared**. The historical evidence is below; it is not substituted for the latest cleanup gates above.
 
-#### Final independent-batch verification
+#### Historical independent-batch verification
 
 | Gate | Final result |
 | --- | --- |
@@ -82,9 +91,9 @@ The running normal app renders the expected signed-out sign-in screen. An anonym
 | OSV / managed scanners | OSV offline cache unavailable; managed scanner clearance unavailable. **Unverified**, not zero findings |
 | Preservation/security review | Final fixture/cache changes **PASS**; no authorization, schema, grant, RLS, live configuration or dependency changes |
 | Bundle assets | One minified same-release PDF worker, **1,265,413 bytes**; no separate unminified worker or `.map` files; remaining warnings not suppressed |
-| Startup / proxied anonymous smoke | Both existing workflows running; expected signed-out screen; **0 page errors / 0 failed requests**, four expected session/refresh `401` responses; no job enqueued |
+| Startup / proxied anonymous smoke | Historical batch observation: both existing workflows running; expected signed-out screen; **0 page errors / 0 failed requests**, four expected session/refresh `401` responses; no job enqueued |
 | Disposable PostgreSQL cleanup | No owned temporary PostgreSQL master remains after the final gates |
-| Commit/sync | **Withheld**: the required final parallel gate is not clean. Local HEAD and latest inspected GitHub `main` remain `597059edee6b446aaa4a6deed1207fcdf8a8d91e`; changes remain uncommitted |
+| Commit/sync | Historical pre-sync decision: withheld while the parallel gate failed. Subsequently superseded by synchronization at `6b9201eefe9375b377404ee92a0211c3302077f4`; changes are no longer uncommitted. See the final local cleanup report for the subsequent batch outcome. Parallel and real-cloud limitations remain separate from Git sync. |
 
 Final code inputs: **297 files**, SHA-256 `67a944d004256fe3dc87b6f5ffc6f9471749a481db93a87139d3e4593724f404`. Start/end fingerprints and both parallel runs agree; no code input changed during verification.
 

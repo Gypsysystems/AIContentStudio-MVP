@@ -1,16 +1,6 @@
 // Synthetic-only fixtures. Never place real credentials or customer data here.
-const supabaseServiceRoleKey = [
-  "sk",
-  "live",
-  "FixtureOnlyCredentialNotReal0123456789",
-].join("_");
-console.error(
-  authToken,
-  sessionCookie,
-  authorizationHeader,
-  databaseConnectionString,
-  providerSourceError.response.data,
-);
+const supabaseServiceRoleKey = "SyntheticFixtureNotAProviderCredential";
+console.error(authToken, sessionCookie, authorizationHeader, databaseConnectionString, providerSourceError.response.data);
 eval(untrustedScript);
 fetch(endpoint, { agent: new Agent({ rejectUnauthorized: false }) });
 fetch(req.body.url);

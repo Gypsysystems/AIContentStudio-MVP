@@ -62,3 +62,9 @@ Do not attribute a zero-duration, unassigned-worker native loader failure to an 
 **Why:** Such failures persisted after compiler-cache isolation; reports identified no specific module or load hook, while complete serial coverage and focused repeated cases passed.
 
 **How to apply:** Preserve the complete parallel outcomes, distinguish collection/loading from test execution, and stop speculative fixes when there is no reproducible causal evidence.
+
+Keep Playwright's supported asynchronous loader selected for owned acceptance invocations under the current Node 22/framework combination, rather than changing global Node flags or application imports.
+
+**Why:** The default synchronous loader reproduced a null-source rejection before a publishing case executed despite private compiler caches. A pass-through diagnostic observer did not reproduce it; repeated full sweeps using the framework's asynchronous path passed with unchanged assertions. This validates a scoped compatibility mitigation, not a particular module/race explanation.
+
+**How to apply:** Preserve normal development runtime settings and failed-run evidence. Guard the actual installed framework loader path, and reassess the compatibility selection against full repeated sweeps after Node or Playwright upgrades. Do not count an observer-only pass as clearing an uninstrumented gate.
