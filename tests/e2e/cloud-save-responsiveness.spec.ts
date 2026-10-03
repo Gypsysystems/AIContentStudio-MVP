@@ -228,8 +228,8 @@ test('a stale-write conflict is visible and reload restores the last successful 
   expect(cloud.saves).toHaveLength(successfulSaves)
 
   await page.reload()
-  await expect(page.getByRole('heading', { name: 'Add Source Material' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Analyze Sources' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Theme & Style Profiles' })).toBeVisible()
+  expect(cloud.saves).toHaveLength(successfulSaves)
   width = await openMasterPageSettings(page)
   await expect(width).toHaveValue('1300')
   expect([...cloud.records.values()][0].htmlMasterPages).toEqual(

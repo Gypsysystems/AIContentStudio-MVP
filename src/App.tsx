@@ -144,19 +144,12 @@ import { AllProjectsHistory } from './AllProjectsHistory'
 import { validateCheckpointReason, type ProjectCheckpointSummary } from './projectCheckpoint'
 import { summarizeProjectHome } from './projectHomeModel'
 import { useCloudAccount, useDashboardEntry } from './AuthGate'
-import { readDashboardHint, recordDashboardHint } from './startupNavigation'
+import {
+  readNavigationLocation, recordNavigationLocation, resolveNavigationLocation,
+  type Screen, type ManagementDestination, type ManagementScope,
+} from './startupNavigation'
 
 // ── Types ────────────────────────────────────────────────────────────────────
-type Screen = 'dashboard' | 'administration' | 'project-home' | 'history' | 'create' | 'branding' | 'sources' | 'analysis' | 'structure' | 'studio' | 'quality' | 'preview' | 'publish'
-type ManagementDestination = 'history' | 'create' | 'branding' | 'administration' | 'diagnostics'
-type ManagementScope = {
-  destination: ManagementDestination
-  origin: 'home' | 'project'
-  returnScreen: Screen
-  originProjectId: string | null
-  selectedProjectId: string // '' = Select project, 'all' = All projects
-  parent?: ManagementScope
-}
 const AuthorSettingsPermissionContext = React.createContext(false)
 const DiagnosticsStatusContext = React.createContext<'all' | 'ok' | 'warn' | 'error' | 'info'>('all')
 const DiagnosticsSearchContext = React.createContext('')
@@ -19585,14 +19578,33 @@ export default function App() {
     startupInitializedRef.current = true
     const init = async () => {
       try {
-        const stayOnDashboard = dashboardEntry || readDashboardHint()
+        const savedLocation = dashboardEntry ? null : readNavigationLocation()
+        let loadedProject: ProjectRecord | null = null
         const activeId = getActiveProjectId()
         if (activeId) {
           const record = await loadLatestProjectForOpen(activeId)
           if (record) {
             await hydrateFromRecord(record)
-            setScreen(stayOnDashboard ? 'dashboard' : 'sources')
+            loadedProject = record
           }
+        }
+        let projects: ProjectSummary[] = []
+        if (savedLocation?.management) {
+          try { projects = await listProjects() } catch { /* Invalid management context falls back below. */ }
+          setManagementProjects(projects)
+        }
+        const location = dashboardEntry
+          ? { screen: 'dashboard' as const, prevScreen: null, management: null, diagnosticsOpen: false }
+          : resolveNavigationLocation(savedLocation, loadedProject?.projectId ?? null,
+            !!loadedProject && getAdministrationAccess(getAccessContext(), loadedProject).project?.write === true,
+            new Set(projects.map(project => project.projectId)))
+        setScreen(location.screen)
+        setPrevScreen(location.prevScreen)
+        setManagement(location.management)
+        setDiagOpen(location.diagnosticsOpen)
+        if (location.management) {
+          setHistoryReturnTo(location.management.returnScreen)
+          setAdministrationReturnTo(location.management.returnScreen)
         }
       } catch (e) {
         resetProjectState()
@@ -19604,10 +19616,6 @@ export default function App() {
     }
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!appLoading) recordDashboardHint(screen === 'dashboard')
-  }, [appLoading, screen])
 
   // ── Hydrate App state from a loaded ProjectRecord ─────────────────────────
   // Always sets ALL fields — conditional hydration causes isolation bugs.
@@ -19995,6 +20003,10 @@ export default function App() {
 
   // ── Project Diagnostics ────────────────────────────────────────────────────
   const [diagOpen, setDiagOpen] = useState(false)
+  useEffect(() => {
+    if (!appLoading && !managementBusy && !projectOpenInFlightRef.current)
+      recordNavigationLocation({ screen, projectId, prevScreen, management, diagnosticsOpen: diagOpen })
+  }, [appLoading, screen, projectId, prevScreen, management, diagOpen, managementBusy])
 
   const projectHomeSummary = useMemo(() => summarizeProjectHome({
     sources: sources.map(source => ({ fileId: source.fileId, name: source.file.name })),

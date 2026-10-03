@@ -3,6 +3,7 @@ import { summarizeProjectHome, type ProjectHomeInput } from "../../src/projectHo
 import { createEmptyReviewModel, type ReviewFinding, type ReviewRun } from "../../src/reviewModel"
 import type { ReviewInputSnapshot } from "../../src/reviewInput"
 import type { SourceExtraction } from "../../src/sourceExtractor"
+import { parseNavigationLocation, resolveNavigationLocation } from "../../src/startupNavigation"
 
 type CloudRecord = Record<string, unknown> & {
   projectId: string
@@ -170,6 +171,7 @@ async function mockCloud(page: Page): Promise<HomeCloud> {
         : route.fulfill({ status: 404, json: { code: "PROJECT_NOT_FOUND", error: "Not found." } })
     }
     if (action === "load-files") return route.fulfill({ json: { files: [] } })
+    if (action === "list-checkpoints") return route.fulfill({ json: { checkpoints: [] } })
     return route.fulfill({
       status: 400,
       json: { code: "UNEXPECTED_ACTION", error: `Unexpected cloud action: ${String(action)}` },
@@ -316,7 +318,8 @@ async function openProjectHome(page: Page, name: string) {
 }
 
 async function returnToProjectHome(page: Page) {
-  await page.getByTestId("topbar-project-home").click()
+  await page.locator('nav[aria-label="Project navigation"], nav[aria-label="Project modules"]')
+    .getByRole("button", { name: "Project Home", exact: true }).click()
   await expect(page.getByTestId("project-home")).toBeVisible()
 }
 
@@ -506,7 +509,7 @@ test("style-profile issues route to Branding and ineligible Review findings fall
   }))
 })
 
-test("project-list reopen lands on Home while active-project reload preserves Sources", async ({ page }) => {
+test("project-list reopen and Project Home refresh both land on Home", async ({ page }) => {
   const name = `Home persisted ${Date.now()}`
   await createProject(page, name)
   await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
@@ -516,7 +519,7 @@ test("project-list reopen lands on Home while active-project reload preserves So
   await expect(page.getByTestId("project-home")).toBeVisible()
   await expect(page.getByTestId("project-home-continue")).toBeVisible()
   await page.reload()
-  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  await expect(page.getByTestId("project-home")).toBeVisible()
   await openProjectHome(page, name)
   await expect(homeProjectHeading(page, name)).toBeVisible()
 })
@@ -538,7 +541,7 @@ test("Projects refresh retains the active project without entering its workflow"
   await page.getByRole("button", { name: `Open project ${name}`, exact: true }).click()
   await expect(page.getByTestId("project-home")).toBeVisible()
   await page.reload()
-  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  await expect(page.getByTestId("project-home")).toBeVisible()
   expect(JSON.stringify([...cloud.records.values()])).toBe(before)
 })
 
@@ -563,7 +566,7 @@ test("explicit logout/login lands on Projects despite a retained active project"
   await page.evaluate(id => localStorage.setItem("docflow-active-project:login-other-workspace", id!), pointer)
   cloud.auth.workspaceId = "login-other-workspace"
   await page.clock.fastForward(60_001)
-  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  await expect(page.getByTestId("project-home")).toBeVisible()
   cloud.auth.workspaceId = "project-home-workspace"
   await page.reload()
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
@@ -582,7 +585,7 @@ test("dashboard intent is scoped to the verified user and workspace", async ({ p
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
   cloud.auth.userId = "another-navigation-user"
   await page.reload()
-  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  await expect(page.getByTestId("project-home")).toBeVisible()
   cloud.auth.userId = "project-home-user"
   await page.reload()
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
@@ -590,7 +593,125 @@ test("dashboard intent is scoped to the verified user and workspace", async ({ p
   cloud.auth.workspaceId = "another-navigation-workspace"
   await page.evaluate(id => localStorage.setItem("docflow-active-project:another-navigation-workspace", id!), pointer)
   await page.reload()
-  await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  await expect(page.getByTestId("project-home")).toBeVisible()
+})
+
+const navigationKey = 'docflow-navigation-location:["project-home-user","project-home-workspace"]'
+async function expectScreenLocation(page: Page, screen: string) {
+  await expect.poll(() => page.evaluate(key => JSON.parse(sessionStorage.getItem(key) ?? "null")?.screen, navigationKey)).toBe(screen)
+}
+
+for (const [label, screen] of [
+  ["Sources", "sources"], ["Structure", "structure"], ["Author", "studio"],
+  ["Review", "quality"], ["Publish", "publish"],
+] as const) {
+  test(`${label} refresh preserves the actual workflow screen without changing project data`, async ({ page }) => {
+    const cloud = await mockCloud(page)
+    await createProject(page, `Refresh ${label} ${Date.now()}`)
+    await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+    const before = JSON.stringify([...cloud.records.values()])
+    await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: label, exact: true }).click()
+    await expectScreenLocation(page, screen)
+    await page.reload()
+    await expect(page.getByRole("heading", { name: "Projects", exact: true })).toHaveCount(0)
+    await expectScreenLocation(page, screen)
+    const active = page.locator('nav[aria-label="Project navigation"], nav[aria-label="Project modules"]').getByRole("button", { name: label, exact: true })
+    await expect(active).toHaveAttribute("aria-current", "page")
+    expect(JSON.stringify([...cloud.records.values()])).toBe(before)
+  })
+}
+
+test("management refresh preserves History, Settings, Brand, Administration and Diagnostics with their return scope", async ({ page }) => {
+  test.setTimeout(90_000)
+  const cloud = await mockCloud(page)
+  await createProject(page, `Management refresh ${Date.now()}`)
+  await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  const before = JSON.stringify([...cloud.records.values()])
+  for (const [label, destination] of [
+    ["History", "history"], ["Project Settings", "create"], ["Brand & Output", "branding"],
+    ["Administration", "administration"], ["Diagnostics", "diagnostics"],
+  ]) {
+    await page.getByRole("navigation", { name: "Project navigation" }).getByRole("button", { name: label, exact: true }).click()
+    await expect(page.getByTestId("management-project-picker")).toBeVisible()
+    const selected = await page.getByRole("combobox", { name: "Project", exact: true }).inputValue()
+    await page.reload()
+    await expect(page.getByTestId("management-project-picker")).toBeVisible()
+    await expect(page.getByRole("combobox", { name: "Project", exact: true })).toHaveValue(selected)
+    await expect.poll(() => page.evaluate(key => JSON.parse(sessionStorage.getItem(key) ?? "null")?.management?.destination, navigationKey)).toBe(destination)
+    if (destination === "diagnostics") {
+      await expect(page.getByRole("dialog", { name: "Diagnostics" })).toBeVisible()
+      await page.getByRole("button", { name: "Close", exact: true }).click()
+    } else {
+      await expectScreenLocation(page, destination)
+      await page.getByRole("button", { name: "Return to project", exact: true }).click()
+    }
+    await expect(page.getByRole("heading", { name: "Add Source Material" })).toBeVisible()
+  }
+  expect(JSON.stringify([...cloud.records.values()])).toBe(before)
+})
+
+test("invalid or incompatible screen hints fall back to Home without clearing the project pointer", async ({ page }) => {
+  await mockCloud(page)
+  await createProject(page, `Invalid navigation ${Date.now()}`)
+  await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  const pointer = await page.evaluate(() => localStorage.getItem("docflow-active-project:project-home-workspace"))
+  for (const bad of [
+    "{broken",
+    JSON.stringify({ version: 1, screen: "unknown-route", projectId: pointer, prevScreen: null, management: null, diagnosticsOpen: false }),
+    JSON.stringify({ version: 1, screen: "studio", projectId: "another-project", prevScreen: null, management: null, diagnosticsOpen: false }),
+  ]) {
+    await page.evaluate(({ key, value }) => sessionStorage.setItem(key, value), { key: navigationKey, value: bad })
+    await page.reload()
+    await expect(page.getByTestId("project-home")).toBeVisible()
+    expect(await page.evaluate(() => localStorage.getItem("docflow-active-project:project-home-workspace"))).toBe(pointer)
+  }
+})
+
+test("navigation restoration validates schema, current settings permission and management access", () => {
+  const valid = { version: 1, screen: "create", projectId: "p", prevScreen: "sources", management: null, diagnosticsOpen: false }
+  const parsed = parseNavigationLocation(valid)
+  expect(parsed).not.toBeNull()
+  expect(resolveNavigationLocation(parsed, "p", false).screen).toBe("project-home")
+  expect(resolveNavigationLocation(parsed, "p", true).screen).toBe("create")
+  expect(parseNavigationLocation({ ...valid, version: 2 })).toBeNull()
+  expect(parseNavigationLocation({ ...valid, diagnosticsOpen: true })).toBeNull()
+  const scope = { destination: "history", origin: "project", returnScreen: "sources", originProjectId: "inaccessible", selectedProjectId: "p" }
+  const history = parseNavigationLocation({ ...valid, screen: "history", management: scope })
+  expect(resolveNavigationLocation(history, "p", true, new Set(["p"])).screen).toBe("project-home")
+  expect(resolveNavigationLocation(parsed, null, true).screen).toBe("dashboard")
+})
+
+test("Analysis and Preview refresh preserve their supported screens", async ({ page }) => {
+  await mockCloud(page)
+  await createProject(page, `Other screens ${Date.now()}`)
+  await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  await page.getByTestId("topbar-project-home").click()
+  await homeStage(page, "analysis").getByRole("button", { name: "Open analysis", exact: true }).click()
+  await expectScreenLocation(page, "analysis")
+  await page.reload()
+  await expectScreenLocation(page, "analysis")
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toHaveCount(0)
+  await page.getByTestId("topbar-project-preview").click()
+  await expectScreenLocation(page, "preview")
+  await page.reload()
+  await expectScreenLocation(page, "preview")
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toHaveCount(0)
+})
+
+test("workspace-origin management refresh keeps cross-project scope and returns to Projects", async ({ page }) => {
+  await mockCloud(page)
+  await createProject(page, `Workspace management ${Date.now()}`)
+  await expect(page.locator("header").getByRole("status")).toContainText("All changes saved")
+  await page.locator("header").getByRole("button", { name: /Content Studio/ }).click()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
+  await page.getByRole("navigation", { name: "Workspace management" }).getByRole("button", { name: "History", exact: true }).click()
+  await expect(page.getByRole("combobox", { name: "Project", exact: true })).toHaveValue("all")
+  await page.reload()
+  await expect(page.getByRole("combobox", { name: "Project", exact: true })).toHaveValue("all")
+  await expect(page.getByRole("heading", { name: "All projects history", exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "Return to Projects", exact: true }).click()
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible()
 })
 
 test("stale and inaccessible active projects safely fall back to Projects", async ({ page }) => {

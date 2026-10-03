@@ -27,7 +27,7 @@
 - [Cloud file cleanup boundary](cloud-file-cleanup-boundary.md) — PostgreSQL and private Storage cannot commit together; retain cleanup authority and retry until bytes are gone.
 - [Checkpoint capture guards](checkpoint-capture-guards.md) — async hashing requires a per-write file token guard at commit to prevent same-size byte races.
 - [Responsive cloud navigation](responsive-cloud-navigation.md) — cloud sections can change before queued writes settle; keep local barriers and explicit save failures.
-- [Project Home entry boundary](project-home-entry-boundary.md) — Projects refresh/fresh login stay on Projects; explicit open goes Home; in-project reload retains Sources.
+- [Project Home entry boundary](project-home-entry-boundary.md) — refresh preserves the valid screen; fresh login goes Projects; explicit project open goes Home; progress never chooses location.
 - [Cloud naming migration safety](cloud-naming-migration-safety.md) — normalize SQL and client names identically; backfills must advance revision guards on renamed records.
 - [Topic history from checkpoints](topic-history-checkpoints.md) — derive authored topic history only from committed checkpoints; missing records break change comparisons.
 - [Administration access display](administration-access-display.md) — client role capabilities are orientation, not cloud authority; unsupported settings stay read-only.
